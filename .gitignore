@@ -5,3 +5,9 @@ dist
 .vite
 .env
 .env.local
+
+# Rust / Tauri
+src-tauri/target
+src-tauri/gen
+src-tauri/WixTools
+src-tauri/.cargo
