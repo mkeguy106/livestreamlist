@@ -1,15 +1,17 @@
 use chrono::Utc;
 use parking_lot::Mutex;
 use std::sync::Arc;
-use tauri::State;
+use tauri::{Manager, State};
 
 mod channels;
+mod chat;
 mod config;
 mod platforms;
 mod refresh;
 mod streamlink;
 
 use channels::{Channel, ChannelStore, Livestream, SharedStore};
+use chat::ChatManager;
 use platforms::{parse_channel_input, Platform};
 
 struct AppState {
@@ -121,6 +123,31 @@ fn launch_stream(
 }
 
 #[tauri::command]
+fn chat_connect(
+    unique_key: String,
+    state: State<'_, AppState>,
+    chat: State<'_, Arc<ChatManager>>,
+) -> Result<(), String> {
+    let channel = state
+        .store
+        .lock()
+        .channels()
+        .iter()
+        .find(|c| c.unique_key() == unique_key)
+        .cloned()
+        .ok_or_else(|| format!("unknown channel {unique_key}"))?;
+    let key = channel.unique_key();
+    chat.connect(channel.platform, channel.channel_id, key)
+        .map_err(err_string)
+}
+
+#[tauri::command]
+fn chat_disconnect(unique_key: String, chat: State<'_, Arc<ChatManager>>) -> Result<(), String> {
+    chat.disconnect(&unique_key);
+    Ok(())
+}
+
+#[tauri::command]
 fn open_in_browser(unique_key: String, state: State<'_, AppState>) -> Result<(), String> {
     let channel = state
         .store
@@ -169,9 +196,10 @@ pub fn run() {
     apply_linux_webkit_workarounds();
     let state = AppState::new().expect("failed to initialize app state");
 
+    let http_for_chat = state.http.clone();
     tauri::Builder::default()
         .manage(state)
-        .setup(|app| {
+        .setup(move |app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(
                     tauri_plugin_log::Builder::default()
@@ -179,6 +207,8 @@ pub fn run() {
                         .build(),
                 )?;
             }
+            let chat_mgr = ChatManager::new(app.handle().clone(), http_for_chat.clone());
+            app.manage(chat_mgr);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -190,6 +220,8 @@ pub fn run() {
             refresh_all,
             launch_stream,
             open_in_browser,
+            chat_connect,
+            chat_disconnect,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

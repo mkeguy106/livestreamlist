@@ -2,6 +2,7 @@
  * Sidebar rail (all channels) + main pane showing the selected channel.
  */
 
+import ChatView from '../components/ChatView.jsx';
 import { formatUptime, formatViewers } from '../utils/format.js';
 
 export default function Command({ ctx }) {
@@ -199,24 +200,7 @@ function SelectedPane({ channel, onLaunch, onOpenBrowser }) {
         </div>
       )}
 
-      {/* Chat placeholder — Phase 2 */}
-      <div
-        style={{
-          flex: 1,
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          justifyContent: 'center',
-          gap: 10,
-          color: 'var(--zinc-500)',
-          fontSize: 'var(--t-12)',
-        }}
-      >
-        <div>Chat arrives in Phase 2.</div>
-        <div className="rx-chiclet" style={{ color: 'var(--zinc-600)' }}>
-          {channel.is_live ? 'stream is live — hit play to launch' : 'channel offline'}
-        </div>
-      </div>
+      <ChatView channelKey={channel.unique_key} variant="irc" />
     </>
   );
 }

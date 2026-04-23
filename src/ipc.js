@@ -21,6 +21,19 @@ export const setFavorite = (uniqueKey, favorite) => invoke('set_favorite', { uni
 export const refreshAll = () => invoke('refresh_all');
 export const launchStream = (uniqueKey, quality) => invoke('launch_stream', { uniqueKey, quality });
 export const openInBrowser = (uniqueKey) => invoke('open_in_browser', { uniqueKey });
+export const chatConnect = (uniqueKey) => invoke('chat_connect', { uniqueKey });
+export const chatDisconnect = (uniqueKey) => invoke('chat_disconnect', { uniqueKey });
+
+/**
+ * Subscribe to a Tauri-side event. Returns an unlisten function.
+ * In browser-dev mode this routes through our in-memory mock event bus so the
+ * chat UI still feels alive without the Tauri runtime.
+ */
+export async function listenEvent(name, handler) {
+  if (!inTauri) return mockListen(name, handler);
+  const mod = await import('@tauri-apps/api/event');
+  return mod.listen(name, (e) => handler(e.payload));
+}
 
 // ── Browser-dev mock data ─────────────────────────────────────────────────
 const MOCK_CHANNELS = [
@@ -71,11 +84,75 @@ function mockSnapshot() {
   });
 }
 
+const mockSubscribers = new Map(); // name -> Set<handler>
+const mockChatTimers = new Map();  // channelKey -> intervalId
+
+function mockListen(name, handler) {
+  const set = mockSubscribers.get(name) ?? new Set();
+  set.add(handler);
+  mockSubscribers.set(name, set);
+  return () => {
+    const s = mockSubscribers.get(name);
+    if (s) s.delete(handler);
+  };
+}
+
+function mockEmit(name, payload) {
+  const s = mockSubscribers.get(name);
+  if (s) for (const h of s) h(payload);
+}
+
+const MOCK_CHAT_TEMPLATES = [
+  { u: 'vanishh',    c: '#a78bfa', m: 'Kappa welcome back btw PogChamp' },
+  { u: 'mikael_ek',  c: '#f87171', m: 'the clutch was so clean' },
+  { u: 'kyra.',      c: '#60a5fa', m: 'skillgap EZ' },
+  { u: 'tomjones',   c: '#4ade80', m: 'O7' },
+  { u: 'marbled',    c: '#a78bfa', m: 'when the aim be aiming Kreygasm' },
+  { u: 'paulieboy',  c: '#fb923c', m: 'thats a W LUL' },
+  { u: 'reyna.main', c: '#f472b6', m: 'he cooked' },
+  { u: 'ilikepie',   c: '#84cc16', m: 'PogChamp PogChamp PogChamp' },
+  { u: 'dontban',    c: '#a78bfa', m: '@shroud how do you move so fast' },
+  { u: 'moonbeam',   c: '#60a5fa', m: '🎯 insane' },
+];
+
+function startMockChat(uniqueKey) {
+  if (mockChatTimers.has(uniqueKey)) return;
+  const id = setInterval(() => {
+    const tpl = MOCK_CHAT_TEMPLATES[Math.floor(Math.random() * MOCK_CHAT_TEMPLATES.length)];
+    mockEmit(`chat:message:${uniqueKey}`, {
+      id: `mock-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`,
+      channel_key: uniqueKey,
+      platform: uniqueKey.split(':')[0],
+      timestamp: new Date().toISOString(),
+      user: { login: tpl.u, display_name: tpl.u, color: tpl.c },
+      text: tpl.m,
+      emote_ranges: [],
+      badges: [],
+      is_action: false,
+    });
+  }, 900 + Math.random() * 1400);
+  mockChatTimers.set(uniqueKey, id);
+  mockEmit(`chat:status:${uniqueKey}`, { channel_key: uniqueKey, status: 'connected' });
+}
+
+function stopMockChat(uniqueKey) {
+  const id = mockChatTimers.get(uniqueKey);
+  if (id) clearInterval(id);
+  mockChatTimers.delete(uniqueKey);
+  mockEmit(`chat:status:${uniqueKey}`, { channel_key: uniqueKey, status: 'closed' });
+}
+
 async function mockInvoke(name, args) {
   switch (name) {
     case 'list_livestreams':
     case 'refresh_all':
       return mockSnapshot();
+    case 'chat_connect':
+      startMockChat(args.uniqueKey);
+      return null;
+    case 'chat_disconnect':
+      stopMockChat(args.uniqueKey);
+      return null;
     case 'list_channels':
       return mockChannels;
     case 'add_channel_from_input': {

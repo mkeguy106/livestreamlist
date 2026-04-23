@@ -4,6 +4,7 @@ import Columns from './directions/Columns.jsx';
 import Focus from './directions/Focus.jsx';
 import AddChannelDialog from './components/AddChannelDialog.jsx';
 import WindowControls from './components/WindowControls.jsx';
+import { useDragHandler } from './hooks/useDragRegion.js';
 import { useLivestreams } from './hooks/useLivestreams.js';
 import { launchStream, openInBrowser, removeChannel, setFavorite } from './ipc.js';
 
@@ -28,6 +29,7 @@ export default function App() {
   const [selectedKey, setSelectedKey] = useState(null);
 
   const { livestreams, loading, error, refresh } = useLivestreams();
+  const onTitlebarMouseDown = useDragHandler();
 
   // Default selection: first live channel, else first in list.
   useEffect(() => {
@@ -95,7 +97,7 @@ export default function App() {
 
   return (
     <div className="rx-root">
-      <div className="rx-titlebar" data-tauri-drag-region>
+      <div className="rx-titlebar" data-tauri-drag-region onMouseDown={onTitlebarMouseDown}>
         <div className="rx-tb-dots" role="tablist" aria-label="Layout">
           {LAYOUTS.map((l) => (
             <button
