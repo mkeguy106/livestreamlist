@@ -213,7 +213,7 @@ Files:
 | WebKitGTK crashes with `Error 71 (Protocol error)` on NVIDIA + KDE Wayland | Baked `WEBKIT_DISABLE_DMABUF_RENDERER=1` into `lib.rs::apply_linux_webkit_workarounds`. If other WebKit weirdness hits, try `GDK_BACKEND=x11` |
 | Vite silently switches port from 5173 → 5174 when 5173 is busy; Tauri's `devUrl` then points at nothing and WebKit shows a blank error | `strictPort: true` in `vite.config.js` so Vite fails loud |
 | Twitch `emotes=` tag indices are **char** (Unicode scalar), not bytes | Convert char → byte in `chat/twitch.rs::char_range_to_bytes` before slicing the UTF-8 message |
-| Tauri v2 drag regions don't honor CSS `-webkit-app-region: drag` | Use the HTML attribute `data-tauri-drag-region` on the draggable container. Interactive children auto-exclude themselves |
+| Tauri v2 drag regions don't honor CSS `-webkit-app-region: drag`, and the `data-tauri-drag-region` attribute's injected listener is unreliable on Linux/WebKitGTK | `src/hooks/useDragRegion.js::useDragHandler` — manual `mousedown` handler calling `getCurrentWindow().startDragging()`. Skips drags when `closest('button, input, …')` matches. Double-click → `toggleMaximize()` |
 | `decorations: false` removes the native titlebar — window controls are gone too | Custom buttons in `WindowControls.jsx` call `getCurrentWindow().minimize/toggleMaximize/close` |
 | Environment detection: no `window.__TAURI__` in v2 | Check `window.__TAURI_INTERNALS__` instead |
 | `anyhow::Error` is not `Serialize` — can't return directly from `#[tauri::command]` | Map to `String` via `err_string` helper |
