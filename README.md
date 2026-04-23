@@ -18,17 +18,24 @@ The selected layout persists to `localStorage`. `N` opens the add-channel dialog
 
 ## Status
 
-**Phase 1 (in progress)**
-- [x] Tauri v2 shell, custom titlebar (no native chrome)
-- [x] Rust backend: channel store (JSON persistence), URL autodetect parser
-- [x] Twitch GraphQL live-status client (batched ≤ 35 channels/request, unauthenticated)
-- [x] Real channels wired into all 3 layouts with 60 s poll
-- [x] Add channel from URL / handle / `t:login` syntax
-- [x] Launch stream via `streamlink` (detached, survives app close)
-- [x] Open channel in default browser
-- [ ] YouTube / Kick / Chaturbate live-status clients
+**Phase 1 — shipped**
+- Tauri v2 shell, custom titlebar (no native chrome)
+- Rust backend: channel store (JSON persistence), URL autodetect parser
+- Twitch GraphQL live-status client (batched ≤ 35 channels/request, unauthenticated)
+- Real channels wired into all 3 layouts with 60 s poll
+- Add channel from URL / handle / `t:login` syntax
+- Launch stream via `streamlink` (detached, survives app close)
+- Open channel in default browser
 
-**Phase 2** — Built-in chat: Twitch IRC, Kick Pusher WS + OAuth 2.1 PKCE, YouTube + Chaturbate web-embed chat. Emote pipeline (Twitch + 7TV + BTTV + FFZ) with disk cache.
+**Phase 2a — in progress**
+- [x] Twitch IRC over WebSocket (anonymous read) with emote tag parsing
+- [x] Global emote pipeline: 7TV + BTTV + FFZ + Twitch CDN
+- [x] `ChatView` renderer with inline emote images
+- [x] Chat wired into Command (selected), Columns (per column), Focus (featured)
+- [ ] YouTube / Kick / Chaturbate live-status clients
+- [ ] Per-channel 3rd-party emotes (7TV/BTTV/FFZ by Twitch user id / login)
+
+**Phase 2b** — Kick Pusher WS + OAuth 2.1 PKCE. Twitch OAuth implicit + chat sending. YouTube + Chaturbate web-embed chat. Moderation events (CLEARCHAT / CLEARMSG).
 
 **Phase 3** — Chat polish: reply threading, hype/raid banners, socials banner, per-channel chat logs.
 

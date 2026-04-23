@@ -2,6 +2,7 @@
  * One featured channel (selectedKey) with a tab strip of all channels above.
  */
 
+import ChatView from '../components/ChatView.jsx';
 import { formatUptime, formatViewers } from '../utils/format.js';
 
 export default function Focus({ ctx }) {
@@ -117,31 +118,26 @@ export default function Focus({ ctx }) {
             minHeight: 0,
           }}
         >
-          <div
-            style={{
-              padding: '10px 14px',
-              borderBottom: 'var(--hair)',
-              display: 'flex',
-              alignItems: 'center',
-              gap: 10,
-            }}
-          >
-            <span className="rx-chiclet">CHAT</span>
-            <span className="rx-mono" style={{ fontSize: 10, color: 'var(--zinc-500)' }}>Phase 2</span>
-            <div style={{ flex: 1 }} />
-          </div>
-          <div
-            style={{
-              flex: 1,
-              overflowY: 'auto',
-              padding: '20px',
-              color: 'var(--zinc-500)',
-              fontSize: 'var(--t-12)',
-              lineHeight: 1.5,
-            }}
-          >
-            The built-in chat client lands in Phase 2 — Twitch IRC, Kick Pusher, YouTube / Chaturbate web embeds.
-          </div>
+          <ChatView
+            channelKey={featured?.unique_key}
+            variant="irc"
+            header={
+              <div
+                style={{
+                  padding: '10px 14px',
+                  borderBottom: 'var(--hair)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 10,
+                }}
+              >
+                <span className="rx-chiclet">CHAT</span>
+                <span className="rx-mono" style={{ fontSize: 10, color: 'var(--zinc-500)' }}>
+                  {featured?.display_name ?? ''}
+                </span>
+              </div>
+            }
+          />
         </div>
       </div>
     </>

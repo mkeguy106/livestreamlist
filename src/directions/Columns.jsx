@@ -2,6 +2,7 @@
  * TweetDeck for livestreams. One column per live channel.
  */
 
+import ChatView from '../components/ChatView.jsx';
 import { formatViewers } from '../utils/format.js';
 
 export default function Columns({ ctx }) {
@@ -218,25 +219,22 @@ function Column({ channel, accentColumn, onLaunch, onOpenBrowser }) {
         </div>
       </button>
 
-      {/* Chat placeholder — Phase 2 */}
-      <div
-        style={{
-          flex: 1,
-          overflowY: 'auto',
-          padding: '10px',
-          color: 'var(--zinc-600)',
-          fontSize: 'var(--t-11)',
-          lineHeight: 1.5,
-        }}
-      >
-        Chat arrives in Phase 2.
-      </div>
-
-      <div style={{ borderTop: 'var(--hair)', padding: '6px 10px', display: 'flex', gap: 6 }}>
-        <button type="button" className="rx-btn rx-btn-ghost" style={{ flex: 1, fontSize: 10 }} onClick={onOpenBrowser}>
-          Open in browser
-        </button>
-      </div>
+      <ChatView
+        channelKey={channel.unique_key}
+        variant="compact"
+        footer={
+          <div style={{ borderTop: 'var(--hair)', padding: '6px 10px', display: 'flex', gap: 6 }}>
+            <button
+              type="button"
+              className="rx-btn rx-btn-ghost"
+              style={{ flex: 1, fontSize: 10 }}
+              onClick={onOpenBrowser}
+            >
+              Open in browser
+            </button>
+          </div>
+        }
+      />
     </div>
   );
 }
