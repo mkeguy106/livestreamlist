@@ -30,12 +30,25 @@ pub struct TwitchAuth {
 
 pub struct TwitchChatConfig {
     pub app: AppHandle,
+    #[allow(dead_code)]
+    pub http: reqwest::Client,
     pub channel_key: String,
     pub channel_login: String,
     pub emotes: Arc<EmoteCache>,
+    #[allow(dead_code)]
+    pub badges: Arc<crate::chat::badges::BadgeCache>,
     pub users: Arc<crate::users::UserStore>,
     pub auth: Option<TwitchAuth>,
     pub outbound: mpsc::UnboundedReceiver<OutboundMsg>,
+    /// Updated when ROOMSTATE arrives so build_privmsg / build_usernotice
+    /// can scope their badge lookups. Interior-mutable since cfg is shared
+    /// as `&TwitchChatConfig` through handle_line.
+    #[allow(dead_code)]
+    pub room_id: parking_lot::Mutex<Option<String>>,
+    /// Per-channel own-user badges captured from USERSTATE; used for
+    /// local echo of own outgoing messages.
+    #[allow(dead_code)]
+    pub own_badges: parking_lot::Mutex<Vec<crate::chat::models::ChatBadge>>,
 }
 
 /// Run the Twitch IRC connection until dropped/aborted. Emits

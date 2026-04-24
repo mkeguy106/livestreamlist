@@ -42,6 +42,8 @@ pub struct KickChatConfig {
     pub channel_slug: String,
     #[allow(dead_code)]
     pub emotes: Arc<EmoteCache>,
+    #[allow(dead_code)]
+    pub badges: Arc<crate::chat::badges::BadgeCache>,
     pub outbound: mpsc::UnboundedReceiver<OutboundMsg>,
 }
 

@@ -2,15 +2,13 @@
 //! once-per-process global fetch, once-per-channel channel fetch,
 //! lookup by id with channel scope overriding global.
 
-// Removed in Task 4 once BadgeCache is wired through ChatManager.
-#![allow(dead_code)]
-
 use crate::chat::models::ChatBadge;
 use crate::platforms::Platform;
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Scope {
     Global,
@@ -19,17 +17,23 @@ pub enum Scope {
 
 #[derive(Debug, Clone)]
 pub struct BadgeUrl {
+    #[allow(dead_code)]
     pub url: String,
+    #[allow(dead_code)]
     pub title: String,
 }
 
 #[derive(Default)]
 pub struct BadgeCache {
+    #[allow(dead_code)]
     inner: Mutex<HashMap<(Platform, Scope, String), BadgeUrl>>,
+    #[allow(dead_code)]
     loaded_globals: Mutex<HashMap<Platform, bool>>,
+    #[allow(dead_code)]
     loaded_channels: Mutex<HashMap<(Platform, String), bool>>,
 }
 
+#[allow(dead_code)]
 impl BadgeCache {
     pub fn new() -> Arc<Self> {
         Arc::new(Self::default())
