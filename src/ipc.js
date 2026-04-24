@@ -24,6 +24,7 @@ export const openInBrowser = (uniqueKey) => invoke('open_in_browser', { uniqueKe
 export const chatConnect = (uniqueKey) => invoke('chat_connect', { uniqueKey });
 export const chatDisconnect = (uniqueKey) => invoke('chat_disconnect', { uniqueKey });
 export const chatSend = (uniqueKey, text) => invoke('chat_send', { uniqueKey, text });
+export const listEmotes = (uniqueKey) => invoke('list_emotes', { uniqueKey });
 export const replayChatHistory = (uniqueKey, limit = 100) =>
   invoke('replay_chat_history', { uniqueKey, limit });
 export const authStatus = () => invoke('auth_status');
@@ -169,6 +170,14 @@ async function mockInvoke(name, args) {
       return [
         { id: 'twitter', name: 'twitter', title: 'Twitter',  url: 'https://twitter.com/' },
         { id: 'discord', name: 'discord', title: 'Discord',  url: 'https://discord.com/' },
+      ];
+    case 'list_emotes':
+      return [
+        { name: 'Kappa',    url_1x: 'https://static-cdn.jtvnw.net/emoticons/v2/25/default/dark/1.0', url_2x: null, url_4x: null, animated: false },
+        { name: 'PogChamp', url_1x: 'https://static-cdn.jtvnw.net/emoticons/v2/305954156/default/dark/1.0', url_2x: null, url_4x: null, animated: false },
+        { name: 'LUL',      url_1x: 'https://static-cdn.jtvnw.net/emoticons/v2/425618/default/dark/1.0', url_2x: null, url_4x: null, animated: false },
+        { name: 'Kreygasm', url_1x: 'https://static-cdn.jtvnw.net/emoticons/v2/41/default/dark/1.0', url_2x: null, url_4x: null, animated: false },
+        { name: 'peepoClap',url_1x: '', url_2x: null, url_4x: null, animated: false },
       ];
     case 'auth_status':
       return mockAuth;

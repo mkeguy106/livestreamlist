@@ -198,6 +198,14 @@ fn chat_disconnect(unique_key: String, chat: State<'_, Arc<ChatManager>>) -> Res
 }
 
 #[tauri::command]
+fn list_emotes(
+    unique_key: String,
+    chat: State<'_, Arc<ChatManager>>,
+) -> Vec<chat::Emote> {
+    chat.list_emotes(&unique_key)
+}
+
+#[tauri::command]
 fn chat_send(
     unique_key: String,
     text: String,
@@ -371,6 +379,7 @@ pub fn run() {
             chat_connect,
             chat_disconnect,
             chat_send,
+            list_emotes,
             replay_chat_history,
             auth_status,
             twitch_login,

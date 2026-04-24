@@ -1,8 +1,10 @@
-mod emotes;
+pub mod emotes;
 mod irc;
 pub mod log_store;
 pub mod models;
 mod twitch;
+
+pub use emotes::Emote;
 
 use anyhow::Result;
 use parking_lot::Mutex;
@@ -137,6 +139,12 @@ impl ChatManager {
         h.outbound
             .send(line)
             .map_err(|e| anyhow::anyhow!("chat channel closed: {e}"))
+    }
+
+    /// All known emotes for a channel, globals + any channel-specific entries.
+    /// Sorted by name (case-insensitive). Used by the composer's `:` popup.
+    pub fn list_emotes(&self, channel_key: &str) -> Vec<Emote> {
+        self.emotes.list_for_channel(channel_key)
     }
 
     /// Disconnect and reconnect every live chat connection on `platform`.
