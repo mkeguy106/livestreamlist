@@ -27,7 +27,8 @@ export default function ChatView({
   const [conversation, setConversation] = useState(null);
 
   const platform = channelKey?.split(':')[0];
-  const myLogin = auth.twitch?.login?.toLowerCase() ?? null;
+  const myLogin =
+    (platform === 'kick' ? auth.kick?.login : auth.twitch?.login)?.toLowerCase() ?? null;
 
   // Recent authors for @mention autocomplete. Last 50 messages is plenty;
   // keeping it tight avoids re-filtering a large list on every keystroke.

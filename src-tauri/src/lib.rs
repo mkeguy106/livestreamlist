@@ -221,16 +221,16 @@ fn chat_send(
         .cloned()
         .ok_or_else(|| format!("unknown channel {unique_key}"))?;
 
+    // Normalize and length-cap. Per-platform formatting (PRIVMSG / REST body)
+    // happens in the platform task.
+    let clean = text.replace(['\r', '\n'], " ");
+    let clean = clean.chars().take(500).collect::<String>();
+    if clean.trim().is_empty() {
+        return Ok(());
+    }
+
     match channel.platform {
-        Platform::Twitch => {
-            let login = channel.channel_id.to_ascii_lowercase();
-            // Enforce Twitch's 500-char cap client-side so we don't dump the
-            // partial message into the ether.
-            let clean = text.replace(['\r', '\n'], " ");
-            let clean = clean.chars().take(500).collect::<String>();
-            let line = format!("PRIVMSG #{login} :{clean}");
-            chat.send_raw(&unique_key, line).map_err(err_string)
-        }
+        Platform::Twitch | Platform::Kick => chat.send_raw(&unique_key, clean).map_err(err_string),
         _ => Err("sending not yet supported for this platform".to_string()),
     }
 }
@@ -238,6 +238,7 @@ fn chat_send(
 #[derive(serde::Serialize)]
 struct AuthStatus {
     twitch: Option<auth::twitch::TwitchIdentity>,
+    kick: Option<auth::kick::KickIdentity>,
 }
 
 #[tauri::command]
@@ -245,7 +246,10 @@ async fn auth_status(state: State<'_, AppState>) -> Result<AuthStatus, String> {
     let twitch = auth::twitch::status(&state.http)
         .await
         .map_err(err_string)?;
-    Ok(AuthStatus { twitch })
+    let kick = auth::kick::status(&state.http)
+        .await
+        .map_err(err_string)?;
+    Ok(AuthStatus { twitch, kick })
 }
 
 #[tauri::command]
@@ -269,6 +273,26 @@ fn twitch_logout(
 ) -> Result<(), String> {
     auth::twitch::logout().map_err(err_string)?;
     chat.reconnect_platform(Platform::Twitch, &state.store);
+    Ok(())
+}
+
+#[tauri::command]
+async fn kick_login(
+    state: State<'_, AppState>,
+    chat: State<'_, Arc<ChatManager>>,
+) -> Result<auth::kick::KickIdentity, String> {
+    let identity = auth::kick::login(&state.http).await.map_err(err_string)?;
+    chat.reconnect_platform(Platform::Kick, &state.store);
+    Ok(identity)
+}
+
+#[tauri::command]
+fn kick_logout(
+    chat: State<'_, Arc<ChatManager>>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    auth::kick::logout().map_err(err_string)?;
+    chat.reconnect_platform(Platform::Kick, &state.store);
     Ok(())
 }
 
@@ -384,6 +408,8 @@ pub fn run() {
             auth_status,
             twitch_login,
             twitch_logout,
+            kick_login,
+            kick_logout,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
