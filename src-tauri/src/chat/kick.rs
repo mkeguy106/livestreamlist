@@ -262,8 +262,15 @@ fn build_chat_message(cfg: &KickChatConfig, parsed: &Value) -> Option<ChatMessag
                         .unwrap_or(&t)
                         .to_string();
                     let cache_id = if t == "subscriber" {
-                        // Kick payload's `text` is the months count for subs.
-                        format!("subscriber:{}", text.trim())
+                        // Try to parse months from .text field; fall back to
+                        // bare "subscriber" if it's a display name like
+                        // "6-Month Subscriber". Kick's payload format here
+                        // isn't strictly numeric across all events.
+                        text.split_whitespace()
+                            .next()
+                            .and_then(|w| w.trim_end_matches("-Month").parse::<u32>().ok())
+                            .map(|m| format!("subscriber:{m}"))
+                            .unwrap_or_else(|| "subscriber".to_string())
                     } else {
                         t.clone()
                     };

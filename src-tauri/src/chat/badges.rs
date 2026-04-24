@@ -195,15 +195,18 @@ pub fn classify_mod_kick(badge_type: &str) -> bool {
     matches!(badge_type, "broadcaster" | "moderator" | "vip" | "staff")
 }
 
+const KICK_BADGE_BASE: &str = "https://www.kickdatabase.com/kickBadges";
+
 const KICK_SYSTEM_BADGES: &[(&str, &str)] = &[
-    ("broadcaster", "https://kick.com/img/badges/broadcaster.svg"),
-    ("moderator", "https://kick.com/img/badges/moderator.svg"),
-    ("vip", "https://kick.com/img/badges/vip.svg"),
-    ("staff", "https://kick.com/img/badges/staff.svg"),
-    ("og", "https://kick.com/img/badges/og.svg"),
-    ("founder", "https://kick.com/img/badges/founder.svg"),
-    ("verified", "https://kick.com/img/badges/verified.svg"),
-    ("sub_gifter", "https://kick.com/img/badges/sub-gifter.svg"),
+    ("broadcaster", "broadcaster.svg"),
+    ("moderator", "moderator.svg"),
+    ("vip", "vip.svg"),
+    ("staff", "staff.svg"),
+    ("og", "og.svg"),
+    ("founder", "founder.svg"),
+    ("verified", "verified.svg"),
+    ("sub_gifter", "subGifter.svg"),
+    ("subscriber", "subscriber.svg"),
 ];
 
 #[derive(Debug, Deserialize)]
@@ -242,13 +245,13 @@ impl BadgeCache {
         if self.is_global_loaded(Platform::Kick) {
             return;
         }
-        for (id, url) in KICK_SYSTEM_BADGES {
+        for (id, file) in KICK_SYSTEM_BADGES {
             self.insert(
                 Platform::Kick,
                 Scope::Global,
                 (*id).to_string(),
                 BadgeUrl {
-                    url: (*url).to_string(),
+                    url: format!("{KICK_BADGE_BASE}/{file}"),
                     title: id.replace('_', " "),
                 },
             );
