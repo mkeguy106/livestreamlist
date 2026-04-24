@@ -303,7 +303,7 @@ fn build_privmsg(cfg: &TwitchChatConfig, msg: &IrcMessage<'_>) -> Option<ChatMes
         .tags
         .get("tmi-sent-ts")
         .and_then(|s| s.parse::<i64>().ok())
-        .and_then(|ms| chrono::DateTime::from_timestamp_millis(ms))
+        .and_then(chrono::DateTime::from_timestamp_millis)
         .unwrap_or_else(Utc::now);
 
     let color = msg.tags.get("color").filter(|s| !s.is_empty()).cloned();
@@ -430,7 +430,7 @@ fn build_usernotice(cfg: &TwitchChatConfig, msg: &IrcMessage<'_>) -> Option<Chat
         .tags
         .get("tmi-sent-ts")
         .and_then(|s| s.parse::<i64>().ok())
-        .and_then(|ms| chrono::DateTime::from_timestamp_millis(ms))
+        .and_then(chrono::DateTime::from_timestamp_millis)
         .unwrap_or_else(Utc::now);
 
     let mut badges = parse_badges(msg.tags.get("badges").map(String::as_str).unwrap_or(""));
@@ -489,7 +489,7 @@ fn char_range_to_bytes(text: &str, char_start: usize, char_end: usize) -> (usize
     let mut bs = text.len();
     let mut be = text.len();
     let mut done_s = false;
-    let mut done_e = false;
+    let done_e = false;
     for (char_idx, (byte_idx, _ch)) in text.char_indices().enumerate() {
         if !done_s && char_idx == char_start {
             bs = byte_idx;
@@ -497,7 +497,6 @@ fn char_range_to_bytes(text: &str, char_start: usize, char_end: usize) -> (usize
         }
         if !done_e && char_idx == char_end {
             be = byte_idx;
-            done_e = true;
             break;
         }
     }
