@@ -20,7 +20,18 @@ fn stream_url(platform: Platform, channel_id: &str) -> String {
 
 /// Launch `streamlink <url> <quality>` with mpv as the player. The child is
 /// detached so closing the app doesn't kill the stream.
-pub fn launch(platform: Platform, channel_id: &str, quality: &str) -> Result<u32> {
+///
+/// If a `turbo_cookie` is present AND the platform is Twitch, passes it as
+/// `--twitch-api-header=Authorization=OAuth {cookie}` plus
+/// `--twitch-disable-ads`. The cookie must be the browser's `auth-token`
+/// cookie value — OAuth access tokens don't work here (Twitch binds
+/// ad-gating to the client-id-less cookie path).
+pub fn launch(
+    platform: Platform,
+    channel_id: &str,
+    quality: &str,
+    turbo_cookie: Option<&str>,
+) -> Result<u32> {
     let url = stream_url(platform, channel_id);
     let quality = if quality.is_empty() { "best" } else { quality };
 
@@ -31,6 +42,13 @@ pub fn launch(platform: Platform, channel_id: &str, quality: &str) -> Result<u32
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
+
+    if platform == Platform::Twitch {
+        if let Some(cookie) = turbo_cookie.filter(|c| !c.is_empty()) {
+            cmd.arg(format!("--twitch-api-header=Authorization=OAuth {cookie}"));
+            cmd.arg("--twitch-disable-ads");
+        }
+    }
 
     #[cfg(unix)]
     {

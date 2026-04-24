@@ -34,6 +34,9 @@ export const twitchLogout = () => invoke('twitch_logout');
 export const kickLogin = () => invoke('kick_login');
 export const kickLogout = () => invoke('kick_logout');
 export const importTwitchFollows = () => invoke('import_twitch_follows');
+export const setTurboCookie = (cookie) => invoke('set_turbo_cookie', { cookie });
+export const clearTurboCookie = () => invoke('clear_turbo_cookie');
+export const hasTurboCookie = () => invoke('has_turbo_cookie');
 export const getSettings = () => invoke('get_settings');
 export const updateSettings = (patch) => invoke('update_settings', { patch });
 export const openUrl = (url) => invoke('open_url', { url });
@@ -74,6 +77,7 @@ const MOCK_LIVE = {
 
 let mockChannels = [...MOCK_CHANNELS];
 let mockAuth = { twitch: null, kick: null };
+let mockTurbo = false;
 let mockSettings = {
   general: { refresh_interval_seconds: 60, notify_on_live: true, close_to_tray: false },
   appearance: { default_layout: 'command', accent_override: '', live_color_override: '' },
@@ -209,6 +213,14 @@ async function mockInvoke(name, args) {
       return null;
     case 'import_twitch_follows':
       return { added: 0, skipped: 0, total_seen: 0 };
+    case 'set_turbo_cookie':
+      mockTurbo = Boolean(args.cookie && args.cookie.trim());
+      return null;
+    case 'clear_turbo_cookie':
+      mockTurbo = false;
+      return null;
+    case 'has_turbo_cookie':
+      return mockTurbo;
     case 'get_settings':
       return mockSettings;
     case 'update_settings':

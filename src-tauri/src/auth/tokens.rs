@@ -10,6 +10,8 @@ use keyring::Entry;
 
 const SERVICE: &str = "livestreamlist";
 
+pub const TWITCH_TURBO_COOKIE: &str = "twitch_turbo_auth_cookie";
+
 fn entry(account: &str) -> Result<Entry> {
     Entry::new(SERVICE, account).with_context(|| format!("opening keyring entry {account}"))
 }

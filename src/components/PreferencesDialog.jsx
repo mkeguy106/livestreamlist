@@ -1,7 +1,12 @@
 import { useEffect, useState } from 'react';
 import { useAuth } from '../hooks/useAuth.js';
 import { usePreferences } from '../hooks/usePreferences.js';
-import { importTwitchFollows } from '../ipc.js';
+import {
+  clearTurboCookie,
+  hasTurboCookie,
+  importTwitchFollows,
+  setTurboCookie,
+} from '../ipc.js';
 
 const TABS = [
   { id: 'general', label: 'General' },
@@ -118,6 +123,34 @@ export default function PreferencesDialog({ open, onClose }) {
 function AccountsTab() {
   const { twitch, kick, login, logout } = useAuth();
   const [importState, setImportState] = useState(null); // {running, result, error}
+  const [turboSet, setTurboSet] = useState(false);
+  const [turboInput, setTurboInput] = useState('');
+  const [turboError, setTurboError] = useState(null);
+
+  useEffect(() => {
+    hasTurboCookie().then(setTurboSet).catch(() => {});
+  }, []);
+
+  const saveTurbo = async () => {
+    setTurboError(null);
+    try {
+      await setTurboCookie(turboInput.trim());
+      setTurboSet(Boolean(turboInput.trim()));
+      setTurboInput('');
+    } catch (e) {
+      setTurboError(String(e?.message ?? e));
+    }
+  };
+
+  const wipeTurbo = async () => {
+    setTurboError(null);
+    try {
+      await clearTurboCookie();
+      setTurboSet(false);
+    } catch (e) {
+      setTurboError(String(e?.message ?? e));
+    }
+  };
 
   const runImport = async () => {
     setImportState({ running: true });
@@ -176,6 +209,39 @@ function AccountsTab() {
           <div style={{ marginTop: 6, fontSize: 'var(--t-11)', color: '#f87171' }}>
             {importState.error}
           </div>
+        )}
+      </Row>
+
+      <Row
+        label="Twitch Turbo"
+        hint="Paste your browser's auth-token cookie (NOT an OAuth token). Passed to streamlink for ad-free playback. Stays in the keyring; never shown after save."
+      >
+        {turboSet ? (
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+            <span style={{ color: 'var(--ok)', fontSize: 'var(--t-11)' }}>
+              ● Turbo auth cookie stored
+            </span>
+            <button type="button" className="rx-btn rx-btn-ghost" onClick={wipeTurbo}>
+              Clear
+            </button>
+          </div>
+        ) : (
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+            <input
+              type="password"
+              className="rx-input"
+              style={{ flex: 1, minWidth: 0 }}
+              placeholder="auth-token cookie value"
+              value={turboInput}
+              onChange={(e) => setTurboInput(e.target.value)}
+            />
+            <button type="button" className="rx-btn" onClick={saveTurbo} disabled={!turboInput.trim()}>
+              Save
+            </button>
+          </div>
+        )}
+        {turboError && (
+          <div style={{ marginTop: 4, color: '#f87171', fontSize: 'var(--t-11)' }}>{turboError}</div>
         )}
       </Row>
     </>

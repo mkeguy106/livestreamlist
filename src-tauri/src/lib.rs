@@ -148,12 +148,36 @@ fn launch_stream(
         .find(|c| c.unique_key() == unique_key)
         .cloned()
         .ok_or_else(|| format!("unknown channel {unique_key}"))?;
+
+    // Turbo cookie only matters for Twitch; other platforms just ignore it.
+    let turbo = if channel.platform == Platform::Twitch {
+        auth::turbo::stored_cookie().unwrap_or(None)
+    } else {
+        None
+    };
+
     streamlink::launch(
         channel.platform,
         &channel.channel_id,
         quality.as_deref().unwrap_or("best"),
+        turbo.as_deref(),
     )
     .map_err(err_string)
+}
+
+#[tauri::command]
+fn set_turbo_cookie(cookie: String) -> Result<(), String> {
+    auth::turbo::set_cookie(&cookie).map_err(err_string)
+}
+
+#[tauri::command]
+fn clear_turbo_cookie() -> Result<(), String> {
+    auth::turbo::clear_cookie().map_err(err_string)
+}
+
+#[tauri::command]
+fn has_turbo_cookie() -> Result<bool, String> {
+    auth::turbo::has_cookie().map_err(err_string)
 }
 
 #[derive(serde::Serialize)]
@@ -612,6 +636,9 @@ pub fn run() {
             kick_login,
             kick_logout,
             import_twitch_follows,
+            set_turbo_cookie,
+            clear_turbo_cookie,
+            has_turbo_cookie,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
