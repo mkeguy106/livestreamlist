@@ -2,6 +2,9 @@
 //! once-per-process global fetch, once-per-channel channel fetch,
 //! lookup by id with channel scope overriding global.
 
+// Removed in Task 4 once BadgeCache is wired through ChatManager.
+#![allow(dead_code)]
+
 use crate::chat::models::ChatBadge;
 use crate::platforms::Platform;
 use parking_lot::Mutex;
