@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Command from './directions/Command.jsx';
 import Columns from './directions/Columns.jsx';
 import Focus from './directions/Focus.jsx';
@@ -39,10 +39,16 @@ export default function App() {
   const [selectedKey, setSelectedKey] = useState(null);
 
   const { settings } = usePreferences();
+  const hoverEnabled = settings?.chat?.user_card_hover !== false; // default true
+  const hoverDelay = settings?.chat?.user_card_hover_delay_ms ?? 400;
   const intervalSeconds = settings?.general?.refresh_interval_seconds;
   const { livestreams, loading, error, refresh } = useLivestreams({ intervalSeconds });
   const onTitlebarMouseDown = useDragHandler();
   const card = useUserCard();
+
+  const hoverTimer = useRef(null);
+  const overCard = useRef(false);
+  const overAnchor = useRef(false);
 
   // Hover and right-click placeholders — wired in Tasks 16 and 21.
   const onUsernameOpen = useCallback(
@@ -67,7 +73,28 @@ export default function App() {
     setUserCtx({ open: true, point, user, channelKey, metadata });
   }, []);
 
-  const onUsernameHover = useCallback(() => {}, []);
+  const onUsernameHover = useCallback(
+    (user, rect, channelKey) => {
+      if (!hoverEnabled) return;
+      if (user) {
+        // entering an anchor
+        overAnchor.current = true;
+        if (hoverTimer.current) clearTimeout(hoverTimer.current);
+        hoverTimer.current = setTimeout(() => {
+          if (overAnchor.current) card.openFor(user, channelKey, rect);
+        }, hoverDelay);
+      } else {
+        // leaving the anchor
+        overAnchor.current = false;
+        if (hoverTimer.current) clearTimeout(hoverTimer.current);
+        // Small delay so the cursor can move into the card before we close it.
+        setTimeout(() => {
+          if (!overAnchor.current && !overCard.current) card.close();
+        }, 100);
+      }
+    },
+    [hoverEnabled, hoverDelay, card],
+  );
 
   // Apply appearance overrides to CSS variables on the root.
   useEffect(() => {
@@ -257,6 +284,14 @@ export default function App() {
         onOpenChannel={() => {
           if (card.channelKey) openInBrowser(card.channelKey).catch((e) => console.error('open_in_browser', e));
           card.close();
+        }}
+        onCardHover={(over) => {
+          overCard.current = over;
+          if (!over) {
+            setTimeout(() => {
+              if (!overAnchor.current && !overCard.current) card.close();
+            }, 100);
+          }
         }}
       />
       <UserCardContextMenu

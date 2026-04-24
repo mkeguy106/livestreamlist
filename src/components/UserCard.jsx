@@ -20,6 +20,7 @@ export default function UserCard({
   onClose,
   onOpenHistory,
   onOpenChannel,
+  onCardHover,
 }) {
   const cardRef = useRef(null);
   const [pos, setPos] = useState(null);
@@ -73,6 +74,8 @@ export default function UserCard({
       ref={cardRef}
       role="dialog"
       aria-label={`User card for ${display}`}
+      onMouseEnter={() => onCardHover?.(true)}
+      onMouseLeave={() => onCardHover?.(false)}
       style={{
         position: 'fixed',
         left: pos?.x ?? -9999,
