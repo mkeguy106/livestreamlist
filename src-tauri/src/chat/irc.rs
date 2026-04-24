@@ -91,9 +91,13 @@ pub fn parse_twitch_emotes(tag: &str) -> Vec<(String, usize, usize)> {
         return out;
     }
     for entry in tag.split('/') {
-        let Some((id, ranges)) = entry.split_once(':') else { continue };
+        let Some((id, ranges)) = entry.split_once(':') else {
+            continue;
+        };
         for range in ranges.split(',') {
-            let Some((start, end)) = range.split_once('-') else { continue };
+            let Some((start, end)) = range.split_once('-') else {
+                continue;
+            };
             if let (Ok(s), Ok(e)) = (start.parse::<usize>(), end.parse::<usize>()) {
                 out.push((id.to_string(), s, e));
             }
@@ -136,6 +140,9 @@ mod tests {
     fn handles_escapes() {
         let line = "@msg-param-sub-plan-name=Nightbot\\scommunity :n PRIVMSG #c :hi";
         let m = parse(line).unwrap();
-        assert_eq!(m.tags.get("msg-param-sub-plan-name").unwrap(), "Nightbot community");
+        assert_eq!(
+            m.tags.get("msg-param-sub-plan-name").unwrap(),
+            "Nightbot community"
+        );
     }
 }

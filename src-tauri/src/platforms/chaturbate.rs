@@ -33,7 +33,10 @@ impl ChaturbateLive {
     }
 }
 
-pub async fn fetch_live(client: &reqwest::Client, username: &str) -> Result<Option<ChaturbateLive>> {
+pub async fn fetch_live(
+    client: &reqwest::Client,
+    username: &str,
+) -> Result<Option<ChaturbateLive>> {
     let url = format!("{ROOM_URL}/{username}/");
     let resp = client
         .get(&url)
@@ -53,10 +56,7 @@ pub async fn fetch_live(client: &reqwest::Client, username: &str) -> Result<Opti
         );
     }
 
-    let data: Value = resp
-        .json()
-        .await
-        .context("parsing Chaturbate room JSON")?;
+    let data: Value = resp.json().await.context("parsing Chaturbate room JSON")?;
     Ok(Some(parse(&data, username)))
 }
 

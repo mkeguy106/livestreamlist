@@ -49,7 +49,10 @@ pub enum CallbackResult {
     /// Code flow — `?code=...&state=...` in the query string at /callback.
     Code { code: String, state: Option<String> },
     /// `?error=...&error_description=...`.
-    Error { error: String, description: Option<String> },
+    Error {
+        error: String,
+        description: Option<String>,
+    },
 }
 
 /// Run the server to completion on a background blocking thread. Returns a
@@ -64,11 +67,7 @@ pub fn spawn_once(port: u16) -> Result<oneshot::Receiver<CallbackResult>> {
     let v4_addr: SocketAddr = (Ipv4Addr::LOCALHOST, port).into();
     let listener = TcpListener::bind(v6_addr)
         .or_else(|_| TcpListener::bind(v4_addr))
-        .with_context(|| {
-            format!(
-                "binding port {port} (another OAuth flow in progress?)"
-            )
-        })?;
+        .with_context(|| format!("binding port {port} (another OAuth flow in progress?)"))?;
     listener
         .set_nonblocking(false)
         .context("switching to blocking mode")?;
@@ -83,7 +82,9 @@ pub fn spawn_once(port: u16) -> Result<oneshot::Receiver<CallbackResult>> {
         let _ = listener.set_nonblocking(false);
         let deadline = std::time::Instant::now() + Duration::from_secs(5 * 60);
         while std::time::Instant::now() < deadline {
-            let Ok((stream, _)) = listener.accept() else { break };
+            let Ok((stream, _)) = listener.accept() else {
+                break;
+            };
             let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
             let _ = stream.set_write_timeout(Some(Duration::from_secs(10)));
             match handle_conn(stream) {
@@ -109,9 +110,7 @@ pub fn spawn_once(port: u16) -> Result<oneshot::Receiver<CallbackResult>> {
 /// `None` if it was an intermediate request (the HTML bounce page).
 fn handle_conn(mut stream: TcpStream) -> Result<Option<CallbackResult>> {
     let mut buf = vec![0u8; 8192];
-    let n = stream
-        .read(&mut buf)
-        .context("reading request")?;
+    let n = stream.read(&mut buf).context("reading request")?;
     let raw = String::from_utf8_lossy(&buf[..n]).to_string();
 
     let (method, path, body_opt) = parse_request(&raw)?;
@@ -236,7 +235,9 @@ fn respond_html(stream: &mut TcpStream, body: &str) -> Result<()> {
         body.len(),
         body
     );
-    stream.write_all(resp.as_bytes()).context("writing response")?;
+    stream
+        .write_all(resp.as_bytes())
+        .context("writing response")?;
     Ok(())
 }
 

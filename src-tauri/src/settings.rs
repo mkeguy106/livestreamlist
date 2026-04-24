@@ -81,10 +81,18 @@ pub struct ChatSettings {
     pub user_card_hover_delay_ms: u32,
 }
 
-fn default_timestamp_24h() -> bool { true }
-fn default_history_replay_count() -> u32 { 100 }
-fn default_user_card_hover() -> bool { true }
-fn default_user_card_hover_delay_ms() -> u32 { 400 }
+fn default_timestamp_24h() -> bool {
+    true
+}
+fn default_history_replay_count() -> u32 {
+    100
+}
+fn default_user_card_hover() -> bool {
+    true
+}
+fn default_user_card_hover_delay_ms() -> u32 {
+    400
+}
 
 impl Default for ChatSettings {
     fn default() -> Self {
@@ -105,8 +113,7 @@ pub fn load() -> Result<Settings> {
     if !path.exists() {
         return Ok(Settings::default());
     }
-    let bytes = std::fs::read(&path)
-        .with_context(|| format!("reading {}", path.display()))?;
+    let bytes = std::fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
     if bytes.is_empty() {
         return Ok(Settings::default());
     }

@@ -139,7 +139,10 @@ pub fn parse_channel_input(input: &str) -> Option<ParsedChannel> {
 
     // Bare handle — assume Twitch (most common platform for this user base)
     let id = trimmed.trim_start_matches('@').to_string();
-    if id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
+    if id
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
         return Some(ParsedChannel {
             platform: Platform::Twitch,
             display_name: id.clone(),

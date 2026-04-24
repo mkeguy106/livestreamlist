@@ -69,10 +69,15 @@ pub async fn login(http: &reqwest::Client) -> Result<KickIdentity> {
         }
     });
 
-    let result = server_rx.await.context("Kick callback server closed early")?;
+    let result = server_rx
+        .await
+        .context("Kick callback server closed early")?;
 
     let code = match result {
-        CallbackResult::Code { code, state: returned_state } => {
+        CallbackResult::Code {
+            code,
+            state: returned_state,
+        } => {
             if returned_state.as_deref() != Some(&state) {
                 anyhow::bail!("Kick OAuth state mismatch — possible CSRF");
             }
@@ -156,10 +161,16 @@ pub async fn refresh(http: &reqwest::Client) -> Result<Option<String>> {
 
 /// Validate stored token by hitting /public/v1/users. `None` means no token.
 pub async fn status(http: &reqwest::Client) -> Result<Option<KickIdentity>> {
-    let Some(token) = stored_access_token()? else { return Ok(None) };
+    let Some(token) = stored_access_token()? else {
+        return Ok(None);
+    };
     match fetch_identity(http, &token).await {
         Ok(id) => {
-            tokens::save(KEYRING_IDENTITY, &serde_json::to_string(&id).unwrap_or_default()).ok();
+            tokens::save(
+                KEYRING_IDENTITY,
+                &serde_json::to_string(&id).unwrap_or_default(),
+            )
+            .ok();
             Ok(Some(id))
         }
         Err(_) => {
@@ -167,7 +178,11 @@ pub async fn status(http: &reqwest::Client) -> Result<Option<KickIdentity>> {
             match refresh(http).await {
                 Ok(Some(new_token)) => {
                     let id = fetch_identity(http, &new_token).await?;
-                    tokens::save(KEYRING_IDENTITY, &serde_json::to_string(&id).unwrap_or_default()).ok();
+                    tokens::save(
+                        KEYRING_IDENTITY,
+                        &serde_json::to_string(&id).unwrap_or_default(),
+                    )
+                    .ok();
                     Ok(Some(id))
                 }
                 _ => {
@@ -228,7 +243,11 @@ async fn fetch_identity(http: &reqwest::Client, token: &str) -> Result<KickIdent
         .await
         .context("GET /public/v1/users")?;
     if !resp.status().is_success() {
-        anyhow::bail!("/public/v1/users {}: {}", resp.status(), resp.text().await.unwrap_or_default());
+        anyhow::bail!(
+            "/public/v1/users {}: {}",
+            resp.status(),
+            resp.text().await.unwrap_or_default()
+        );
     }
     let data: UsersResponse = resp.json().await?;
     let entry = data

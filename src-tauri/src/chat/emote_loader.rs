@@ -64,8 +64,7 @@ pub async fn load_twitch_for_channel(
         }
 
         // Channel emotes need the broadcaster id, not the login.
-        if let Ok(Some(user_id)) = twitch::resolve_user_id(&http, &token, &channel_login).await
-        {
+        if let Ok(Some(user_id)) = twitch::resolve_user_id(&http, &token, &channel_login).await {
             if let Ok(list) = twitch::fetch_channel_emotes(&http, &token, &user_id).await {
                 for e in list {
                     per_channel.insert(e.name.clone(), twitch_to_emote(&e));

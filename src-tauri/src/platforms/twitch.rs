@@ -108,8 +108,7 @@ pub async fn fetch_channel_emotes(
     access_token: &str,
     broadcaster_id: &str,
 ) -> Result<Vec<TwitchEmote>> {
-    let url =
-        format!("https://api.twitch.tv/helix/chat/emotes?broadcaster_id={broadcaster_id}");
+    let url = format!("https://api.twitch.tv/helix/chat/emotes?broadcaster_id={broadcaster_id}");
     helix_emote_call(client, access_token, &url).await
 }
 
@@ -124,9 +123,7 @@ pub async fn fetch_user_emotes(
     let mut out = Vec::new();
     let mut cursor: Option<String> = None;
     loop {
-        let mut url = format!(
-            "https://api.twitch.tv/helix/chat/emotes/user?user_id={user_id}"
-        );
+        let mut url = format!("https://api.twitch.tv/helix/chat/emotes/user?user_id={user_id}");
         if let Some(c) = &cursor {
             url.push_str(&format!("&after={c}"));
         }
@@ -167,7 +164,11 @@ async fn helix_emote_call_with_cursor(
         .await
         .with_context(|| format!("GET {url}"))?;
     if !resp.status().is_success() {
-        anyhow::bail!("{url}: {} — {}", resp.status(), resp.text().await.unwrap_or_default());
+        anyhow::bail!(
+            "{url}: {} — {}",
+            resp.status(),
+            resp.text().await.unwrap_or_default()
+        );
     }
     let data: Value = resp.json().await?;
     let emotes = data
@@ -263,18 +264,26 @@ async fn fetch_live_inner(
         .context("POST gql.twitch.tv")?;
 
     if !resp.status().is_success() {
-        anyhow::bail!("Twitch GraphQL {}: {}", resp.status(), resp.text().await.unwrap_or_default());
+        anyhow::bail!(
+            "Twitch GraphQL {}: {}",
+            resp.status(),
+            resp.text().await.unwrap_or_default()
+        );
     }
 
     let data: Vec<Value> = resp.json().await.context("parsing GraphQL response")?;
 
     let mut out = HashMap::new();
     for (login, val) in logins.iter().zip(data.iter()) {
-        let Some(user) = val.pointer("/data/user") else { continue };
+        let Some(user) = val.pointer("/data/user") else {
+            continue;
+        };
         if user.is_null() {
             continue;
         }
-        let Some(live) = parse_live(user, login) else { continue };
+        let Some(live) = parse_live(user, login) else {
+            continue;
+        };
         out.insert(login.to_ascii_lowercase(), live);
     }
     Ok(out)
@@ -329,9 +338,8 @@ pub async fn fetch_followed_channels(
     let mut out = Vec::new();
     let mut cursor: Option<String> = None;
     loop {
-        let mut url = format!(
-            "https://api.twitch.tv/helix/channels/followed?user_id={user_id}&first=100"
-        );
+        let mut url =
+            format!("https://api.twitch.tv/helix/channels/followed?user_id={user_id}&first=100");
         if let Some(c) = &cursor {
             url.push_str(&format!("&after={c}"));
         }
@@ -352,14 +360,25 @@ pub async fn fetch_followed_channels(
         let data: Value = resp.json().await?;
         if let Some(list) = data.get("data").and_then(|v| v.as_array()) {
             for e in list {
-                let Some(login) = e.get("broadcaster_login").and_then(|v| v.as_str()) else { continue };
-                let name = e.get("broadcaster_name").and_then(|v| v.as_str()).unwrap_or(login);
-                let id = e.get("broadcaster_id").and_then(|v| v.as_str()).unwrap_or("");
+                let Some(login) = e.get("broadcaster_login").and_then(|v| v.as_str()) else {
+                    continue;
+                };
+                let name = e
+                    .get("broadcaster_name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(login);
+                let id = e
+                    .get("broadcaster_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
                 out.push(FollowedChannel {
                     broadcaster_login: login.to_string(),
                     broadcaster_name: name.to_string(),
                     broadcaster_id: id.to_string(),
-                    followed_at: e.get("followed_at").and_then(|v| v.as_str()).map(String::from),
+                    followed_at: e
+                        .get("followed_at")
+                        .and_then(|v| v.as_str())
+                        .map(String::from),
                 });
             }
         }
@@ -387,12 +406,20 @@ pub async fn fetch_socials(client: &reqwest::Client, login: &str) -> Result<Vec<
         .await
         .context("POST gql.twitch.tv (socials)")?;
     if !resp.status().is_success() {
-        anyhow::bail!("Twitch socials {}: {}", resp.status(), resp.text().await.unwrap_or_default());
+        anyhow::bail!(
+            "Twitch socials {}: {}",
+            resp.status(),
+            resp.text().await.unwrap_or_default()
+        );
     }
     let data: Value = resp.json().await?;
 
-    let Some(list) = data.pointer("/data/user/channel/socialMedias").and_then(|v| v.as_array())
-    else { return Ok(Vec::new()) };
+    let Some(list) = data
+        .pointer("/data/user/channel/socialMedias")
+        .and_then(|v| v.as_array())
+    else {
+        return Ok(Vec::new());
+    };
 
     Ok(list
         .iter()
@@ -400,7 +427,11 @@ pub async fn fetch_socials(client: &reqwest::Client, login: &str) -> Result<Vec<
             Some(SocialLink {
                 id: e.get("id")?.as_str()?.to_string(),
                 name: e.get("name")?.as_str()?.to_string(),
-                title: e.get("title").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                title: e
+                    .get("title")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
                 url: e.get("url")?.as_str()?.to_string(),
             })
         })

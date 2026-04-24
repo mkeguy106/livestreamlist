@@ -59,11 +59,15 @@ impl NotifyTracker {
             return;
         }
 
-        let cfg_map: HashMap<&str, &Channel> =
-            channels.iter().map(|c| (c.channel_id.as_str(), c)).collect();
+        let cfg_map: HashMap<&str, &Channel> = channels
+            .iter()
+            .map(|c| (c.channel_id.as_str(), c))
+            .collect();
 
         for ls in snapshot {
-            let was = prev.insert(ls.unique_key.clone(), ls.is_live).unwrap_or(false);
+            let was = prev
+                .insert(ls.unique_key.clone(), ls.is_live)
+                .unwrap_or(false);
             if !was && ls.is_live {
                 // New live transition.
                 let ch = cfg_map.get(ls.channel_id.as_str()).copied();
@@ -85,13 +89,7 @@ fn send_go_live(app: &AppHandle, ls: &Livestream) {
         (None, Some(g)) => g.clone(),
         (None, None) => ls.platform.as_str().to_string(),
     };
-    if let Err(e) = app
-        .notification()
-        .builder()
-        .title(title)
-        .body(body)
-        .show()
-    {
+    if let Err(e) = app.notification().builder().title(title).body(body).show() {
         log::warn!("notification failed for {}: {e:#}", ls.unique_key);
     }
 }
