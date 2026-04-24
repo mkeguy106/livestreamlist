@@ -131,6 +131,62 @@ pub fn read_recent(
     Ok(collected)
 }
 
+/// Read up to `limit` of the most recent messages from `user_id` for a channel.
+/// Scans today's + yesterday's JSONL only (matching `read_recent`'s budget).
+/// Corrupt lines are skipped silently.
+pub fn read_user_messages(
+    platform: Platform,
+    channel_id: &str,
+    user_id: &str,
+    limit: usize,
+) -> Result<Vec<ChatMessage>> {
+    let logs = config::logs_dir()?;
+    read_user_messages_at(&logs, platform, channel_id, user_id, limit)
+}
+
+pub(crate) fn read_user_messages_at(
+    logs_dir: &Path,
+    platform: Platform,
+    channel_id: &str,
+    user_id: &str,
+    limit: usize,
+) -> Result<Vec<ChatMessage>> {
+    if limit == 0 {
+        return Ok(Vec::new());
+    }
+    let today = Utc::now();
+    let yesterday = today - chrono::Duration::days(1);
+    let chan_dir = logs_dir
+        .join(platform.as_str())
+        .join(channel_id.to_ascii_lowercase());
+
+    // Collect oldest-first across both days, then keep the last `limit`.
+    let mut collected: Vec<ChatMessage> = Vec::new();
+    for d in [yesterday, today] {
+        let p = chan_dir.join(format!("{}.jsonl", d.format("%Y-%m-%d")));
+        if !p.exists() {
+            continue;
+        }
+        let f = File::open(&p).with_context(|| format!("opening {}", p.display()))?;
+        let reader = BufReader::new(f);
+        for line in reader.lines() {
+            let Ok(line) = line else { continue };
+            if line.trim().is_empty() {
+                continue;
+            }
+            let Ok(msg) = serde_json::from_str::<ChatMessage>(&line) else { continue };
+            if msg.user.id.as_deref() == Some(user_id) {
+                collected.push(msg);
+            }
+        }
+    }
+    if collected.len() > limit {
+        let excess = collected.len() - limit;
+        collected.drain(0..excess);
+    }
+    Ok(collected)
+}
+
 /// Read up to `limit` messages from the end of a JSONL file.
 ///
 /// For small counts we just read forward — JSONL files stay modest (busy
@@ -166,4 +222,73 @@ fn read_tail(path: &Path, limit: usize) -> Result<Vec<ChatMessage>> {
 #[allow(dead_code)]
 pub fn parse_timestamp(s: &str) -> Option<DateTime<Utc>> {
     DateTime::parse_from_rfc3339(s).ok().map(|d| d.with_timezone(&Utc))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::chat::models::{ChatMessage, ChatUser};
+    use chrono::TimeZone;
+    use std::io::Write;
+
+    fn fixture_msg(id: &str, user_id: &str, text: &str, ts_secs: i64) -> ChatMessage {
+        ChatMessage {
+            id: id.into(),
+            channel_key: "twitch:somechan".into(),
+            platform: Platform::Twitch,
+            timestamp: chrono::Utc.timestamp_opt(ts_secs, 0).unwrap(),
+            user: ChatUser {
+                id: Some(user_id.into()),
+                login: "u".into(),
+                display_name: "U".into(),
+                color: None,
+                is_mod: false,
+                is_subscriber: false,
+                is_broadcaster: false,
+                is_turbo: false,
+            },
+            text: text.into(),
+            emote_ranges: vec![],
+            badges: vec![],
+            is_action: false,
+            is_first_message: false,
+            reply_to: None,
+            system: None,
+        }
+    }
+
+    #[test]
+    fn read_user_messages_filters_by_user_id_and_caps_to_limit() {
+        // Write a today.jsonl into a temp logs dir with mixed users.
+        let dir = std::env::temp_dir().join(format!(
+            "lsl-log-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        let chan_dir = dir.join("twitch").join("somechan");
+        std::fs::create_dir_all(&chan_dir).unwrap();
+        let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        let path = chan_dir.join(format!("{today}.jsonl"));
+        let mut f = std::fs::File::create(&path).unwrap();
+        for (i, (uid, text)) in [
+            ("100", "from-100-a"),
+            ("200", "from-200-a"),
+            ("100", "from-100-b"),
+            ("100", "from-100-c"),
+        ].iter().enumerate() {
+            let m = fixture_msg(&format!("m{i}"), uid, text, 1_700_000_000 + i as i64);
+            writeln!(f, "{}", serde_json::to_string(&m).unwrap()).unwrap();
+        }
+        drop(f);
+
+        // Override the logs dir for this test by calling read_user_messages_at.
+        let got = read_user_messages_at(&dir, Platform::Twitch, "somechan", "100", 10).unwrap();
+        let texts: Vec<_> = got.iter().map(|m| m.text.clone()).collect();
+        assert_eq!(texts, vec!["from-100-a", "from-100-b", "from-100-c"]);
+
+        let got = read_user_messages_at(&dir, Platform::Twitch, "somechan", "100", 2).unwrap();
+        let texts: Vec<_> = got.iter().map(|m| m.text.clone()).collect();
+        assert_eq!(texts, vec!["from-100-b", "from-100-c"]);
+    }
 }
