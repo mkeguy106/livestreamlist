@@ -1,3 +1,4 @@
+pub mod badges;
 mod emote_loader;
 pub mod emotes;
 mod irc;
