@@ -97,13 +97,11 @@ mod tests {
         assert!(matches!(p.nickname, FieldUpdate::Unchanged));
 
         // Explicit null → Cleared
-        let p: UserMetadataPatch =
-            serde_json::from_value(json!({ "nickname": null })).unwrap();
+        let p: UserMetadataPatch = serde_json::from_value(json!({ "nickname": null })).unwrap();
         assert!(matches!(p.nickname, FieldUpdate::Cleared));
 
         // Value → Set(...)
-        let p: UserMetadataPatch =
-            serde_json::from_value(json!({ "nickname": "Hi" })).unwrap();
+        let p: UserMetadataPatch = serde_json::from_value(json!({ "nickname": "Hi" })).unwrap();
         assert!(matches!(p.nickname, FieldUpdate::Set(s) if s == "Hi"));
     }
 

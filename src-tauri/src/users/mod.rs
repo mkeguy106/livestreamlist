@@ -7,5 +7,5 @@
 pub mod models;
 pub mod store;
 
-pub use models::{FieldUpdate, UserMetadata, UserMetadataPatch};
+pub use models::{UserMetadata, UserMetadataPatch};
 pub use store::UserStore;

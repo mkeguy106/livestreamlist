@@ -34,7 +34,9 @@ impl UserStore {
                     let ts = Utc::now().timestamp();
                     let quarantine = path.with_file_name(format!(
                         "{}.corrupt-{}",
-                        path.file_name().and_then(|s| s.to_str()).unwrap_or("users.json"),
+                        path.file_name()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("users.json"),
                         ts
                     ));
                     log::warn!(
@@ -48,7 +50,10 @@ impl UserStore {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => HashMap::new(),
             Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
         };
-        Ok(Self { path, inner: Mutex::new(inner) })
+        Ok(Self {
+            path,
+            inner: Mutex::new(inner),
+        })
     }
 
     /// Snapshot of all rows (cloned). Used for the Settings → Blocked Users list.
@@ -143,7 +148,10 @@ mod tests {
     use serde_json::json;
 
     fn store_with_path(path: PathBuf) -> UserStore {
-        UserStore { path, inner: Mutex::new(HashMap::new()) }
+        UserStore {
+            path,
+            inner: Mutex::new(HashMap::new()),
+        }
     }
 
     #[test]
@@ -156,14 +164,14 @@ mod tests {
             "nickname": "Tim",
             "login_hint": "timmy",
             "display_name_hint": "Timmy",
-        })).unwrap();
+        }))
+        .unwrap();
         let m = store.apply(&key, Platform::Twitch, "42", patch).unwrap();
         assert_eq!(m.nickname.as_deref(), Some("Tim"));
         assert_eq!(m.last_known_login, "timmy");
         assert_eq!(m.last_known_display_name, "Timmy");
 
-        let patch: UserMetadataPatch =
-            serde_json::from_value(json!({ "nickname": null })).unwrap();
+        let patch: UserMetadataPatch = serde_json::from_value(json!({ "nickname": null })).unwrap();
         let m = store.apply(&key, Platform::Twitch, "42", patch).unwrap();
         assert_eq!(m.nickname, None);
     }
@@ -177,11 +185,13 @@ mod tests {
         // Make a row, then clear everything.
         let p: UserMetadataPatch = serde_json::from_value(json!({
             "blocked": true, "login_hint": "x", "display_name_hint": "X",
-        })).unwrap();
+        }))
+        .unwrap();
         store.apply(&key, Platform::Twitch, "42", p).unwrap();
         let p: UserMetadataPatch = serde_json::from_value(json!({
             "blocked": false,
-        })).unwrap();
+        }))
+        .unwrap();
         store.apply(&key, Platform::Twitch, "42", p).unwrap();
         assert!(store.get(&key).is_none());
     }
@@ -194,7 +204,8 @@ mod tests {
         assert!(!store.is_blocked(key));
         let p: UserMetadataPatch = serde_json::from_value(json!({
             "blocked": true, "login_hint": "x", "display_name_hint": "X",
-        })).unwrap();
+        }))
+        .unwrap();
         store.apply(key, Platform::Twitch, "99", p).unwrap();
         assert!(store.is_blocked(key));
     }
@@ -208,9 +219,14 @@ mod tests {
         let store = UserStore::open(path.clone()).unwrap();
         assert!(store.snapshot().is_empty());
         // Quarantine file should exist.
-        let entries: Vec<_> = std::fs::read_dir(&dir).unwrap().filter_map(|e| e.ok()).collect();
+        let entries: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .collect();
         assert!(entries.iter().any(|e| {
-            e.file_name().to_string_lossy().starts_with("users.json.corrupt-")
+            e.file_name()
+                .to_string_lossy()
+                .starts_with("users.json.corrupt-")
         }));
     }
 
@@ -219,7 +235,9 @@ mod tests {
             "lsl-users-test-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
         ));
         std::fs::create_dir_all(&p).unwrap();
         p
