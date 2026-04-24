@@ -136,7 +136,6 @@ impl TwitchBadgesResponse {
     }
 }
 
-#[allow(dead_code)]
 impl BadgeCache {
     /// Fetch + cache Twitch global badges. Idempotent.
     pub async fn ensure_twitch_global(self: &Arc<Self>, http: &reqwest::Client) {

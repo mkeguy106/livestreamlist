@@ -100,6 +100,17 @@ async fn connect_and_read(cfg: &mut TwitchChatConfig) -> Result<()> {
 
     emit_status(&cfg.app, &cfg.channel_key, ChatStatus::Connected, None);
 
+    // Prefetch global Twitch badges in the background. Idempotent — the
+    // cache skips the HTTP call if globals were already loaded by an earlier
+    // connection in this process.
+    {
+        let cache = Arc::clone(&cfg.badges);
+        let http = cfg.http.clone();
+        tauri::async_runtime::spawn(async move {
+            cache.ensure_twitch_global(&http).await;
+        });
+    }
+
     let mut log = ChatLogWriter::open(Platform::Twitch, &cfg.channel_login).ok();
     read_loop(cfg, &mut ws, log.as_mut()).await
 }
@@ -297,6 +308,11 @@ fn build_privmsg(cfg: &TwitchChatConfig, msg: &IrcMessage<'_>) -> Option<ChatMes
 
     let color = msg.tags.get("color").filter(|s| !s.is_empty()).cloned();
 
+    let mut badges = parse_badges(msg.tags.get("badges").map(String::as_str).unwrap_or(""));
+    let room_snapshot = cfg.room_id.lock().clone();
+    cfg.badges
+        .resolve(Platform::Twitch, room_snapshot.as_deref(), &mut badges);
+
     Some(ChatMessage {
         id,
         channel_key: cfg.channel_key.clone(),
@@ -326,7 +342,7 @@ fn build_privmsg(cfg: &TwitchChatConfig, msg: &IrcMessage<'_>) -> Option<ChatMes
         },
         text,
         emote_ranges,
-        badges: parse_badges(msg.tags.get("badges").map(String::as_str).unwrap_or("")),
+        badges,
         is_action,
         is_first_message: msg.tags.get("first-msg").map(|v| v == "1").unwrap_or(false),
         reply_to,
@@ -417,6 +433,11 @@ fn build_usernotice(cfg: &TwitchChatConfig, msg: &IrcMessage<'_>) -> Option<Chat
         .and_then(|ms| chrono::DateTime::from_timestamp_millis(ms))
         .unwrap_or_else(Utc::now);
 
+    let mut badges = parse_badges(msg.tags.get("badges").map(String::as_str).unwrap_or(""));
+    let room_snapshot = cfg.room_id.lock().clone();
+    cfg.badges
+        .resolve(Platform::Twitch, room_snapshot.as_deref(), &mut badges);
+
     Some(ChatMessage {
         id,
         channel_key: cfg.channel_key.clone(),
@@ -438,7 +459,7 @@ fn build_usernotice(cfg: &TwitchChatConfig, msg: &IrcMessage<'_>) -> Option<Chat
         },
         text,
         emote_ranges,
-        badges: parse_badges(msg.tags.get("badges").map(String::as_str).unwrap_or("")),
+        badges,
         is_action: false,
         is_first_message: false,
         reply_to: None,
