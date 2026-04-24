@@ -45,6 +45,10 @@ export function useChat(channelKey) {
         next = next.map((m) =>
           m.user?.login?.toLowerCase() === login ? { ...m, hidden: true } : m,
         );
+      } else if (kind === 'user_blocked' && target_login) {
+        // Block hides messages COMPLETELY (not just greyed out — different from ban/timeout).
+        const login = target_login.toLowerCase();
+        next = next.filter((m) => m.user?.login?.toLowerCase() !== login);
       } else {
         return;
       }
