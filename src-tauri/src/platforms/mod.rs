@@ -1,4 +1,7 @@
+pub mod chaturbate;
+pub mod kick;
 pub mod twitch;
+pub mod youtube;
 
 use serde::{Deserialize, Serialize};
 use url::Url;
