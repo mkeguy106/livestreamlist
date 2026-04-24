@@ -7,6 +7,7 @@ use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message as WsMessage;
 use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
 
+use super::badges::classify_mod_twitch;
 use super::emotes::{self, EmoteCache};
 use super::irc::{self, IrcMessage};
 use super::log_store::ChatLogWriter;
@@ -468,7 +469,7 @@ fn parse_badges(tag: &str) -> Vec<ChatBadge> {
                 id: format!("{set_name}/{version}"),
                 url: String::new(),
                 title: set_name.to_string(),
-                is_mod: crate::chat::badges::classify_mod_twitch(set_name),
+                is_mod: classify_mod_twitch(set_name),
             })
         })
         .collect()

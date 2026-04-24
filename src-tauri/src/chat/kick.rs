@@ -22,6 +22,7 @@ use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message as WsMessage;
 use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
 
+use super::badges::classify_mod_kick;
 use super::emotes::EmoteCache;
 use super::log_store::ChatLogWriter;
 use super::models::{ChatBadge, ChatMessage, ChatStatus, ChatStatusEvent, ChatUser, EmoteRange};
@@ -261,7 +262,7 @@ fn build_chat_message(cfg: &KickChatConfig, parsed: &Value) -> Option<ChatMessag
                         id: t.clone(),
                         url: inline_url,
                         title: text,
-                        is_mod: crate::chat::badges::classify_mod_kick(&t),
+                        is_mod: classify_mod_kick(&t),
                     })
                 })
                 .collect()
