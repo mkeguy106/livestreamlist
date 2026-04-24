@@ -91,6 +91,95 @@ impl BadgeCache {
     }
 }
 
+use serde::Deserialize;
+
+const TWITCH_GLOBAL_URL: &str = "https://badges.twitch.tv/v1/badges/global/display";
+
+fn twitch_channel_url(room_id: &str) -> String {
+    format!("https://badges.twitch.tv/v1/badges/channels/{room_id}/display")
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TwitchBadgesResponse {
+    pub badge_sets: std::collections::HashMap<String, TwitchBadgeSet>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TwitchBadgeSet {
+    pub versions: std::collections::HashMap<String, TwitchBadgeVersion>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TwitchBadgeVersion {
+    pub image_url_4x: String,
+    #[serde(default)]
+    pub title: String,
+}
+
+impl TwitchBadgesResponse {
+    pub fn into_entries(self) -> impl Iterator<Item = (String, BadgeUrl)> {
+        self.badge_sets.into_iter().flat_map(|(set, body)| {
+            body.versions.into_iter().map(move |(ver, v)| {
+                (
+                    format!("{set}/{ver}"),
+                    BadgeUrl {
+                        url: v.image_url_4x,
+                        title: v.title,
+                    },
+                )
+            })
+        })
+    }
+}
+
+impl BadgeCache {
+    /// Fetch + cache Twitch global badges. Idempotent.
+    pub async fn ensure_twitch_global(self: &Arc<Self>, http: &reqwest::Client) {
+        if self.is_global_loaded(Platform::Twitch) {
+            return;
+        }
+        match http.get(TWITCH_GLOBAL_URL).send().await {
+            Ok(r) if r.status().is_success() => match r.json::<TwitchBadgesResponse>().await {
+                Ok(body) => {
+                    for (id, badge) in body.into_entries() {
+                        self.insert(Platform::Twitch, Scope::Global, id, badge);
+                    }
+                    self.mark_global_loaded(Platform::Twitch);
+                }
+                Err(e) => log::warn!("twitch global badges parse: {e:#}"),
+            },
+            Ok(r) => log::warn!("twitch global badges status {}", r.status()),
+            Err(e) => log::warn!("twitch global badges fetch: {e:#}"),
+        }
+    }
+
+    /// Fetch + cache Twitch channel badges. Idempotent per channel.
+    pub async fn ensure_twitch_channel(self: &Arc<Self>, http: &reqwest::Client, room_id: &str) {
+        if self.is_channel_loaded(Platform::Twitch, room_id) {
+            return;
+        }
+        let url = twitch_channel_url(room_id);
+        match http.get(&url).send().await {
+            Ok(r) if r.status().is_success() => match r.json::<TwitchBadgesResponse>().await {
+                Ok(body) => {
+                    for (id, badge) in body.into_entries() {
+                        self.insert(
+                            Platform::Twitch,
+                            Scope::Channel(room_id.to_string()),
+                            id,
+                            badge,
+                        );
+                    }
+                    self.mark_channel_loaded(Platform::Twitch, room_id);
+                }
+                Err(e) => log::warn!("twitch channel badges parse for {room_id}: {e:#}"),
+            },
+            Ok(r) => log::warn!("twitch channel badges status {} for {room_id}", r.status()),
+            Err(e) => log::warn!("twitch channel badges fetch for {room_id}: {e:#}"),
+        }
+    }
+}
+
 pub fn classify_mod_twitch(set_name: &str) -> bool {
     matches!(
         set_name,
@@ -170,6 +259,53 @@ mod tests {
             .lookup(Platform::Twitch, Some("12345"), "subscriber/0")
             .unwrap();
         assert_eq!(c.url, "https://channel/sub.png");
+    }
+
+    #[test]
+    fn parse_twitch_response_extracts_image_url_4x() {
+        let json = r#"{
+            "badge_sets": {
+                "broadcaster": {
+                    "versions": {
+                        "1": {
+                            "image_url_1x": "https://x/1.png",
+                            "image_url_2x": "https://x/2.png",
+                            "image_url_4x": "https://x/4.png",
+                            "title": "Broadcaster",
+                            "click_action": "",
+                            "click_url": ""
+                        }
+                    }
+                },
+                "subscriber": {
+                    "versions": {
+                        "0": {
+                            "image_url_1x": "https://y/0_1.png",
+                            "image_url_2x": "https://y/0_2.png",
+                            "image_url_4x": "https://y/0_4.png",
+                            "title": "Subscriber",
+                            "click_action": "",
+                            "click_url": ""
+                        }
+                    }
+                }
+            }
+        }"#;
+        let parsed: TwitchBadgesResponse = serde_json::from_str(json).expect("parse");
+        let entries: Vec<(String, BadgeUrl)> = parsed.into_entries().collect();
+        let map: std::collections::HashMap<String, BadgeUrl> = entries.into_iter().collect();
+        assert_eq!(
+            map.get("broadcaster/1").map(|b| b.url.as_str()),
+            Some("https://x/4.png")
+        );
+        assert_eq!(
+            map.get("subscriber/0").map(|b| b.url.as_str()),
+            Some("https://y/0_4.png")
+        );
+        assert_eq!(
+            map.get("broadcaster/1").map(|b| b.title.as_str()),
+            Some("Broadcaster")
+        );
     }
 
     #[test]
