@@ -147,8 +147,8 @@ impl ChatManager {
                     users: Arc::clone(&self.users),
                     auth,
                     outbound: rx,
-                    room_id: parking_lot::Mutex::new(None),
-                    own_badges: parking_lot::Mutex::new(Vec::new()),
+                    room_id: Mutex::new(None),
+                    own_badges: Mutex::new(Vec::new()),
                 };
                 let task = async_runtime::spawn(async move {
                     twitch::run(cfg).await;

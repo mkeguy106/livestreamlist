@@ -33,7 +33,6 @@ pub struct BadgeCache {
     loaded_channels: Mutex<HashMap<(Platform, String), bool>>,
 }
 
-#[allow(dead_code)]
 impl BadgeCache {
     pub fn new() -> Arc<Self> {
         Arc::new(Self::default())
