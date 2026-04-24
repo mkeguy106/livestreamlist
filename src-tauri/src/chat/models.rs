@@ -101,3 +101,18 @@ pub struct ChatStatusEvent {
     #[serde(default)]
     pub message: Option<String>,
 }
+
+/// One-off moderation signal — the frontend decides to grey/remove matching
+/// messages from its buffer.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatModerationEvent {
+    pub channel_key: String,
+    /// One of: `"ban"`, `"timeout"`, `"clear_chat"`, `"msg_delete"`.
+    pub kind: String,
+    #[serde(default)]
+    pub target_login: Option<String>,
+    #[serde(default)]
+    pub target_msg_id: Option<String>,
+    #[serde(default)]
+    pub duration_seconds: Option<i64>,
+}

@@ -11,8 +11,8 @@ use super::emotes::{self, EmoteCache};
 use super::irc::{self, IrcMessage};
 use super::log_store::ChatLogWriter;
 use super::models::{
-    ChatBadge, ChatMessage, ChatStatus, ChatStatusEvent, ChatUser, EmoteRange, ReplyInfo,
-    SystemEvent,
+    ChatBadge, ChatMessage, ChatModerationEvent, ChatStatus, ChatStatusEvent, ChatUser, EmoteRange,
+    ReplyInfo, SystemEvent,
 };
 use crate::platforms::Platform;
 
@@ -144,8 +144,21 @@ async fn handle_line(
                 persist_and_emit(cfg, log, chat_msg);
             }
         }
-        "NOTICE" | "ROOMSTATE" | "USERSTATE" | "GLOBALUSERSTATE" | "CLEARCHAT" | "CLEARMSG" => {
-            // Moderation / state events — Phase 3b+.
+        "CLEARCHAT" => {
+            let ev = build_clearchat(cfg, &msg);
+            let _ = cfg
+                .app
+                .emit(&format!("chat:moderation:{}", cfg.channel_key), ev);
+        }
+        "CLEARMSG" => {
+            let ev = build_clearmsg(cfg, &msg);
+            let _ = cfg
+                .app
+                .emit(&format!("chat:moderation:{}", cfg.channel_key), ev);
+        }
+        "NOTICE" | "ROOMSTATE" | "USERSTATE" | "GLOBALUSERSTATE" => {
+            // Not surfaced yet — state events for room mode / user state live
+            // behind their own UI that lands in Phase 4b with preferences.
         }
         _ => {}
     }
@@ -415,6 +428,38 @@ fn parse_badges(tag: &str) -> Vec<ChatBadge> {
             })
         })
         .collect()
+}
+
+fn build_clearchat(cfg: &TwitchChatConfig, msg: &IrcMessage<'_>) -> ChatModerationEvent {
+    // CLEARCHAT has the target login in the trailing (if per-user) or is
+    // empty (if full chat wipe). Ban-duration tag distinguishes timeout vs ban.
+    let target_login = msg.trailing.map(|s| s.to_string()).filter(|s| !s.is_empty());
+    let ban_duration = msg
+        .tags
+        .get("ban-duration")
+        .and_then(|s| s.parse::<i64>().ok());
+    let kind = match (&target_login, ban_duration) {
+        (Some(_), Some(_)) => "timeout",
+        (Some(_), None) => "ban",
+        (None, _) => "clear_chat",
+    };
+    ChatModerationEvent {
+        channel_key: cfg.channel_key.clone(),
+        kind: kind.to_string(),
+        target_login,
+        target_msg_id: None,
+        duration_seconds: ban_duration,
+    }
+}
+
+fn build_clearmsg(cfg: &TwitchChatConfig, msg: &IrcMessage<'_>) -> ChatModerationEvent {
+    ChatModerationEvent {
+        channel_key: cfg.channel_key.clone(),
+        kind: "msg_delete".to_string(),
+        target_login: msg.tags.get("login").cloned(),
+        target_msg_id: msg.tags.get("target-msg-id").cloned(),
+        duration_seconds: None,
+    }
 }
 
 fn emit_status(app: &AppHandle, channel_key: &str, status: ChatStatus, message: Option<String>) {
