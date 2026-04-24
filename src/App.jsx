@@ -4,6 +4,8 @@ import Columns from './directions/Columns.jsx';
 import Focus from './directions/Focus.jsx';
 import AddChannelDialog from './components/AddChannelDialog.jsx';
 import LoginButton from './components/LoginButton.jsx';
+import NicknameDialog from './components/NicknameDialog.jsx';
+import NoteDialog from './components/NoteDialog.jsx';
 import UserCard from './components/UserCard.jsx';
 import UserCardContextMenu from './components/UserCardContextMenu.jsx';
 import WindowControls from './components/WindowControls.jsx';
@@ -48,6 +50,8 @@ export default function App() {
   );
 
   const [userCtx, setUserCtx] = useState({ open: false, point: null, user: null, channelKey: null, metadata: null });
+  const [nickDlg, setNickDlg] = useState({ open: false });
+  const [noteDlg, setNoteDlg] = useState({ open: false });
 
   const onUsernameContext = useCallback(async (user, point, channelKey) => {
     let metadata = null;
@@ -250,8 +254,12 @@ export default function App() {
         user={userCtx.user || {}}
         metadata={userCtx.metadata}
         onClose={() => setUserCtx(c => ({ ...c, open: false }))}
-        onEditNickname={() => { /* Task 17 wires the dialog */ }}
-        onEditNote={() => { /* Task 17 wires the dialog */ }}
+        onEditNickname={() => {
+          setNickDlg({ open: true, user: userCtx.user, currentValue: userCtx.metadata?.nickname || '' });
+        }}
+        onEditNote={() => {
+          setNoteDlg({ open: true, user: userCtx.user, currentValue: userCtx.metadata?.note || '' });
+        }}
         onToggleBlocked={async () => {
           if (!userCtx.user?.id) return;
           const userKey = `twitch:${userCtx.user.id}`;
@@ -265,6 +273,66 @@ export default function App() {
             console.error('set_user_metadata', e);
           }
           if (card.open && card.user?.id === userCtx.user?.id) card.refreshMetadata();
+        }}
+      />
+      <NicknameDialog
+        open={nickDlg.open}
+        user={nickDlg.user}
+        currentValue={nickDlg.currentValue}
+        onClose={() => setNickDlg({ open: false })}
+        onSave={async (v) => {
+          if (!nickDlg.user?.id) return;
+          try {
+            await setUserMetadata(`twitch:${nickDlg.user.id}`, {
+              nickname: v,
+              login_hint: nickDlg.user.login,
+              display_name_hint: nickDlg.user.display_name,
+            });
+          } catch (e) { console.error('set_user_metadata', e); }
+          setNickDlg({ open: false });
+          if (card.user?.id === nickDlg.user.id) card.refreshMetadata();
+        }}
+        onClear={async () => {
+          if (!nickDlg.user?.id) return;
+          try {
+            await setUserMetadata(`twitch:${nickDlg.user.id}`, {
+              nickname: null,
+              login_hint: nickDlg.user.login,
+              display_name_hint: nickDlg.user.display_name,
+            });
+          } catch (e) { console.error('set_user_metadata', e); }
+          setNickDlg({ open: false });
+          if (card.user?.id === nickDlg.user.id) card.refreshMetadata();
+        }}
+      />
+      <NoteDialog
+        open={noteDlg.open}
+        user={noteDlg.user}
+        currentValue={noteDlg.currentValue}
+        onClose={() => setNoteDlg({ open: false })}
+        onSave={async (v) => {
+          if (!noteDlg.user?.id) return;
+          try {
+            await setUserMetadata(`twitch:${noteDlg.user.id}`, {
+              note: v,
+              login_hint: noteDlg.user.login,
+              display_name_hint: noteDlg.user.display_name,
+            });
+          } catch (e) { console.error('set_user_metadata', e); }
+          setNoteDlg({ open: false });
+          if (card.user?.id === noteDlg.user.id) card.refreshMetadata();
+        }}
+        onClear={async () => {
+          if (!noteDlg.user?.id) return;
+          try {
+            await setUserMetadata(`twitch:${noteDlg.user.id}`, {
+              note: null,
+              login_hint: noteDlg.user.login,
+              display_name_hint: noteDlg.user.display_name,
+            });
+          } catch (e) { console.error('set_user_metadata', e); }
+          setNoteDlg({ open: false });
+          if (card.user?.id === noteDlg.user.id) card.refreshMetadata();
         }}
       />
     </div>
