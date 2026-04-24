@@ -48,6 +48,7 @@ export const getUserProfile = (channelKey, userId, login) =>
   invoke('get_user_profile', { channelKey, userId, login });
 export const getUserMessages = (channelKey, userId, limit) =>
   invoke('get_user_messages', { channelKey, userId, limit });
+export const listBlockedUsers = () => invoke('list_blocked_users');
 
 /**
  * Subscribe to a Tauri-side event. Returns an unlisten function.
@@ -350,6 +351,15 @@ async function mockInvoke(name, args) {
         reply_to: null,
         system: null,
       }));
+    case 'list_blocked_users':
+      return [
+        {
+          platform: 'twitch', user_id: '1',
+          last_known_login: 'mock1', last_known_display_name: 'Mock1',
+          blocked: true, nickname: null, note: null,
+          updated_at: new Date().toISOString(),
+        },
+      ];
     default:
       throw new Error(`[mock] unknown invoke ${name}`);
   }

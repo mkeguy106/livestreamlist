@@ -546,6 +546,17 @@ fn get_user_messages(
 }
 
 #[tauri::command]
+fn list_blocked_users(state: State<'_, AppState>) -> Vec<UserMetadata> {
+    let mut v: Vec<_> = state.users.snapshot().into_iter().filter(|m| m.blocked).collect();
+    v.sort_by(|a, b| {
+        a.last_known_display_name
+            .to_lowercase()
+            .cmp(&b.last_known_display_name.to_lowercase())
+    });
+    v
+}
+
+#[tauri::command]
 fn list_emotes(
     unique_key: String,
     chat: State<'_, Arc<ChatManager>>,
@@ -769,6 +780,7 @@ pub fn run() {
             set_user_metadata,
             get_user_profile,
             get_user_messages,
+            list_blocked_users,
             auth_status,
             twitch_login,
             twitch_logout,

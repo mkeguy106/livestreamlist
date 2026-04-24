@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useAuth } from '../hooks/useAuth.jsx';
 import { usePreferences } from '../hooks/usePreferences.js';
-import { importTwitchFollows } from '../ipc.js';
+import { importTwitchFollows, listBlockedUsers, setUserMetadata } from '../ipc.js';
 
 const TABS = [
   { id: 'general', label: 'General' },
@@ -363,8 +363,49 @@ function ChatTab({ settings, patch }) {
 }
 
 function BlockedUsersList() {
-  // Filled in by Task 20.
-  return null;
+  const [rows, setRows] = useState([]);
+  const refresh = useCallback(() => {
+    listBlockedUsers().then(setRows).catch(() => setRows([]));
+  }, []);
+  useEffect(() => { refresh(); }, [refresh]);
+  return (
+    <div style={{ marginTop: 4 }}>
+      <div style={{ color: 'var(--zinc-300)', marginBottom: 6 }}>Blocked users</div>
+      {rows.length === 0 ? (
+        <div style={{ color: 'var(--zinc-500)', fontSize: 12 }}>No blocked users.</div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          {rows.map(r => {
+            const userKey = `${r.platform}:${r.user_id}`;
+            const label = r.last_known_display_name || r.last_known_login || userKey;
+            return (
+              <div
+                key={userKey}
+                style={{
+                  display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                  padding: '6px 8px', background: 'var(--zinc-900)',
+                  border: 'var(--hair)', borderRadius: 'var(--r-1)',
+                }}
+              >
+                <span style={{ color: 'var(--zinc-200)' }}>{label}</span>
+                <button
+                  className="rx-btn rx-btn-ghost"
+                  onClick={async () => {
+                    try {
+                      await setUserMetadata(userKey, { blocked: false });
+                    } catch (e) { console.error('set_user_metadata', e); }
+                    refresh();
+                  }}
+                >
+                  Unblock
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function ColorField({ value, onChange, placeholder }) {
