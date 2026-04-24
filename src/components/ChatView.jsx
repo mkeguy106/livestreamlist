@@ -1,9 +1,15 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '../hooks/useAuth.jsx';
 import { useChat } from '../hooks/useChat.js';
 import Composer from './Composer.jsx';
 import ConversationDialog from './ConversationDialog.jsx';
 import EmoteText from './EmoteText.jsx';
+
+// Qt-style auto-scroll: when the user scrolls up, pause auto-follow for 5
+// minutes and show a "New messages (M:SS)" button. Click (or scroll back to
+// the bottom) resumes. Timer ticks the countdown every second.
+const PAUSE_MS = 5 * 60 * 1000;
+const AT_BOTTOM_PX = 24;
 
 /**
  * Full chat pane for a given channel. Auto-scrolls to bottom unless the user
@@ -20,10 +26,14 @@ export default function ChatView({
   header = null,
   footer = null,
 }) {
-  const { messages, status } = useChat(channelKey);
+  const { messages, status, pauseTrim, resumeTrim } = useChat(channelKey);
   const auth = useAuth();
   const listRef = useRef(null);
-  const stickToBottom = useRef(true);
+  const pauseTimerRef = useRef(null);
+  const countdownTimerRef = useRef(null);
+  const suppressScrollRef = useRef(false); // ignore the onScroll fired by our own scrollTop=maximum
+  const [autoScroll, setAutoScroll] = useState(true);
+  const [pauseSecondsLeft, setPauseSecondsLeft] = useState(0);
   const [conversation, setConversation] = useState(null);
 
   const platform = channelKey?.split(':')[0];
@@ -56,16 +66,72 @@ export default function ChatView({
     setConversation({ a: userA, b: userB });
   };
 
-  useEffect(() => {
+  const clearTimers = useCallback(() => {
+    if (pauseTimerRef.current) {
+      clearTimeout(pauseTimerRef.current);
+      pauseTimerRef.current = null;
+    }
+    if (countdownTimerRef.current) {
+      clearInterval(countdownTimerRef.current);
+      countdownTimerRef.current = null;
+    }
+  }, []);
+
+  const scrollToBottom = useCallback(() => {
     const el = listRef.current;
-    if (!el || !stickToBottom.current) return;
+    if (!el) return;
+    suppressScrollRef.current = true;
     el.scrollTop = el.scrollHeight;
-  }, [messages.length]);
+    // Release the suppression flag on the next frame so legitimate user
+    // scrolls resume being tracked.
+    requestAnimationFrame(() => {
+      suppressScrollRef.current = false;
+    });
+  }, []);
+
+  const resumeAutoScroll = useCallback(() => {
+    setAutoScroll(true);
+    setPauseSecondsLeft(0);
+    clearTimers();
+    resumeTrim();
+    scrollToBottom();
+  }, [clearTimers, resumeTrim, scrollToBottom]);
+
+  const beginPause = useCallback(() => {
+    setAutoScroll(false);
+    setPauseSecondsLeft(PAUSE_MS / 1000);
+    pauseTrim();
+    clearTimers();
+    pauseTimerRef.current = setTimeout(() => resumeAutoScroll(), PAUSE_MS);
+    countdownTimerRef.current = setInterval(() => {
+      setPauseSecondsLeft((prev) => (prev > 1 ? prev - 1 : 0));
+    }, 1000);
+  }, [clearTimers, pauseTrim, resumeAutoScroll]);
+
+  // Stick to bottom on new messages when auto-scroll is on.
+  useEffect(() => {
+    if (!autoScroll) return;
+    scrollToBottom();
+  }, [messages.length, autoScroll, scrollToBottom]);
+
+  // Cleanup on unmount / channel change.
+  useEffect(() => () => clearTimers(), [clearTimers]);
+  useEffect(() => {
+    // Channel key changed — reset scroll state.
+    setAutoScroll(true);
+    setPauseSecondsLeft(0);
+    clearTimers();
+  }, [channelKey, clearTimers]);
 
   const onScroll = (e) => {
+    if (suppressScrollRef.current) return;
     const el = e.currentTarget;
-    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
-    stickToBottom.current = atBottom;
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < AT_BOTTOM_PX;
+    if (atBottom) {
+      if (!autoScroll) resumeAutoScroll();
+    } else if (autoScroll) {
+      beginPause();
+    }
   };
 
   return (
@@ -79,26 +145,63 @@ export default function ChatView({
       }}
     >
       {header}
-      <div
-        ref={listRef}
-        onScroll={onScroll}
-        style={{
-          flex: 1,
-          overflowY: 'auto',
-          padding: variant === 'compact' ? '4px 10px 8px' : '6px 0',
-          fontSize: variant === 'compact' ? 'var(--t-11)' : 'var(--t-12)',
-          lineHeight: 1.45,
-        }}
-      >
-        {messages.length === 0 && <EmptyHint status={status} />}
-        {messages.map((m) =>
-          m.system ? (
-            <SystemRow key={m.id} m={m} variant={variant} />
-          ) : variant === 'compact' ? (
-            <CompactRow key={m.id} m={m} myLogin={myLogin} onOpenThread={openConversation} />
-          ) : (
-            <IrcRow key={m.id} m={m} myLogin={myLogin} onOpenThread={openConversation} />
-          ),
+      <div style={{ flex: 1, position: 'relative', minHeight: 0, overflow: 'hidden' }}>
+        <div
+          ref={listRef}
+          onScroll={onScroll}
+          style={{
+            height: '100%',
+            overflowY: 'auto',
+            padding: variant === 'compact' ? '4px 10px 8px' : '6px 0',
+            fontSize: variant === 'compact' ? 'var(--t-11)' : 'var(--t-12)',
+            lineHeight: 1.45,
+          }}
+        >
+          {messages.length === 0 && <EmptyHint status={status} />}
+          {messages.map((m) =>
+            m.system ? (
+              <SystemRow key={m.id} m={m} variant={variant} />
+            ) : variant === 'compact' ? (
+              <CompactRow key={m.id} m={m} myLogin={myLogin} onOpenThread={openConversation} />
+            ) : (
+              <IrcRow key={m.id} m={m} myLogin={myLogin} onOpenThread={openConversation} />
+            ),
+          )}
+        </div>
+        {!autoScroll && (
+          <div
+            style={{
+              position: 'absolute',
+              left: 0,
+              right: 0,
+              bottom: 8,
+              display: 'flex',
+              justifyContent: 'center',
+              pointerEvents: 'none',
+            }}
+          >
+            <button
+              type="button"
+              onClick={resumeAutoScroll}
+              style={{
+                pointerEvents: 'auto',
+                padding: '4px 12px',
+                background: 'var(--zinc-100)',
+                color: 'var(--zinc-950)',
+                border: 'none',
+                borderRadius: 3,
+                fontFamily: 'var(--font-mono)',
+                fontSize: 10,
+                fontWeight: 600,
+                letterSpacing: '.02em',
+                textTransform: 'uppercase',
+                cursor: 'pointer',
+                boxShadow: '0 4px 12px rgba(0,0,0,.4)',
+              }}
+            >
+              New messages ({formatCountdown(pauseSecondsLeft)})
+            </button>
+          </div>
         )}
       </div>
       {footer ?? (
@@ -319,6 +422,13 @@ function formatTime(iso) {
   const m = String(d.getMinutes()).padStart(2, '0');
   const s = String(d.getSeconds()).padStart(2, '0');
   return `${h}:${m}:${s}`;
+}
+
+function formatCountdown(seconds) {
+  const s = Math.max(0, Math.ceil(seconds));
+  const m = Math.floor(s / 60);
+  const ss = String(s % 60).padStart(2, '0');
+  return `${m}:${ss}`;
 }
 
 /**
