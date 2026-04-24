@@ -249,10 +249,19 @@ fn build_chat_message(cfg: &KickChatConfig, parsed: &Value) -> Option<ChatMessag
                         .and_then(|v| v.as_str())
                         .unwrap_or(&t)
                         .to_string();
+                    // Some Kick payloads inline image.src; honor it so the
+                    // cache lookup later doesn't overwrite a good URL.
+                    let inline_url = b
+                        .pointer("/image/src")
+                        .or_else(|| b.pointer("/badge_image/src"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
                     Some(ChatBadge {
                         id: t.clone(),
-                        url: String::new(),
+                        url: inline_url,
                         title: text,
+                        is_mod: crate::chat::badges::classify_mod_kick(&t),
                     })
                 })
                 .collect()

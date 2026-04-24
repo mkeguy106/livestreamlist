@@ -186,13 +186,13 @@ mod tests {
                 id: "broadcaster/1".into(),
                 url: String::new(),
                 title: String::new(),
-                // is_mod: true,  // TODO: uncomment in Task 3 when ChatBadge gains is_mod
+                is_mod: true,
             },
             ChatBadge {
                 id: "subscriber/9".into(),
                 url: String::new(),
                 title: String::new(),
-                // is_mod: false,  // TODO: uncomment in Task 3 when ChatBadge gains is_mod
+                is_mod: false,
             },
         ];
         cache.resolve(Platform::Twitch, None, &mut badges);

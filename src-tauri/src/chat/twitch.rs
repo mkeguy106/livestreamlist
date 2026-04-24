@@ -458,17 +458,17 @@ fn char_range_to_bytes(text: &str, char_start: usize, char_end: usize) -> (usize
 }
 
 fn parse_badges(tag: &str) -> Vec<ChatBadge> {
-    // Without channel badge URLs we just note the ids; frontend can style by id.
     if tag.is_empty() {
         return Vec::new();
     }
     tag.split(',')
         .filter_map(|pair| {
-            let (id, version) = pair.split_once('/')?;
+            let (set_name, version) = pair.split_once('/')?;
             Some(ChatBadge {
-                id: format!("{id}/{version}"),
+                id: format!("{set_name}/{version}"),
                 url: String::new(),
-                title: id.to_string(),
+                title: set_name.to_string(),
+                is_mod: crate::chat::badges::classify_mod_twitch(set_name),
             })
         })
         .collect()
@@ -518,4 +518,25 @@ fn emit_status(app: &AppHandle, channel_key: &str, status: ChatStatus, message: 
             message,
         },
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_badges_classifies_mod_vs_cosmetic() {
+        let badges = parse_badges("broadcaster/1,subscriber/6,vip/1,turbo/1");
+        let map: std::collections::HashMap<&str, bool> =
+            badges.iter().map(|b| (b.id.as_str(), b.is_mod)).collect();
+        assert_eq!(map.get("broadcaster/1").copied(), Some(true));
+        assert_eq!(map.get("vip/1").copied(), Some(true));
+        assert_eq!(map.get("subscriber/6").copied(), Some(false));
+        assert_eq!(map.get("turbo/1").copied(), Some(false));
+    }
+
+    #[test]
+    fn parse_badges_empty_returns_empty() {
+        assert!(parse_badges("").is_empty());
+    }
 }

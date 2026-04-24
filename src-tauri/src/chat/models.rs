@@ -73,6 +73,8 @@ pub struct ChatBadge {
     pub id: String,
     pub url: String,
     pub title: String,
+    #[serde(default)]
+    pub is_mod: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
