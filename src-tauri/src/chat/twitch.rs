@@ -198,8 +198,8 @@ async fn handle_line(
         }
         "ROOMSTATE" => {
             if let Some(rid) = extract_room_id(&msg) {
-                let already = cfg.room_id.lock().as_ref() == Some(&rid);
-                if !already {
+                let prev = cfg.room_id.lock().clone();
+                if prev.as_deref() != Some(rid.as_str()) {
                     *cfg.room_id.lock() = Some(rid.clone());
                     let cache = Arc::clone(&cfg.badges);
                     let http = cfg.http.clone();
@@ -603,5 +603,14 @@ mod tests {
                 .unwrap()
                 .is_mod
         );
+    }
+
+    #[test]
+    fn extract_room_id_absent_returns_none() {
+        // Twitch sends ROOMSTATE without room-id on mode-change updates
+        // (slow-mode toggle, etc.). The handler must short-circuit cleanly.
+        let line = "@slow=30 :tmi.twitch.tv ROOMSTATE #shroud";
+        let m = crate::chat::irc::parse(line).unwrap();
+        assert_eq!(extract_room_id(&m), None);
     }
 }
