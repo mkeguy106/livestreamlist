@@ -3,6 +3,7 @@ use chrono::Utc;
 use futures_util::{SinkExt, StreamExt};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
+use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message as WsMessage;
 use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
 
@@ -17,19 +18,30 @@ use crate::platforms::Platform;
 
 const IRC_URL: &str = "wss://irc-ws.chat.twitch.tv";
 
+/// Auth context passed into a chat connection. When `None` the task falls
+/// back to an anonymous `justinfan*` read-only session (no sending).
+#[derive(Debug, Clone)]
+pub struct TwitchAuth {
+    pub login: String,
+    pub token: String,
+}
+
 pub struct TwitchChatConfig {
     pub app: AppHandle,
     pub channel_key: String,
     pub channel_login: String,
     pub emotes: Arc<EmoteCache>,
+    pub auth: Option<TwitchAuth>,
+    pub outbound: mpsc::UnboundedReceiver<String>,
 }
 
-/// Run the anonymous Twitch IRC connection until dropped/aborted. Emits
+/// Run the Twitch IRC connection until dropped/aborted. Emits
 /// `chat:message` and `chat:status` events for the given channel_key.
-pub async fn run(cfg: TwitchChatConfig) {
+/// Uses the auth token when present, otherwise a read-only `justinfan*` login.
+pub async fn run(mut cfg: TwitchChatConfig) {
     emit_status(&cfg.app, &cfg.channel_key, ChatStatus::Connecting, None);
 
-    match connect_and_read(&cfg).await {
+    match connect_and_read(&mut cfg).await {
         Ok(()) => emit_status(&cfg.app, &cfg.channel_key, ChatStatus::Closed, None),
         Err(e) => {
             log::warn!("Twitch IRC for {} errored: {:#}", cfg.channel_login, e);
@@ -38,7 +50,7 @@ pub async fn run(cfg: TwitchChatConfig) {
     }
 }
 
-async fn connect_and_read(cfg: &TwitchChatConfig) -> Result<()> {
+async fn connect_and_read(cfg: &mut TwitchChatConfig) -> Result<()> {
     let (mut ws, _) = connect_async(IRC_URL).await.context("connect wss://irc-ws.chat.twitch.tv")?;
 
     // Request IRCv3 capabilities for tags + membership + commands.
@@ -47,9 +59,11 @@ async fn connect_and_read(cfg: &TwitchChatConfig) -> Result<()> {
     ))
     .await?;
 
-    // Anonymous connection — Twitch lets any justinfan* nick join read-only.
-    let nick = format!("justinfan{}", rand_suffix());
-    ws.send(WsMessage::Text(format!("PASS SCHMOOPIIE"))).await?;
+    let (pass, nick) = match &cfg.auth {
+        Some(auth) => (format!("oauth:{}", auth.token), auth.login.to_ascii_lowercase()),
+        None => ("SCHMOOPIIE".to_string(), format!("justinfan{}", rand_suffix())),
+    };
+    ws.send(WsMessage::Text(format!("PASS {pass}"))).await?;
     ws.send(WsMessage::Text(format!("NICK {nick}"))).await?;
     ws.send(WsMessage::Text(format!("USER {nick} 8 * :{nick}"))).await?;
     ws.send(WsMessage::Text(format!("JOIN #{}", cfg.channel_login.to_ascii_lowercase()))).await?;
@@ -70,22 +84,34 @@ fn rand_suffix() -> u32 {
 }
 
 async fn read_loop(
-    cfg: &TwitchChatConfig,
+    cfg: &mut TwitchChatConfig,
     ws: &mut WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>,
     mut log: Option<&mut ChatLogWriter>,
 ) -> Result<()> {
-    while let Some(frame) = ws.next().await {
-        match frame? {
-            WsMessage::Text(text) => {
-                for line in text.split("\r\n").filter(|l| !l.is_empty()) {
-                    handle_line(cfg, ws, log.as_deref_mut(), line).await?;
+    loop {
+        tokio::select! {
+            frame = ws.next() => {
+                let Some(frame) = frame else { break };
+                match frame? {
+                    WsMessage::Text(text) => {
+                        for line in text.split("\r\n").filter(|l| !l.is_empty()) {
+                            handle_line(cfg, ws, log.as_deref_mut(), line).await?;
+                        }
+                    }
+                    WsMessage::Binary(_) => {}
+                    WsMessage::Ping(p) => ws.send(WsMessage::Pong(p)).await?,
+                    WsMessage::Pong(_) => {}
+                    WsMessage::Close(_) => break,
+                    WsMessage::Frame(_) => {}
                 }
             }
-            WsMessage::Binary(_) => {}
-            WsMessage::Ping(p) => ws.send(WsMessage::Pong(p)).await?,
-            WsMessage::Pong(_) => {}
-            WsMessage::Close(_) => break,
-            WsMessage::Frame(_) => {}
+            Some(outbound) = cfg.outbound.recv() => {
+                // Outbound line already in IRC-wire form (e.g. "PRIVMSG #room :hello").
+                if let Err(e) = ws.send(WsMessage::Text(outbound)).await {
+                    log::warn!("twitch outbound send failed: {e:#}");
+                }
+            }
+            else => break,
         }
     }
     if let Some(l) = log {

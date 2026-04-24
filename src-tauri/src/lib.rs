@@ -3,6 +3,7 @@ use parking_lot::Mutex;
 use std::sync::Arc;
 use tauri::{Manager, State};
 
+mod auth;
 mod channels;
 mod chat;
 mod config;
@@ -197,6 +198,73 @@ fn chat_disconnect(unique_key: String, chat: State<'_, Arc<ChatManager>>) -> Res
 }
 
 #[tauri::command]
+fn chat_send(
+    unique_key: String,
+    text: String,
+    state: State<'_, AppState>,
+    chat: State<'_, Arc<ChatManager>>,
+) -> Result<(), String> {
+    let channel = state
+        .store
+        .lock()
+        .channels()
+        .iter()
+        .find(|c| c.unique_key() == unique_key)
+        .cloned()
+        .ok_or_else(|| format!("unknown channel {unique_key}"))?;
+
+    match channel.platform {
+        Platform::Twitch => {
+            let login = channel.channel_id.to_ascii_lowercase();
+            // Enforce Twitch's 500-char cap client-side so we don't dump the
+            // partial message into the ether.
+            let clean = text.replace(['\r', '\n'], " ");
+            let clean = clean.chars().take(500).collect::<String>();
+            let line = format!("PRIVMSG #{login} :{clean}");
+            chat.send_raw(&unique_key, line).map_err(err_string)
+        }
+        _ => Err("sending not yet supported for this platform".to_string()),
+    }
+}
+
+#[derive(serde::Serialize)]
+struct AuthStatus {
+    twitch: Option<auth::twitch::TwitchIdentity>,
+}
+
+#[tauri::command]
+async fn auth_status(state: State<'_, AppState>) -> Result<AuthStatus, String> {
+    let twitch = auth::twitch::status(&state.http)
+        .await
+        .map_err(err_string)?;
+    Ok(AuthStatus { twitch })
+}
+
+#[tauri::command]
+async fn twitch_login(
+    state: State<'_, AppState>,
+    chat: State<'_, Arc<ChatManager>>,
+) -> Result<auth::twitch::TwitchIdentity, String> {
+    let identity = auth::twitch::login(&state.http)
+        .await
+        .map_err(err_string)?;
+    // Auth state changed — reconnect any live Twitch chat tasks so they
+    // pick up the new credentials.
+    chat.reconnect_platform(Platform::Twitch, &state.store);
+    Ok(identity)
+}
+
+#[tauri::command]
+fn twitch_logout(
+    chat: State<'_, Arc<ChatManager>>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    auth::twitch::logout().map_err(err_string)?;
+    chat.reconnect_platform(Platform::Twitch, &state.store);
+    Ok(())
+}
+
+#[tauri::command]
 fn replay_chat_history(
     unique_key: String,
     limit: usize,
@@ -302,7 +370,11 @@ pub fn run() {
             list_socials,
             chat_connect,
             chat_disconnect,
+            chat_send,
             replay_chat_history,
+            auth_status,
+            twitch_login,
+            twitch_logout,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -23,8 +23,12 @@ export const launchStream = (uniqueKey, quality) => invoke('launch_stream', { un
 export const openInBrowser = (uniqueKey) => invoke('open_in_browser', { uniqueKey });
 export const chatConnect = (uniqueKey) => invoke('chat_connect', { uniqueKey });
 export const chatDisconnect = (uniqueKey) => invoke('chat_disconnect', { uniqueKey });
+export const chatSend = (uniqueKey, text) => invoke('chat_send', { uniqueKey, text });
 export const replayChatHistory = (uniqueKey, limit = 100) =>
   invoke('replay_chat_history', { uniqueKey, limit });
+export const authStatus = () => invoke('auth_status');
+export const twitchLogin = () => invoke('twitch_login');
+export const twitchLogout = () => invoke('twitch_logout');
 export const openUrl = (url) => invoke('open_url', { url });
 export const listSocials = (uniqueKey) => invoke('list_socials', { uniqueKey });
 
@@ -62,6 +66,7 @@ const MOCK_LIVE = {
 };
 
 let mockChannels = [...MOCK_CHANNELS];
+let mockAuth = { twitch: null };
 
 function mockSnapshot() {
   const nowIso = new Date().toISOString();
@@ -165,6 +170,27 @@ async function mockInvoke(name, args) {
         { id: 'twitter', name: 'twitter', title: 'Twitter',  url: 'https://twitter.com/' },
         { id: 'discord', name: 'discord', title: 'Discord',  url: 'https://discord.com/' },
       ];
+    case 'auth_status':
+      return mockAuth;
+    case 'twitch_login':
+      mockAuth = { twitch: { login: 'mock_user', user_id: '0', scopes: ['chat:edit'] } };
+      return mockAuth.twitch;
+    case 'twitch_logout':
+      mockAuth = { twitch: null };
+      return null;
+    case 'chat_send':
+      mockEmit(`chat:message:${args.uniqueKey}`, {
+        id: `self-${Date.now()}`,
+        channel_key: args.uniqueKey,
+        platform: args.uniqueKey.split(':')[0],
+        timestamp: new Date().toISOString(),
+        user: { login: 'you', display_name: 'you', color: '#f4f4f5' },
+        text: args.text,
+        emote_ranges: [],
+        badges: [],
+        is_action: false,
+      });
+      return null;
     case 'list_channels':
       return mockChannels;
     case 'add_channel_from_input': {

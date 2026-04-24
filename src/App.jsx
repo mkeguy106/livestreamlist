@@ -3,6 +3,7 @@ import Command from './directions/Command.jsx';
 import Columns from './directions/Columns.jsx';
 import Focus from './directions/Focus.jsx';
 import AddChannelDialog from './components/AddChannelDialog.jsx';
+import LoginButton from './components/LoginButton.jsx';
 import WindowControls from './components/WindowControls.jsx';
 import { useDragHandler } from './hooks/useDragRegion.js';
 import { useLivestreams } from './hooks/useLivestreams.js';
@@ -137,6 +138,8 @@ export default function App() {
         <div className="rx-tb-label rx-mono">{rightLabel}</div>
         {error && <div className="rx-tb-label rx-mono" style={{ color: '#f87171' }}>· refresh failed</div>}
         <div style={{ width: 8 }} />
+        <LoginButton />
+        <div style={{ width: 4 }} />
         <WindowControls />
       </div>
 

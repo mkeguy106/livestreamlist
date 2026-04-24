@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
+import { useAuth } from '../hooks/useAuth.js';
 import { useChat } from '../hooks/useChat.js';
+import Composer from './Composer.jsx';
 import ConversationDialog from './ConversationDialog.jsx';
 import EmoteText from './EmoteText.jsx';
 
@@ -19,9 +21,12 @@ export default function ChatView({
   footer = null,
 }) {
   const { messages, status } = useChat(channelKey);
+  const auth = useAuth();
   const listRef = useRef(null);
   const stickToBottom = useRef(true);
   const [conversation, setConversation] = useState(null);
+
+  const platform = channelKey?.split(':')[0];
 
   const openConversation = (userA, userB) => {
     if (!userA || !userB || userA === userB) return;
@@ -73,7 +78,9 @@ export default function ChatView({
           ),
         )}
       </div>
-      {footer ?? <ComposerPlaceholder />}
+      {footer ?? (
+        <Composer channelKey={channelKey} platform={platform} auth={auth} />
+      )}
       <ConversationDialog
         open={Boolean(conversation)}
         messages={messages}
@@ -255,25 +262,6 @@ function SystemRow({ m, variant }) {
           <EmoteText text={m.text} ranges={m.emote_ranges} size={compact ? 18 : 20} />
         </div>
       )}
-    </div>
-  );
-}
-
-function ComposerPlaceholder() {
-  return (
-    <div
-      style={{
-        borderTop: 'var(--hair)',
-        padding: '8px 14px',
-        display: 'flex',
-        gap: 8,
-        alignItems: 'center',
-        color: 'var(--zinc-500)',
-        fontSize: 'var(--t-11)',
-      }}
-    >
-      <div className="rx-chiclet" style={{ color: 'var(--zinc-600)' }}>read-only</div>
-      <span style={{ color: 'var(--zinc-600)' }}>Sending lands with OAuth in Phase 2b</span>
     </div>
   );
 }

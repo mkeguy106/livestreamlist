@@ -10,9 +10,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tauri::async_runtime::{self, JoinHandle};
 use tauri::AppHandle;
+use tokio::sync::mpsc;
 
 use emotes::EmoteCache;
 
+use crate::auth;
 use crate::platforms::Platform;
 
 pub struct ChatManager {
@@ -24,6 +26,7 @@ pub struct ChatManager {
 
 struct ConnectionHandle {
     task: JoinHandle<()>,
+    outbound: mpsc::UnboundedSender<String>,
 }
 
 impl ChatManager {
@@ -86,18 +89,28 @@ impl ChatManager {
 
         match platform {
             Platform::Twitch => {
+                let (tx, rx) = mpsc::unbounded_channel::<String>();
+
+                // Best-effort auth — if the keyring has a token + identity
+                // we'll use it; otherwise the connection drops to anonymous
+                // justinfan. No /validate round-trip here.
+                let auth = auth::twitch::stored_auth_pair()
+                    .map(|(login, token)| twitch::TwitchAuth { login, token });
+
                 let cfg = twitch::TwitchChatConfig {
                     app: self.app.clone(),
                     channel_key: unique_key.clone(),
                     channel_login: channel_id,
                     emotes: Arc::clone(&self.emotes),
+                    auth,
+                    outbound: rx,
                 };
                 let task = async_runtime::spawn(async move {
                     twitch::run(cfg).await;
                 });
                 self.connections
                     .lock()
-                    .insert(unique_key, ConnectionHandle { task });
+                    .insert(unique_key, ConnectionHandle { task, outbound: tx });
             }
             _ => {
                 // Kick / YouTube / Chaturbate wired in Phase 2b+.
@@ -110,6 +123,42 @@ impl ChatManager {
     pub fn disconnect(&self, unique_key: &str) {
         if let Some(h) = self.connections.lock().remove(unique_key) {
             h.task.abort();
+        }
+    }
+
+    /// Send a raw IRC line (e.g. `"PRIVMSG #room :hello"`) to the channel's
+    /// active connection. Returns an error if there's no live task for that
+    /// key — connect first.
+    pub fn send_raw(&self, unique_key: &str, line: String) -> Result<()> {
+        let guard = self.connections.lock();
+        let Some(h) = guard.get(unique_key) else {
+            anyhow::bail!("no live chat for {unique_key}");
+        };
+        h.outbound
+            .send(line)
+            .map_err(|e| anyhow::anyhow!("chat channel closed: {e}"))
+    }
+
+    /// Disconnect and reconnect every live chat connection on `platform`.
+    /// Called on login/logout so running tasks pick up new credentials.
+    pub fn reconnect_platform(
+        &self,
+        platform: Platform,
+        store: &crate::channels::SharedStore,
+    ) {
+        let keys: Vec<String> = self
+            .connections
+            .lock()
+            .keys()
+            .cloned()
+            .filter(|k| k.starts_with(&format!("{}:", platform.as_str())))
+            .collect();
+        let channels = store.lock().channels().to_vec();
+        for key in keys {
+            self.disconnect(&key);
+            if let Some(ch) = channels.iter().find(|c| c.unique_key() == key) {
+                let _ = self.connect(ch.platform, ch.channel_id.clone(), key);
+            }
         }
     }
 }
