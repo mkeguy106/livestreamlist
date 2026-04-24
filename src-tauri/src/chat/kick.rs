@@ -42,7 +42,6 @@ pub struct KickChatConfig {
     pub channel_slug: String,
     #[allow(dead_code)]
     pub emotes: Arc<EmoteCache>,
-    #[allow(dead_code)]
     pub badges: Arc<crate::chat::badges::BadgeCache>,
     pub outbound: mpsc::UnboundedReceiver<OutboundMsg>,
 }
@@ -71,6 +70,16 @@ pub async fn run(mut cfg: KickChatConfig) {
 
 async fn connect_and_read(cfg: &mut KickChatConfig) -> Result<()> {
     let ids = resolve_channel_ids(&cfg.http, &cfg.channel_slug).await?;
+
+    cfg.badges.seed_kick_system_badges();
+    {
+        let cache = Arc::clone(&cfg.badges);
+        let http = cfg.http.clone();
+        let slug = cfg.channel_slug.clone();
+        tauri::async_runtime::spawn(async move {
+            cache.ensure_kick_channel(&http, &slug).await;
+        });
+    }
 
     let url = format!("{PUSHER_WS_URL}{PUSHER_PARAMS}");
     let (mut ws, _) = connect_async(&url).await.context("connect Pusher ws-us2")?;
@@ -240,7 +249,7 @@ fn build_chat_message(cfg: &KickChatConfig, parsed: &Value) -> Option<ChatMessag
         .map(|dt| dt.with_timezone(&Utc))
         .unwrap_or_else(Utc::now);
 
-    let badges: Vec<ChatBadge> = sender
+    let mut badges: Vec<ChatBadge> = sender
         .pointer("/identity/badges")
         .and_then(|v| v.as_array())
         .map(|arr| {
@@ -252,6 +261,12 @@ fn build_chat_message(cfg: &KickChatConfig, parsed: &Value) -> Option<ChatMessag
                         .and_then(|v| v.as_str())
                         .unwrap_or(&t)
                         .to_string();
+                    let cache_id = if t == "subscriber" {
+                        // Kick payload's `text` is the months count for subs.
+                        format!("subscriber:{}", text.trim())
+                    } else {
+                        t.clone()
+                    };
                     // Some Kick payloads inline image.src; honor it so the
                     // cache lookup later doesn't overwrite a good URL.
                     let inline_url = b
@@ -261,7 +276,7 @@ fn build_chat_message(cfg: &KickChatConfig, parsed: &Value) -> Option<ChatMessag
                         .unwrap_or("")
                         .to_string();
                     Some(ChatBadge {
-                        id: t.clone(),
+                        id: cache_id,
                         url: inline_url,
                         title: text,
                         is_mod: classify_mod_kick(&t),
@@ -270,6 +285,9 @@ fn build_chat_message(cfg: &KickChatConfig, parsed: &Value) -> Option<ChatMessag
                 .collect()
         })
         .unwrap_or_default();
+
+    cfg.badges
+        .resolve(Platform::Kick, Some(&cfg.channel_slug), &mut badges);
 
     Some(ChatMessage {
         id,

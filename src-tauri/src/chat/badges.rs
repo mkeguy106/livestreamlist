@@ -195,6 +195,94 @@ pub fn classify_mod_kick(badge_type: &str) -> bool {
     matches!(badge_type, "broadcaster" | "moderator" | "vip" | "staff")
 }
 
+const KICK_SYSTEM_BADGES: &[(&str, &str)] = &[
+    ("broadcaster", "https://kick.com/img/badges/broadcaster.svg"),
+    ("moderator", "https://kick.com/img/badges/moderator.svg"),
+    ("vip", "https://kick.com/img/badges/vip.svg"),
+    ("staff", "https://kick.com/img/badges/staff.svg"),
+    ("og", "https://kick.com/img/badges/og.svg"),
+    ("founder", "https://kick.com/img/badges/founder.svg"),
+    ("verified", "https://kick.com/img/badges/verified.svg"),
+    ("sub_gifter", "https://kick.com/img/badges/sub-gifter.svg"),
+];
+
+#[derive(Debug, Deserialize)]
+pub struct KickChannelBadgesResponse {
+    #[serde(default)]
+    pub subscriber_badges: Vec<KickSubscriberBadge>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct KickSubscriberBadge {
+    pub months: u32,
+    pub badge_image: KickBadgeImage,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct KickBadgeImage {
+    pub src: String,
+}
+
+impl KickChannelBadgesResponse {
+    pub fn into_subscriber_entries(self) -> impl Iterator<Item = (String, BadgeUrl)> {
+        self.subscriber_badges.into_iter().map(|b| {
+            (
+                format!("subscriber:{}", b.months),
+                BadgeUrl {
+                    url: b.badge_image.src,
+                    title: format!("{}-month subscriber", b.months),
+                },
+            )
+        })
+    }
+}
+
+impl BadgeCache {
+    pub fn seed_kick_system_badges(self: &Arc<Self>) {
+        if self.is_global_loaded(Platform::Kick) {
+            return;
+        }
+        for (id, url) in KICK_SYSTEM_BADGES {
+            self.insert(
+                Platform::Kick,
+                Scope::Global,
+                (*id).to_string(),
+                BadgeUrl {
+                    url: (*url).to_string(),
+                    title: id.replace('_', " "),
+                },
+            );
+        }
+        self.mark_global_loaded(Platform::Kick);
+    }
+
+    /// Fetch + cache Kick channel subscriber badges. Idempotent per slug.
+    pub async fn ensure_kick_channel(self: &Arc<Self>, http: &reqwest::Client, slug: &str) {
+        if self.is_channel_loaded(Platform::Kick, slug) {
+            return;
+        }
+        let url = format!("https://kick.com/api/v2/channels/{slug}");
+        match http
+            .get(&url)
+            .header("Accept", "application/json")
+            .send()
+            .await
+        {
+            Ok(r) if r.status().is_success() => match r.json::<KickChannelBadgesResponse>().await {
+                Ok(body) => {
+                    for (id, badge) in body.into_subscriber_entries() {
+                        self.insert(Platform::Kick, Scope::Channel(slug.to_string()), id, badge);
+                    }
+                    self.mark_channel_loaded(Platform::Kick, slug);
+                }
+                Err(e) => log::warn!("kick channel badges parse for {slug}: {e:#}"),
+            },
+            Ok(r) => log::warn!("kick channel badges status {} for {slug}", r.status()),
+            Err(e) => log::warn!("kick channel badges fetch for {slug}: {e:#}"),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -342,5 +430,42 @@ mod tests {
         assert_eq!(badges[0].url, "https://x/b.png");
         assert_eq!(badges[0].title, "Broadcaster");
         assert_eq!(badges[1].url, ""); // unresolved
+    }
+
+    #[test]
+    fn seed_kick_system_badges_populates_known_types() {
+        let cache = BadgeCache::new();
+        cache.seed_kick_system_badges();
+        assert!(cache.lookup(Platform::Kick, None, "broadcaster").is_some());
+        assert!(cache.lookup(Platform::Kick, None, "moderator").is_some());
+        assert!(cache.lookup(Platform::Kick, None, "vip").is_some());
+        assert!(cache.lookup(Platform::Kick, None, "staff").is_some());
+        assert!(cache.is_global_loaded(Platform::Kick));
+    }
+
+    #[test]
+    fn parse_kick_subscriber_badges_response() {
+        let json = r#"{
+            "subscriber_badges": [
+                {"months": 1,  "badge_image": {"src": "https://k/sub-1.png"}},
+                {"months": 6,  "badge_image": {"src": "https://k/sub-6.png"}},
+                {"months": 12, "badge_image": {"src": "https://k/sub-12.png"}}
+            ]
+        }"#;
+        let parsed: KickChannelBadgesResponse = serde_json::from_str(json).expect("parse");
+        let entries: Vec<(String, BadgeUrl)> = parsed.into_subscriber_entries().collect();
+        assert_eq!(entries.len(), 3);
+        // Stored under the synthetic id "subscriber:{months}" so Kick payloads
+        // (which give us subscribed-for=N months) can look up the right tier.
+        let map: std::collections::HashMap<String, String> =
+            entries.into_iter().map(|(k, v)| (k, v.url)).collect();
+        assert_eq!(
+            map.get("subscriber:1").map(String::as_str),
+            Some("https://k/sub-1.png")
+        );
+        assert_eq!(
+            map.get("subscriber:12").map(String::as_str),
+            Some("https://k/sub-12.png")
+        );
     }
 }
