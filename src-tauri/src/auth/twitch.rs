@@ -92,7 +92,9 @@ pub fn logout() -> Result<()> {
 /// Validate the stored token against Twitch and return the resolved identity
 /// when it's still good. `None` means no token on file; errors bubble up.
 pub async fn status(client: &reqwest::Client) -> Result<Option<TwitchIdentity>> {
-    let Some(token) = tokens::load(KEYRING_TOKEN)? else { return Ok(None) };
+    let Some(token) = tokens::load(KEYRING_TOKEN)? else {
+        return Ok(None);
+    };
     match validate(client, &token).await {
         Ok(id) => Ok(Some(id)),
         Err(e) => {
@@ -141,7 +143,11 @@ async fn validate(client: &reqwest::Client, token: &str) -> Result<TwitchIdentit
         .await
         .context("POST /oauth2/validate")?;
     if !resp.status().is_success() {
-        anyhow::bail!("/oauth2/validate {}: {}", resp.status(), resp.text().await.unwrap_or_default());
+        anyhow::bail!(
+            "/oauth2/validate {}: {}",
+            resp.status(),
+            resp.text().await.unwrap_or_default()
+        );
     }
     let data: Resp = resp.json().await.context("parsing /oauth2/validate")?;
     Ok(TwitchIdentity {
@@ -164,7 +170,9 @@ fn url_encode(s: &str) -> String {
     let mut out = String::with_capacity(s.len() * 3);
     for c in s.bytes() {
         match c {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(c as char),
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(c as char)
+            }
             other => out.push_str(&format!("%{other:02X}")),
         }
     }

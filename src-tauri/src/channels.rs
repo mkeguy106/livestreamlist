@@ -128,7 +128,11 @@ fn apply_twitch_stream(ls: &mut Livestream, s: &TwitchStream) {
 
 fn apply_kick_stream(ls: &mut Livestream, s: &KickStream) {
     ls.is_live = true;
-    ls.title = if s.title.is_empty() { None } else { Some(s.title.clone()) };
+    ls.title = if s.title.is_empty() {
+        None
+    } else {
+        Some(s.title.clone())
+    };
     ls.game = s.game.clone();
     ls.game_slug = s.game_slug.clone();
     ls.viewers = Some(s.viewers);
@@ -138,7 +142,11 @@ fn apply_kick_stream(ls: &mut Livestream, s: &KickStream) {
 
 fn apply_youtube_stream(ls: &mut Livestream, s: &YouTubeStream) {
     ls.is_live = true;
-    ls.title = if s.title.is_empty() { None } else { Some(s.title.clone()) };
+    ls.title = if s.title.is_empty() {
+        None
+    } else {
+        Some(s.title.clone())
+    };
     ls.game = s.game.clone();
     ls.viewers = s.viewers;
     ls.started_at = s.started_at;
@@ -165,8 +173,7 @@ impl ChannelStore {
                 livestreams: HashMap::new(),
             });
         }
-        let bytes = std::fs::read(&path)
-            .with_context(|| format!("reading {}", path.display()))?;
+        let bytes = std::fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
         let p: Persisted = serde_json::from_slice(&bytes)
             .with_context(|| format!("parsing {}", path.display()))?;
         Ok(Self {
@@ -183,7 +190,9 @@ impl ChannelStore {
         config::atomic_write(&path, &json)
     }
 
-    pub fn channels(&self) -> &[Channel] { &self.channels }
+    pub fn channels(&self) -> &[Channel] {
+        &self.channels
+    }
 
     pub fn contains(&self, platform: Platform, channel_id: &str) -> bool {
         self.channels

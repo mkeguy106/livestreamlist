@@ -37,8 +37,7 @@ pub fn users_path() -> Result<PathBuf> {
 
 pub fn atomic_write(path: &Path, contents: &[u8]) -> Result<()> {
     let tmp = path.with_extension("tmp");
-    std::fs::write(&tmp, contents)
-        .with_context(|| format!("writing {}", tmp.display()))?;
+    std::fs::write(&tmp, contents).with_context(|| format!("writing {}", tmp.display()))?;
     std::fs::rename(&tmp, path)
         .with_context(|| format!("renaming {} -> {}", tmp.display(), path.display()))?;
     Ok(())

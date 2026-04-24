@@ -173,7 +173,9 @@ pub async fn load_seventv_channel(
 }
 
 fn parse_seventv(root: &Value) -> Vec<Emote> {
-    let Some(list) = root.get("emotes").and_then(|v| v.as_array()) else { return Vec::new() };
+    let Some(list) = root.get("emotes").and_then(|v| v.as_array()) else {
+        return Vec::new();
+    };
     list.iter()
         .filter_map(|e| {
             let name = e.get("name")?.as_str()?.to_string();
@@ -181,7 +183,10 @@ fn parse_seventv(root: &Value) -> Vec<Emote> {
             let host = data.get("host")?;
             let host_url = host.get("url")?.as_str()?;
             let files = host.get("files")?.as_array()?;
-            let animated = data.get("animated").and_then(|v| v.as_bool()).unwrap_or(false);
+            let animated = data
+                .get("animated")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
             let pick = |size: &str| {
                 files
                     .iter()
@@ -215,17 +220,21 @@ pub async fn load_bttv_globals(http: &reqwest::Client) -> Result<Vec<Emote>> {
 
 pub async fn load_bttv_channel(http: &reqwest::Client, twitch_user_id: &str) -> Result<Vec<Emote>> {
     let url = format!("https://api.betterttv.net/3/cached/users/twitch/{twitch_user_id}");
-    let resp = http
-        .get(&url)
-        .send()
-        .await
-        .context("GET bttv channel")?;
+    let resp = http.get(&url).send().await.context("GET bttv channel")?;
     if resp.status() == reqwest::StatusCode::NOT_FOUND {
         return Ok(Vec::new());
     }
     let data: Value = resp.error_for_status()?.json().await?;
-    let channel = data.get("channelEmotes").and_then(|v| v.as_array()).cloned().unwrap_or_default();
-    let shared = data.get("sharedEmotes").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    let channel = data
+        .get("channelEmotes")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let shared = data
+        .get("sharedEmotes")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
     let combined: Vec<Value> = channel.into_iter().chain(shared.into_iter()).collect();
     Ok(parse_bttv(&Value::Array(combined), &[]))
 }
@@ -279,13 +288,21 @@ pub async fn load_ffz_channel(http: &reqwest::Client, twitch_login: &str) -> Res
 }
 
 fn parse_ffz(root: &Value) -> Vec<Emote> {
-    let Some(sets) = root.get("sets").and_then(|v| v.as_object()) else { return Vec::new() };
+    let Some(sets) = root.get("sets").and_then(|v| v.as_object()) else {
+        return Vec::new();
+    };
     let mut out = Vec::new();
     for (_sid, set) in sets {
-        let Some(list) = set.get("emoticons").and_then(|v| v.as_array()) else { continue };
+        let Some(list) = set.get("emoticons").and_then(|v| v.as_array()) else {
+            continue;
+        };
         for e in list {
-            let Some(name) = e.get("name").and_then(|v| v.as_str()) else { continue };
-            let Some(urls) = e.get("urls").and_then(|v| v.as_object()) else { continue };
+            let Some(name) = e.get("name").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            let Some(urls) = e.get("urls").and_then(|v| v.as_object()) else {
+                continue;
+            };
             let grab = |k: &str| urls.get(k).and_then(|v| v.as_str()).map(prefix_scheme);
             let url_1x = grab("1").or_else(|| grab("2")).or_else(|| grab("4"));
             let Some(url_1x) = url_1x else { continue };
@@ -302,7 +319,11 @@ fn parse_ffz(root: &Value) -> Vec<Emote> {
 }
 
 fn prefix_scheme(s: &str) -> String {
-    if s.starts_with("//") { format!("https:{s}") } else { s.to_string() }
+    if s.starts_with("//") {
+        format!("https:{s}")
+    } else {
+        s.to_string()
+    }
 }
 
 /// Twitch emote CDN URL (default/dark theme) for a given numeric emote id.

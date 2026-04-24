@@ -74,8 +74,7 @@ fn client_id() -> &'static str {
 
 /// Fetch the user record for a single user id. Hard-required for the card.
 pub async fn fetch_user(http: &reqwest::Client, user_id: &str) -> Result<UsersResponseItem> {
-    let token = auth::twitch::stored_token()?
-        .ok_or_else(|| anyhow!("not signed in to Twitch"))?;
+    let token = auth::twitch::stored_token()?.ok_or_else(|| anyhow!("not signed in to Twitch"))?;
     let resp = http
         .get(format!("{HELIX_BASE}/users"))
         .query(&[("id", user_id)])
@@ -93,12 +92,8 @@ pub async fn fetch_user(http: &reqwest::Client, user_id: &str) -> Result<UsersRe
 
 /// Fetch the user record by login (used to resolve broadcaster id from channel
 /// login). Same shape as `fetch_user`.
-pub async fn fetch_user_by_login(
-    http: &reqwest::Client,
-    login: &str,
-) -> Result<UsersResponseItem> {
-    let token = auth::twitch::stored_token()?
-        .ok_or_else(|| anyhow!("not signed in to Twitch"))?;
+pub async fn fetch_user_by_login(http: &reqwest::Client, login: &str) -> Result<UsersResponseItem> {
+    let token = auth::twitch::stored_token()?.ok_or_else(|| anyhow!("not signed in to Twitch"))?;
     let resp = http
         .get(format!("{HELIX_BASE}/users"))
         .query(&[("login", login)])
@@ -128,10 +123,7 @@ pub async fn fetch_follow(
     };
     let resp = http
         .get(format!("{HELIX_BASE}/channels/followers"))
-        .query(&[
-            ("broadcaster_id", broadcaster_id),
-            ("user_id", viewer_id),
-        ])
+        .query(&[("broadcaster_id", broadcaster_id), ("user_id", viewer_id)])
         .header("Client-Id", client_id())
         .bearer_auth(token)
         .send()
@@ -210,7 +202,10 @@ mod tests {
         let item = parse_users_response(body).unwrap();
         assert_eq!(item.id, "12345");
         assert_eq!(item.broadcaster_type, "partner");
-        assert_eq!(item.profile_image_url.as_deref(), Some("https://example/img.png"));
+        assert_eq!(
+            item.profile_image_url.as_deref(),
+            Some("https://example/img.png")
+        );
     }
 
     #[test]

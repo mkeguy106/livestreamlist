@@ -46,9 +46,9 @@ pub fn launch(platform: Platform, channel_id: &str, quality: &str) -> Result<u32
         cmd.creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW);
     }
 
-    let child = cmd.spawn().with_context(|| {
-        format!("spawning streamlink for {url} (is `streamlink` on PATH?)")
-    })?;
+    let child = cmd
+        .spawn()
+        .with_context(|| format!("spawning streamlink for {url} (is `streamlink` on PATH?)"))?;
     Ok(child.id())
 }
 

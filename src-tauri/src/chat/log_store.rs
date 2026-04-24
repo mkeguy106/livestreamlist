@@ -62,7 +62,10 @@ impl ChatLogWriter {
     fn roll_to(&mut self, date: &str, platform: Platform, channel_id: &str) -> Result<()> {
         self.file.flush().ok();
         let new_path = log_path_for(platform, channel_id, date)?;
-        let new_file = OpenOptions::new().create(true).append(true).open(&new_path)?;
+        let new_file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&new_path)?;
         self.path = new_path;
         self.file = BufWriter::new(new_file);
         self.date = date.to_string();
@@ -85,22 +88,20 @@ fn log_path_for(platform: Platform, channel_id: &str, date: &str) -> Result<Path
     let dir = config::logs_dir()?
         .join(platform.as_str())
         .join(channel_id.to_ascii_lowercase());
-    std::fs::create_dir_all(&dir)
-        .with_context(|| format!("creating log dir {}", dir.display()))?;
+    std::fs::create_dir_all(&dir).with_context(|| format!("creating log dir {}", dir.display()))?;
     Ok(dir.join(format!("{date}.jsonl")))
 }
 
 fn extract_login(channel_key: &str) -> &str {
-    channel_key.split_once(':').map(|(_, v)| v).unwrap_or(channel_key)
+    channel_key
+        .split_once(':')
+        .map(|(_, v)| v)
+        .unwrap_or(channel_key)
 }
 
 /// Read the most recent `limit` messages for a channel, stitching today's
 /// file with yesterday's if today is short. Corrupt lines are skipped.
-pub fn read_recent(
-    platform: Platform,
-    channel_id: &str,
-    limit: usize,
-) -> Result<Vec<ChatMessage>> {
+pub fn read_recent(platform: Platform, channel_id: &str, limit: usize) -> Result<Vec<ChatMessage>> {
     if limit == 0 {
         return Ok(Vec::new());
     }
@@ -108,7 +109,11 @@ pub fn read_recent(
     let yesterday = today - chrono::Duration::days(1);
     let paths = [
         log_path_for(platform, channel_id, &today.format("%Y-%m-%d").to_string())?,
-        log_path_for(platform, channel_id, &yesterday.format("%Y-%m-%d").to_string())?,
+        log_path_for(
+            platform,
+            channel_id,
+            &yesterday.format("%Y-%m-%d").to_string(),
+        )?,
     ];
 
     let mut collected: Vec<ChatMessage> = Vec::new();
@@ -174,7 +179,9 @@ pub(crate) fn read_user_messages_at(
             if line.trim().is_empty() {
                 continue;
             }
-            let Ok(msg) = serde_json::from_str::<ChatMessage>(&line) else { continue };
+            let Ok(msg) = serde_json::from_str::<ChatMessage>(&line) else {
+                continue;
+            };
             if msg.user.id.as_deref() == Some(user_id) {
                 collected.push(msg);
             }
@@ -196,8 +203,7 @@ fn read_tail(path: &Path, limit: usize) -> Result<Vec<ChatMessage>> {
     if limit == 0 {
         return Ok(Vec::new());
     }
-    let mut file = File::open(path)
-        .with_context(|| format!("opening {}", path.display()))?;
+    let mut file = File::open(path).with_context(|| format!("opening {}", path.display()))?;
     file.seek(SeekFrom::Start(0)).ok();
     let reader = BufReader::new(file);
     let mut ring: Vec<ChatMessage> = Vec::with_capacity(limit);
@@ -221,7 +227,9 @@ fn read_tail(path: &Path, limit: usize) -> Result<Vec<ChatMessage>> {
 
 #[allow(dead_code)]
 pub fn parse_timestamp(s: &str) -> Option<DateTime<Utc>> {
-    DateTime::parse_from_rfc3339(s).ok().map(|d| d.with_timezone(&Utc))
+    DateTime::parse_from_rfc3339(s)
+        .ok()
+        .map(|d| d.with_timezone(&Utc))
 }
 
 #[cfg(test)]
@@ -264,7 +272,9 @@ mod tests {
             "lsl-log-test-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
         ));
         let chan_dir = dir.join("twitch").join("somechan");
         std::fs::create_dir_all(&chan_dir).unwrap();
@@ -276,7 +286,10 @@ mod tests {
             ("200", "from-200-a"),
             ("100", "from-100-b"),
             ("100", "from-100-c"),
-        ].iter().enumerate() {
+        ]
+        .iter()
+        .enumerate()
+        {
             let m = fixture_msg(&format!("m{i}"), uid, text, 1_700_000_000 + i as i64);
             writeln!(f, "{}", serde_json::to_string(&m).unwrap()).unwrap();
         }

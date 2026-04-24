@@ -83,8 +83,7 @@ pub async fn fetch_live(channel_id: &str) -> Result<Option<YouTubeLive>> {
         anyhow::bail!("yt-dlp failed: {stderr}");
     }
 
-    let data: Value = serde_json::from_slice(&out.stdout)
-        .context("parsing yt-dlp JSON")?;
+    let data: Value = serde_json::from_slice(&out.stdout).context("parsing yt-dlp JSON")?;
     Ok(Some(parse_live(&data, channel_id)))
 }
 
@@ -103,7 +102,11 @@ fn parse_live(root: &Value, channel_fallback: &str) -> YouTubeLive {
     let is_live = root
         .get("is_live")
         .and_then(|v| v.as_bool())
-        .or_else(|| root.get("live_status").and_then(|v| v.as_str()).map(|s| s == "is_live"))
+        .or_else(|| {
+            root.get("live_status")
+                .and_then(|v| v.as_str())
+                .map(|s| s == "is_live")
+        })
         .unwrap_or(false);
 
     let stream = if is_live {
@@ -127,11 +130,22 @@ fn parse_stream(root: &Value) -> YouTubeStream {
         .and_then(|s| DateTime::from_timestamp(s, 0));
 
     YouTubeStream {
-        video_id: root.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-        title: root.get("title").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+        video_id: root
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+        title: root
+            .get("title")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
         viewers: root.get("concurrent_view_count").and_then(|v| v.as_i64()),
         game: None, // YouTube rarely exposes a game category
         started_at,
-        thumbnail_url: root.get("thumbnail").and_then(|v| v.as_str()).map(String::from),
+        thumbnail_url: root
+            .get("thumbnail")
+            .and_then(|v| v.as_str())
+            .map(String::from),
     }
 }

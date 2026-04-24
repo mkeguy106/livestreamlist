@@ -81,9 +81,9 @@ impl PlayerManager {
             cmd.creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW);
         }
 
-        let child = cmd.spawn().with_context(|| {
-            format!("spawning streamlink for {url} (is `streamlink` on PATH?)")
-        })?;
+        let child = cmd
+            .spawn()
+            .with_context(|| format!("spawning streamlink for {url} (is `streamlink` on PATH?)"))?;
         let pid = child.id();
 
         self.players.lock().insert(unique_key.clone(), pid as i32);
