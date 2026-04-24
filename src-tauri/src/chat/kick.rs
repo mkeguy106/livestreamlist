@@ -3,8 +3,11 @@
 //! Kick uses the Pusher protocol. On connect we receive
 //! `pusher:connection_established`, then subscribe to `chatrooms.{id}.v2`.
 //! Chat arrives as `App\Events\ChatMessageEvent` with JSON-string data.
-//! Sending goes through `POST https://api.kick.com/public/v1/chat` with
-//! a bearer token; on 401 we refresh once and retry.
+//!
+//! Sending goes through `POST https://api.kick.com/public/v1/chat` with a
+//! bearer token. When `type=user`, Kick requires `broadcaster_user_id` in
+//! the body — the token identifies the *sender*, not the *room*. On 401 we
+//! refresh the token once and retry.
 //!
 //! Kick echoes your own messages back over websocket (unlike Twitch), so
 //! we never synthesize local echoes — they'd double.
@@ -22,6 +25,7 @@ use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
 use super::emotes::EmoteCache;
 use super::log_store::ChatLogWriter;
 use super::models::{ChatBadge, ChatMessage, ChatStatus, ChatStatusEvent, ChatUser, EmoteRange};
+use super::OutboundMsg;
 use crate::auth;
 use crate::platforms::Platform;
 
@@ -37,7 +41,12 @@ pub struct KickChatConfig {
     pub channel_slug: String,
     #[allow(dead_code)]
     pub emotes: Arc<EmoteCache>,
-    pub outbound: mpsc::UnboundedReceiver<String>,
+    pub outbound: mpsc::UnboundedReceiver<OutboundMsg>,
+}
+
+struct KickChannelIds {
+    chatroom_id: u64,
+    broadcaster_user_id: u64,
 }
 
 pub async fn run(mut cfg: KickChatConfig) {
@@ -58,12 +67,10 @@ pub async fn run(mut cfg: KickChatConfig) {
 }
 
 async fn connect_and_read(cfg: &mut KickChatConfig) -> Result<()> {
-    let chatroom_id = resolve_chatroom_id(&cfg.http, &cfg.channel_slug).await?;
+    let ids = resolve_channel_ids(&cfg.http, &cfg.channel_slug).await?;
 
     let url = format!("{PUSHER_WS_URL}{PUSHER_PARAMS}");
-    let (mut ws, _) = connect_async(&url)
-        .await
-        .context("connect Pusher ws-us2")?;
+    let (mut ws, _) = connect_async(&url).await.context("connect Pusher ws-us2")?;
 
     // Wait for connection_established before subscribing so the Pusher
     // server has a socket_id for us.
@@ -71,14 +78,14 @@ async fn connect_and_read(cfg: &mut KickChatConfig) -> Result<()> {
 
     let subscribe = json!({
         "event": "pusher:subscribe",
-        "data": { "auth": "", "channel": format!("chatrooms.{chatroom_id}.v2") }
+        "data": { "auth": "", "channel": format!("chatrooms.{}.v2", ids.chatroom_id) }
     });
     ws.send(WsMessage::Text(subscribe.to_string())).await?;
 
     emit_status(&cfg.app, &cfg.channel_key, ChatStatus::Connected, None);
 
     let mut log = ChatLogWriter::open(Platform::Kick, &cfg.channel_slug).ok();
-    read_loop(cfg, &mut ws, log.as_mut(), chatroom_id).await
+    read_loop(cfg, &mut ws, log.as_mut(), &ids).await
 }
 
 async fn wait_for_connection_established(
@@ -106,7 +113,7 @@ async fn read_loop(
     cfg: &mut KickChatConfig,
     ws: &mut WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>,
     mut log: Option<&mut ChatLogWriter>,
-    _chatroom_id: u64,
+    ids: &KickChannelIds,
 ) -> Result<()> {
     loop {
         tokio::select! {
@@ -123,8 +130,9 @@ async fn read_loop(
                     WsMessage::Frame(_) => {}
                 }
             }
-            Some(text) = cfg.outbound.recv() => {
-                if let Err(e) = send_via_rest(&cfg.http, &text).await {
+            Some((text, reply)) = cfg.outbound.recv() => {
+                let result = send_via_rest(&cfg.http, ids.broadcaster_user_id, &text).await;
+                if let Err(e) = &result {
                     log::warn!("Kick send failed: {e:#}");
                     emit_status(
                         &cfg.app,
@@ -133,6 +141,7 @@ async fn read_loop(
                         Some(format!("send failed: {e:#}")),
                     );
                 }
+                let _ = reply.send(result.map_err(|e| format!("{e:#}")));
             }
             else => break,
         }
@@ -162,7 +171,9 @@ async fn handle_pusher_line(
             ))
             .await?;
         }
-        "pusher:pong" | "pusher:connection_established" | "pusher_internal:subscription_succeeded" => {}
+        "pusher:pong"
+        | "pusher:connection_established"
+        | "pusher_internal:subscription_succeeded" => {}
         "App\\Events\\ChatMessageEvent" => {
             if let Some(chat_msg) = build_chat_message(cfg, &parsed) {
                 if let Some(l) = log {
@@ -233,7 +244,11 @@ fn build_chat_message(cfg: &KickChatConfig, parsed: &Value) -> Option<ChatMessag
             arr.iter()
                 .filter_map(|b| {
                     let t = b.get("type").and_then(|v| v.as_str())?.to_string();
-                    let text = b.get("text").and_then(|v| v.as_str()).unwrap_or(&t).to_string();
+                    let text = b
+                        .get("text")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or(&t)
+                        .to_string();
                     Some(ChatBadge {
                         id: t.clone(),
                         url: String::new(),
@@ -307,7 +322,7 @@ fn extract_kick_emotes(content: &str) -> (String, Vec<EmoteRange>) {
     (out, ranges)
 }
 
-async fn resolve_chatroom_id(http: &reqwest::Client, slug: &str) -> Result<u64> {
+async fn resolve_channel_ids(http: &reqwest::Client, slug: &str) -> Result<KickChannelIds> {
     let url = format!("{CHANNEL_INFO_URL}/{slug}");
     let resp = http
         .get(&url)
@@ -323,18 +338,46 @@ async fn resolve_chatroom_id(http: &reqwest::Client, slug: &str) -> Result<u64> 
         );
     }
     let data: Value = resp.json().await?;
-    data.pointer("/chatroom/id")
-        .and_then(|v| v.as_u64())
-        .context("chatroom.id missing in Kick channel response")
+    parse_channel_ids(&data)
 }
 
-async fn send_via_rest(http: &reqwest::Client, text: &str) -> Result<()> {
-    // Kick's /public/v1/chat expects `{ type: "user", content: "…" }` — the
-    // channel is implicit from the bearer token's user.
+fn parse_channel_ids(data: &Value) -> Result<KickChannelIds> {
+    let chatroom_id = data
+        .pointer("/chatroom/id")
+        .and_then(|v| v.as_u64())
+        .context("chatroom.id missing in Kick channel response")?;
+    // Prefer top-level `user_id`; fall back to `user.id`. Some responses
+    // return it as a string, so coerce both cases.
+    let broadcaster_user_id = data
+        .get("user_id")
+        .and_then(value_to_u64)
+        .or_else(|| data.pointer("/user/id").and_then(value_to_u64))
+        .context("user_id missing in Kick channel response")?;
+    Ok(KickChannelIds {
+        chatroom_id,
+        broadcaster_user_id,
+    })
+}
+
+fn value_to_u64(v: &Value) -> Option<u64> {
+    match v {
+        Value::Number(n) => n.as_u64(),
+        Value::String(s) => s.parse::<u64>().ok(),
+        _ => None,
+    }
+}
+
+async fn send_via_rest(http: &reqwest::Client, broadcaster_user_id: u64, text: &str) -> Result<()> {
+    // Kick's /public/v1/chat requires `broadcaster_user_id` (integer) when
+    // `type=user` — the bearer identifies the sender, not the target room.
     let Some(token) = auth::kick::stored_access_token()? else {
         anyhow::bail!("not logged in to Kick");
     };
-    let body = json!({ "type": "user", "content": text });
+    let body = json!({
+        "broadcaster_user_id": broadcaster_user_id,
+        "type": "user",
+        "content": text,
+    });
     let resp = http
         .post(SEND_URL)
         .bearer_auth(&token)
@@ -371,12 +414,7 @@ async fn send_via_rest(http: &reqwest::Client, text: &str) -> Result<()> {
     Ok(())
 }
 
-fn emit_status(
-    app: &AppHandle,
-    channel_key: &str,
-    status: ChatStatus,
-    message: Option<String>,
-) {
+fn emit_status(app: &AppHandle, channel_key: &str, status: ChatStatus, message: Option<String>) {
     let _ = app.emit(
         &format!("chat:status:{channel_key}"),
         ChatStatusEvent {
@@ -385,4 +423,53 @@ fn emit_status(
             message,
         },
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_top_level_user_id() {
+        let data = serde_json::json!({
+            "user_id": 1234,
+            "chatroom": { "id": 98765 },
+            "user": { "id": 9999 }
+        });
+        let ids = parse_channel_ids(&data).expect("parse");
+        assert_eq!(ids.chatroom_id, 98765);
+        assert_eq!(ids.broadcaster_user_id, 1234);
+    }
+
+    #[test]
+    fn falls_back_to_user_id_under_user() {
+        let data = serde_json::json!({
+            "chatroom": { "id": 1 },
+            "user": { "id": 42 }
+        });
+        let ids = parse_channel_ids(&data).expect("parse");
+        assert_eq!(ids.broadcaster_user_id, 42);
+    }
+
+    #[test]
+    fn parses_string_user_id() {
+        let data = serde_json::json!({
+            "user_id": "777",
+            "chatroom": { "id": 2 }
+        });
+        let ids = parse_channel_ids(&data).expect("parse");
+        assert_eq!(ids.broadcaster_user_id, 777);
+    }
+
+    #[test]
+    fn errors_when_chatroom_missing() {
+        let data = serde_json::json!({ "user_id": 1 });
+        assert!(parse_channel_ids(&data).is_err());
+    }
+
+    #[test]
+    fn errors_when_user_id_missing() {
+        let data = serde_json::json!({ "chatroom": { "id": 2 } });
+        assert!(parse_channel_ids(&data).is_err());
+    }
 }

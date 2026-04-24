@@ -14,12 +14,18 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tauri::async_runtime::{self, JoinHandle};
 use tauri::AppHandle;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 
 use emotes::EmoteCache;
 
 use crate::auth;
 use crate::platforms::Platform;
+
+/// Payload queued on a channel's outbound mpsc: the message text plus a
+/// oneshot for the platform task to report success/failure back to the
+/// IPC caller. Keeps the composer's error row honest — a silent REST 4xx
+/// on the Kick side no longer looks like a successful send.
+pub type OutboundMsg = (String, oneshot::Sender<Result<(), String>>);
 
 pub struct ChatManager {
     app: AppHandle,
@@ -31,11 +37,15 @@ pub struct ChatManager {
 
 struct ConnectionHandle {
     task: JoinHandle<()>,
-    outbound: mpsc::UnboundedSender<String>,
+    outbound: mpsc::UnboundedSender<OutboundMsg>,
 }
 
 impl ChatManager {
-    pub fn new(app: AppHandle, http: reqwest::Client, users: Arc<crate::users::UserStore>) -> Arc<Self> {
+    pub fn new(
+        app: AppHandle,
+        http: reqwest::Client,
+        users: Arc<crate::users::UserStore>,
+    ) -> Arc<Self> {
         let cache = EmoteCache::new();
         let mgr = Arc::new(Self {
             app,
@@ -92,12 +102,17 @@ impl ChatManager {
     }
 
     /// Begin (or re-begin) a chat connection for `channel_key`.
-    pub fn connect(&self, platform: Platform, channel_id: String, unique_key: String) -> Result<()> {
+    pub fn connect(
+        &self,
+        platform: Platform,
+        channel_id: String,
+        unique_key: String,
+    ) -> Result<()> {
         self.disconnect(&unique_key);
 
         match platform {
             Platform::Twitch => {
-                let (tx, rx) = mpsc::unbounded_channel::<String>();
+                let (tx, rx) = mpsc::unbounded_channel::<OutboundMsg>();
                 let auth = auth::twitch::stored_auth_pair()
                     .map(|(login, token)| twitch::TwitchAuth { login, token });
 
@@ -135,7 +150,7 @@ impl ChatManager {
                     .insert(unique_key, ConnectionHandle { task, outbound: tx });
             }
             Platform::Kick => {
-                let (tx, rx) = mpsc::unbounded_channel::<String>();
+                let (tx, rx) = mpsc::unbounded_channel::<OutboundMsg>();
                 let cfg = kick::KickChatConfig {
                     app: self.app.clone(),
                     http: self.http.clone(),
@@ -165,17 +180,26 @@ impl ChatManager {
         }
     }
 
-    /// Send a raw IRC line (e.g. `"PRIVMSG #room :hello"`) to the channel's
-    /// active connection. Returns an error if there's no live task for that
+    /// Queue `line` on the channel's outbound task and await the reply so
+    /// the caller sees the real send result (Kick REST 4xx, Twitch ws write
+    /// failure, etc.). Returns an error if there's no live task for that
     /// key — connect first.
-    pub fn send_raw(&self, unique_key: &str, line: String) -> Result<()> {
-        let guard = self.connections.lock();
-        let Some(h) = guard.get(unique_key) else {
-            anyhow::bail!("no live chat for {unique_key}");
-        };
-        h.outbound
-            .send(line)
-            .map_err(|e| anyhow::anyhow!("chat channel closed: {e}"))
+    pub async fn send_raw(&self, unique_key: &str, line: String) -> Result<()> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        {
+            let guard = self.connections.lock();
+            let Some(h) = guard.get(unique_key) else {
+                anyhow::bail!("no live chat for {unique_key}");
+            };
+            h.outbound
+                .send((line, reply_tx))
+                .map_err(|e| anyhow::anyhow!("chat channel closed: {e}"))?;
+        }
+        match reply_rx.await {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(e)) => anyhow::bail!("{e}"),
+            Err(_) => anyhow::bail!("chat task dropped before reporting result"),
+        }
     }
 
     /// All known emotes for a channel, globals + any channel-specific entries.
@@ -192,11 +216,7 @@ impl ChatManager {
 
     /// Disconnect and reconnect every live chat connection on `platform`.
     /// Called on login/logout so running tasks pick up new credentials.
-    pub fn reconnect_platform(
-        &self,
-        platform: Platform,
-        store: &crate::channels::SharedStore,
-    ) {
+    pub fn reconnect_platform(&self, platform: Platform, store: &crate::channels::SharedStore) {
         let keys: Vec<String> = self
             .connections
             .lock()

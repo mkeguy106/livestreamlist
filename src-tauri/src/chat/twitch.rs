@@ -14,6 +14,7 @@ use super::models::{
     ChatBadge, ChatMessage, ChatModerationEvent, ChatStatus, ChatStatusEvent, ChatUser, EmoteRange,
     ReplyInfo, SystemEvent,
 };
+use super::OutboundMsg;
 use crate::platforms::Platform;
 
 const IRC_URL: &str = "wss://irc-ws.chat.twitch.tv";
@@ -33,7 +34,7 @@ pub struct TwitchChatConfig {
     pub emotes: Arc<EmoteCache>,
     pub users: Arc<crate::users::UserStore>,
     pub auth: Option<TwitchAuth>,
-    pub outbound: mpsc::UnboundedReceiver<String>,
+    pub outbound: mpsc::UnboundedReceiver<OutboundMsg>,
 }
 
 /// Run the Twitch IRC connection until dropped/aborted. Emits
@@ -46,13 +47,20 @@ pub async fn run(mut cfg: TwitchChatConfig) {
         Ok(()) => emit_status(&cfg.app, &cfg.channel_key, ChatStatus::Closed, None),
         Err(e) => {
             log::warn!("Twitch IRC for {} errored: {:#}", cfg.channel_login, e);
-            emit_status(&cfg.app, &cfg.channel_key, ChatStatus::Error, Some(format!("{e:#}")));
+            emit_status(
+                &cfg.app,
+                &cfg.channel_key,
+                ChatStatus::Error,
+                Some(format!("{e:#}")),
+            );
         }
     }
 }
 
 async fn connect_and_read(cfg: &mut TwitchChatConfig) -> Result<()> {
-    let (mut ws, _) = connect_async(IRC_URL).await.context("connect wss://irc-ws.chat.twitch.tv")?;
+    let (mut ws, _) = connect_async(IRC_URL)
+        .await
+        .context("connect wss://irc-ws.chat.twitch.tv")?;
 
     // Request IRCv3 capabilities for tags + membership + commands.
     ws.send(WsMessage::Text(
@@ -61,13 +69,24 @@ async fn connect_and_read(cfg: &mut TwitchChatConfig) -> Result<()> {
     .await?;
 
     let (pass, nick) = match &cfg.auth {
-        Some(auth) => (format!("oauth:{}", auth.token), auth.login.to_ascii_lowercase()),
-        None => ("SCHMOOPIIE".to_string(), format!("justinfan{}", rand_suffix())),
+        Some(auth) => (
+            format!("oauth:{}", auth.token),
+            auth.login.to_ascii_lowercase(),
+        ),
+        None => (
+            "SCHMOOPIIE".to_string(),
+            format!("justinfan{}", rand_suffix()),
+        ),
     };
     ws.send(WsMessage::Text(format!("PASS {pass}"))).await?;
     ws.send(WsMessage::Text(format!("NICK {nick}"))).await?;
-    ws.send(WsMessage::Text(format!("USER {nick} 8 * :{nick}"))).await?;
-    ws.send(WsMessage::Text(format!("JOIN #{}", cfg.channel_login.to_ascii_lowercase()))).await?;
+    ws.send(WsMessage::Text(format!("USER {nick} 8 * :{nick}")))
+        .await?;
+    ws.send(WsMessage::Text(format!(
+        "JOIN #{}",
+        cfg.channel_login.to_ascii_lowercase()
+    )))
+    .await?;
 
     emit_status(&cfg.app, &cfg.channel_key, ChatStatus::Connected, None);
 
@@ -106,12 +125,20 @@ async fn read_loop(
                     WsMessage::Frame(_) => {}
                 }
             }
-            Some(text) = cfg.outbound.recv() => {
+            Some((text, reply)) = cfg.outbound.recv() => {
                 // Outbound is user text — format as PRIVMSG on the way out.
+                // IRC has no per-message ack, so ws-write success is as
+                // close to a delivery confirmation as we get; Twitch may
+                // still silently drop for ratelimit/slow-mode/ban.
                 let line = format!("PRIVMSG #{} :{}", cfg.channel_login.to_ascii_lowercase(), text);
-                if let Err(e) = ws.send(WsMessage::Text(line)).await {
-                    log::warn!("twitch outbound send failed: {e:#}");
-                }
+                let result = match ws.send(WsMessage::Text(line)).await {
+                    Ok(()) => Ok(()),
+                    Err(e) => {
+                        log::warn!("twitch outbound send failed: {e:#}");
+                        Err(format!("{e:#}"))
+                    }
+                };
+                let _ = reply.send(result);
             }
             else => break,
         }
@@ -128,7 +155,9 @@ async fn handle_line(
     log: Option<&mut ChatLogWriter>,
     line: &str,
 ) -> Result<()> {
-    let Some(msg) = irc::parse(line) else { return Ok(()) };
+    let Some(msg) = irc::parse(line) else {
+        return Ok(());
+    };
 
     match msg.command {
         "PING" => {
@@ -166,11 +195,7 @@ async fn handle_line(
     Ok(())
 }
 
-fn persist_and_emit(
-    cfg: &TwitchChatConfig,
-    log: Option<&mut ChatLogWriter>,
-    msg: ChatMessage,
-) {
+fn persist_and_emit(cfg: &TwitchChatConfig, log: Option<&mut ChatLogWriter>, msg: ChatMessage) {
     if let Some(uid) = msg.user.id.as_deref() {
         let key = format!("twitch:{uid}");
         if cfg.users.is_blocked(&key) {
@@ -182,7 +207,9 @@ fn persist_and_emit(
             log::warn!("chat log append failed for {}: {e:#}", cfg.channel_key);
         }
     }
-    let _ = cfg.app.emit(&format!("chat:message:{}", cfg.channel_key), msg);
+    let _ = cfg
+        .app
+        .emit(&format!("chat:message:{}", cfg.channel_key), msg);
 }
 
 fn build_privmsg(cfg: &TwitchChatConfig, msg: &IrcMessage<'_>) -> Option<ChatMessage> {
@@ -228,7 +255,9 @@ fn build_privmsg(cfg: &TwitchChatConfig, msg: &IrcMessage<'_>) -> Option<ChatMes
     }
 
     // Overlay 3rd-party emotes for any word not already covered.
-    let mut third_party = cfg.emotes.scan_message(&cfg.channel_key, &text, &emote_ranges);
+    let mut third_party = cfg
+        .emotes
+        .scan_message(&cfg.channel_key, &text, &emote_ranges);
     emote_ranges.append(&mut third_party);
     emote_ranges.sort_by_key(|r| r.start);
 
@@ -240,11 +269,7 @@ fn build_privmsg(cfg: &TwitchChatConfig, msg: &IrcMessage<'_>) -> Option<ChatMes
         .and_then(|ms| chrono::DateTime::from_timestamp_millis(ms))
         .unwrap_or_else(Utc::now);
 
-    let color = msg
-        .tags
-        .get("color")
-        .filter(|s| !s.is_empty())
-        .cloned();
+    let color = msg.tags.get("color").filter(|s| !s.is_empty()).cloned();
 
     Some(ChatMessage {
         id,
@@ -257,7 +282,11 @@ fn build_privmsg(cfg: &TwitchChatConfig, msg: &IrcMessage<'_>) -> Option<ChatMes
             display_name,
             color,
             is_mod: msg.tags.get("mod").map(|v| v == "1").unwrap_or(false),
-            is_subscriber: msg.tags.get("subscriber").map(|v| v == "1").unwrap_or(false),
+            is_subscriber: msg
+                .tags
+                .get("subscriber")
+                .map(|v| v == "1")
+                .unwrap_or(false),
             is_broadcaster: msg
                 .tags
                 .get("badges")
@@ -273,18 +302,17 @@ fn build_privmsg(cfg: &TwitchChatConfig, msg: &IrcMessage<'_>) -> Option<ChatMes
         emote_ranges,
         badges: parse_badges(msg.tags.get("badges").map(String::as_str).unwrap_or("")),
         is_action,
-        is_first_message: msg
-            .tags
-            .get("first-msg")
-            .map(|v| v == "1")
-            .unwrap_or(false),
+        is_first_message: msg.tags.get("first-msg").map(|v| v == "1").unwrap_or(false),
         reply_to,
         system: None,
     })
 }
 
 fn extract_reply_info(tags: &std::collections::HashMap<String, String>) -> Option<ReplyInfo> {
-    let parent_id = tags.get("reply-parent-msg-id").filter(|s| !s.is_empty()).cloned()?;
+    let parent_id = tags
+        .get("reply-parent-msg-id")
+        .filter(|s| !s.is_empty())
+        .cloned()?;
     let parent_login = tags
         .get("reply-parent-user-login")
         .filter(|s| !s.is_empty())
@@ -349,7 +377,9 @@ fn build_usernotice(cfg: &TwitchChatConfig, msg: &IrcMessage<'_>) -> Option<Chat
             });
         }
     }
-    let mut third = cfg.emotes.scan_message(&cfg.channel_key, &text, &emote_ranges);
+    let mut third = cfg
+        .emotes
+        .scan_message(&cfg.channel_key, &text, &emote_ranges);
     emote_ranges.append(&mut third);
     emote_ranges.sort_by_key(|r| r.start);
 
@@ -372,7 +402,11 @@ fn build_usernotice(cfg: &TwitchChatConfig, msg: &IrcMessage<'_>) -> Option<Chat
             display_name,
             color,
             is_mod: false,
-            is_subscriber: msg.tags.get("subscriber").map(|v| v == "1").unwrap_or(false),
+            is_subscriber: msg
+                .tags
+                .get("subscriber")
+                .map(|v| v == "1")
+                .unwrap_or(false),
             is_broadcaster: false,
             is_turbo: false,
         },
@@ -391,7 +425,10 @@ fn build_usernotice(cfg: &TwitchChatConfig, msg: &IrcMessage<'_>) -> Option<Chat
 
 fn strip_action(s: &str) -> (String, bool) {
     // "\u{0001}ACTION ...\u{0001}"
-    if let Some(inner) = s.strip_prefix('\u{0001}').and_then(|s| s.strip_suffix('\u{0001}')) {
+    if let Some(inner) = s
+        .strip_prefix('\u{0001}')
+        .and_then(|s| s.strip_suffix('\u{0001}'))
+    {
         if let Some(rest) = inner.strip_prefix("ACTION ") {
             return (rest.to_string(), true);
         }
@@ -440,7 +477,10 @@ fn parse_badges(tag: &str) -> Vec<ChatBadge> {
 fn build_clearchat(cfg: &TwitchChatConfig, msg: &IrcMessage<'_>) -> ChatModerationEvent {
     // CLEARCHAT has the target login in the trailing (if per-user) or is
     // empty (if full chat wipe). Ban-duration tag distinguishes timeout vs ban.
-    let target_login = msg.trailing.map(|s| s.to_string()).filter(|s| !s.is_empty());
+    let target_login = msg
+        .trailing
+        .map(|s| s.to_string())
+        .filter(|s| !s.is_empty());
     let ban_duration = msg
         .tags
         .get("ban-duration")
