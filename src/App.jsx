@@ -6,7 +6,7 @@ import AddChannelDialog from './components/AddChannelDialog.jsx';
 import WindowControls from './components/WindowControls.jsx';
 import { useDragHandler } from './hooks/useDragRegion.js';
 import { useLivestreams } from './hooks/useLivestreams.js';
-import { launchStream, openInBrowser, removeChannel, setFavorite } from './ipc.js';
+import { launchStream, listenEvent, openInBrowser, removeChannel, setFavorite } from './ipc.js';
 
 const LAYOUTS = [
   { id: 'command', label: 'Command', letter: 'A', Component: Command },
@@ -63,6 +63,21 @@ export default function App() {
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
   }, [selectLayout, refresh]);
+
+  // Tray "Refresh now" menu item fires this event.
+  useEffect(() => {
+    let unlisten = null;
+    let cancelled = false;
+    (async () => {
+      unlisten = await listenEvent('tray:refresh-requested', () => {
+        if (!cancelled) refresh();
+      });
+    })();
+    return () => {
+      cancelled = true;
+      if (unlisten) unlisten();
+    };
+  }, [refresh]);
 
   const ctx = useMemo(() => ({
     livestreams,
