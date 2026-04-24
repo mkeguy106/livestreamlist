@@ -32,11 +32,13 @@ export default function UserCard({
     const ch = cardRef.current.offsetHeight;
     const vw = window.innerWidth;
     const vh = window.innerHeight;
+    // anchor is a DOMRect — fields are x/y/width/height (not h/w).
     let x = anchor.x;
-    let y = anchor.y + anchor.h + 8;
+    let y = anchor.y + anchor.height + 8;
     if (y + ch > vh) y = anchor.y - ch - 8; // flip up
     if (x + cw > vw) x = vw - cw - 8;       // clamp right
     if (x < 8) x = 8;
+    if (y < 8) y = 8;
     setPos({ x, y });
   }, [open, anchor]);
 
@@ -51,16 +53,18 @@ export default function UserCard({
       if (e.target.closest?.('[data-user-card-anchor]')) return;
       onClose();
     };
-    const onScroll = e => {
-      // Ignore scrolls inside the card itself.
+    const onWheel = e => {
+      // Close on user-initiated scroll only — never on programmatic scroll
+      // (the chat list auto-scrolls as new messages arrive, which would
+      // dismiss the card the moment it opens).
       if (cardRef.current?.contains(e.target)) return;
       onClose();
     };
     document.addEventListener('mousedown', onDown, true);
-    document.addEventListener('scroll', onScroll, true);
+    document.addEventListener('wheel', onWheel, { capture: true, passive: true });
     return () => {
       document.removeEventListener('mousedown', onDown, true);
-      document.removeEventListener('scroll', onScroll, true);
+      document.removeEventListener('wheel', onWheel, { capture: true });
     };
   }, [open, onClose]);
 

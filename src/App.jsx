@@ -54,11 +54,27 @@ export default function App() {
   const closeTimer = useRef(null);
   const overCard = useRef(false);
   const overAnchor = useRef(false);
+  // True while the open card was opened by an explicit click. Hover-driven
+  // open/close is suppressed until the card is dismissed (Esc, outside click,
+  // or another explicit click on a different username).
+  const lockedByClick = useRef(false);
 
   const onUsernameOpen = useCallback(
-    (user, rect, channelKey) => cardOpenFor(user, channelKey, rect),
+    (user, rect, channelKey) => {
+      lockedByClick.current = true;
+      // Cancel any pending hover-open / hover-close timers — the click wins.
+      if (hoverTimer.current) clearTimeout(hoverTimer.current);
+      if (closeTimer.current) clearTimeout(closeTimer.current);
+      cardOpenFor(user, channelKey, rect);
+    },
     [cardOpenFor],
   );
+
+  // Reset the click-lock whenever the card actually closes (Esc, outside-click,
+  // or any other path that flips card.open back to false).
+  useEffect(() => {
+    if (!card.open) lockedByClick.current = false;
+  }, [card.open]);
 
   const [userCtx, setUserCtx] = useState({ open: false, point: null, user: null, channelKey: null, metadata: null });
   const [nickDlg, setNickDlg] = useState({ open: false });
@@ -80,6 +96,10 @@ export default function App() {
   const onUsernameHover = useCallback(
     (user, rect, channelKey) => {
       if (!hoverEnabled) return;
+      // While a click-opened card is showing, ignore all hover signals so the
+      // card doesn't yoink to a different user when chat scrolls or the cursor
+      // drifts onto another name.
+      if (lockedByClick.current) return;
       if (user) {
         // entering an anchor
         overAnchor.current = true;
@@ -104,6 +124,14 @@ export default function App() {
 
   const onCardHover = useCallback((over) => {
     overCard.current = over;
+    // Click-locked cards never auto-close on cursor leave.
+    if (lockedByClick.current) {
+      if (closeTimer.current) {
+        clearTimeout(closeTimer.current);
+        closeTimer.current = null;
+      }
+      return;
+    }
     if (!over) {
       if (closeTimer.current) clearTimeout(closeTimer.current);
       closeTimer.current = setTimeout(() => {
