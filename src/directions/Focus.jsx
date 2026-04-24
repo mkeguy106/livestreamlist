@@ -3,6 +3,7 @@
  */
 
 import ChatView from '../components/ChatView.jsx';
+import TitleBanner from '../components/TitleBanner.jsx';
 import { formatUptime, formatViewers } from '../utils/format.js';
 
 export default function Focus({ ctx }) {
@@ -122,20 +123,23 @@ export default function Focus({ ctx }) {
             channelKey={featured?.unique_key}
             variant="irc"
             header={
-              <div
-                style={{
-                  padding: '10px 14px',
-                  borderBottom: 'var(--hair)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 10,
-                }}
-              >
-                <span className="rx-chiclet">CHAT</span>
-                <span className="rx-mono" style={{ fontSize: 10, color: 'var(--zinc-500)' }}>
-                  {featured?.display_name ?? ''}
-                </span>
-              </div>
+              <>
+                <div
+                  style={{
+                    padding: '10px 14px',
+                    borderBottom: 'var(--hair)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 10,
+                  }}
+                >
+                  <span className="rx-chiclet">CHAT</span>
+                  <span className="rx-mono" style={{ fontSize: 10, color: 'var(--zinc-500)' }}>
+                    {featured?.display_name ?? ''}
+                  </span>
+                </div>
+                <TitleBanner channel={featured} />
+              </>
             }
           />
         </div>

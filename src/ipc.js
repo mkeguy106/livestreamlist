@@ -23,6 +23,7 @@ export const launchStream = (uniqueKey, quality) => invoke('launch_stream', { un
 export const openInBrowser = (uniqueKey) => invoke('open_in_browser', { uniqueKey });
 export const chatConnect = (uniqueKey) => invoke('chat_connect', { uniqueKey });
 export const chatDisconnect = (uniqueKey) => invoke('chat_disconnect', { uniqueKey });
+export const openUrl = (url) => invoke('open_url', { url });
 
 /**
  * Subscribe to a Tauri-side event. Returns an unlisten function.
@@ -185,6 +186,9 @@ async function mockInvoke(name, args) {
       }
       return null;
     }
+    case 'open_url':
+      window.open(args.url, '_blank', 'noopener');
+      return null;
     default:
       throw new Error(`[mock] unknown invoke ${name}`);
   }

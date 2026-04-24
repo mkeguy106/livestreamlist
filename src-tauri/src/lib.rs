@@ -123,6 +123,15 @@ fn launch_stream(
 }
 
 #[tauri::command]
+fn open_url(url: String) -> Result<(), String> {
+    // Only http(s) — don't let the renderer hand us file:// or javascript: URIs.
+    if !(url.starts_with("http://") || url.starts_with("https://")) {
+        return Err(format!("refusing to open non-http url: {url}"));
+    }
+    streamlink::open_browser(&url).map_err(err_string)
+}
+
+#[tauri::command]
 fn chat_connect(
     unique_key: String,
     state: State<'_, AppState>,
@@ -220,6 +229,7 @@ pub fn run() {
             refresh_all,
             launch_stream,
             open_in_browser,
+            open_url,
             chat_connect,
             chat_disconnect,
         ])
