@@ -14,7 +14,7 @@ use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use super::callback_server::{self, CallbackResult};
+use super::callback_server::{self, CallbackResult, KICK_CALLBACK_PORT};
 use super::tokens;
 
 pub const KICK_CLIENT_ID: &str = "01KE2K1TM3ZZ4S3824V79RG2FJ";
@@ -48,8 +48,8 @@ struct TokenResponse {
 }
 
 pub async fn login(http: &reqwest::Client) -> Result<KickIdentity> {
-    let server_rx = callback_server::spawn_once()?;
-    let redirect_uri = callback_server::redirect_uri();
+    let server_rx = callback_server::spawn_once(KICK_CALLBACK_PORT)?;
+    let redirect_uri = callback_server::redirect_uri(KICK_CALLBACK_PORT);
     let (verifier, challenge) = pkce_pair();
     let state = random_state();
 

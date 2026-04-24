@@ -3,7 +3,7 @@ use std::process::{Command, Stdio};
 
 use crate::platforms::Platform;
 
-fn stream_url(platform: Platform, channel_id: &str) -> String {
+pub fn stream_url(platform: Platform, channel_id: &str) -> String {
     match platform {
         Platform::Twitch => format!("https://www.twitch.tv/{channel_id}"),
         Platform::Youtube => {

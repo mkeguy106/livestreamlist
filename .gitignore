@@ -5,6 +5,7 @@ dist
 .vite
 .env
 .env.local
+.worktrees
 
 # Rust / Tauri
 src-tauri/target

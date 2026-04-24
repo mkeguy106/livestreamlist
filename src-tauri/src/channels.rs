@@ -51,6 +51,10 @@ pub struct Livestream {
     pub profile_image_url: Option<String>,
     pub last_checked: Option<DateTime<Utc>>,
     pub error: Option<String>,
+    /// Mirrored from Channel so the frontend can filter to favorites without
+    /// an extra round-trip.
+    #[serde(default)]
+    pub favorite: bool,
 }
 
 impl Livestream {
@@ -63,6 +67,7 @@ impl Livestream {
             is_live: false,
             profile_image_url,
             last_checked: Some(Utc::now()),
+            favorite: channel.favorite,
             ..Default::default()
         }
     }

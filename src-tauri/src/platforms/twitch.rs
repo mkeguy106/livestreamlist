@@ -7,8 +7,14 @@ use std::collections::HashMap;
 const GQL_URL: &str = "https://gql.twitch.tv/gql";
 
 // Public web client ID — the one twitch.tv itself uses from the browser for
-// unauthenticated public reads. No secret.
+// unauthenticated public reads. Used only for gql.twitch.tv anonymous calls.
+// Authenticated Helix calls MUST use our registered app's client id or they
+// 401 with "Client ID and OAuth token do not match".
 const PUBLIC_CLIENT_ID: &str = "kimne78kx3ncx6brgo4mv6wki5h1ko";
+
+fn app_client_id() -> &'static str {
+    crate::auth::twitch::TWITCH_CLIENT_ID
+}
 
 const LIVE_QUERY: &str = r#"
 query ChannelLive($login: String!) {
@@ -44,6 +50,152 @@ query ChannelSocials($login: String!) {
   }
 }
 "#;
+
+/// Minimal subset of a Helix emote record — the fields our emote cache
+/// actually uses. Twitch's v2 CDN pattern builds URLs by id/scale.
+#[derive(Debug, Clone)]
+pub struct TwitchEmote {
+    pub name: String,
+    pub id: String,
+    pub animated: bool,
+}
+
+/// Resolve a Twitch login (`"shroud"`) to its numeric broadcaster id. Helix
+/// `/users?login=` can take up to 100 logins per call but we only need one
+/// at a time in this path.
+pub async fn resolve_user_id(
+    client: &reqwest::Client,
+    access_token: &str,
+    login: &str,
+) -> Result<Option<String>> {
+    let url = format!("https://api.twitch.tv/helix/users?login={login}");
+    let resp = client
+        .get(&url)
+        .header("Client-Id", app_client_id())
+        .bearer_auth(access_token)
+        .send()
+        .await
+        .context("GET /helix/users")?;
+    if !resp.status().is_success() {
+        return Ok(None);
+    }
+    let data: Value = resp.json().await?;
+    Ok(data
+        .pointer("/data/0/id")
+        .and_then(|v| v.as_str())
+        .map(String::from))
+}
+
+/// Helix `/chat/emotes/global` — the default emote set (Kappa, PogChamp, …).
+/// Requires any valid bearer token.
+pub async fn fetch_global_emotes(
+    client: &reqwest::Client,
+    access_token: &str,
+) -> Result<Vec<TwitchEmote>> {
+    helix_emote_call(
+        client,
+        access_token,
+        "https://api.twitch.tv/helix/chat/emotes/global",
+    )
+    .await
+}
+
+/// Helix `/chat/emotes?broadcaster_id=…` — a channel's full emote set
+/// including all subscriber tiers + follower tier + bits emotes. The API
+/// doesn't tell us which tier the caller can actually *use*.
+pub async fn fetch_channel_emotes(
+    client: &reqwest::Client,
+    access_token: &str,
+    broadcaster_id: &str,
+) -> Result<Vec<TwitchEmote>> {
+    let url =
+        format!("https://api.twitch.tv/helix/chat/emotes?broadcaster_id={broadcaster_id}");
+    helix_emote_call(client, access_token, &url).await
+}
+
+/// Helix `/chat/emotes/user` — everything the authed user has access to:
+/// subs, follower emotes, bits, turbo. Requires `user:read:emotes` scope
+/// and pagination via the `after` cursor.
+pub async fn fetch_user_emotes(
+    client: &reqwest::Client,
+    access_token: &str,
+    user_id: &str,
+) -> Result<Vec<TwitchEmote>> {
+    let mut out = Vec::new();
+    let mut cursor: Option<String> = None;
+    loop {
+        let mut url = format!(
+            "https://api.twitch.tv/helix/chat/emotes/user?user_id={user_id}"
+        );
+        if let Some(c) = &cursor {
+            url.push_str(&format!("&after={c}"));
+        }
+        let mut page = helix_emote_call_with_cursor(client, access_token, &url).await?;
+        out.append(&mut page.emotes);
+        if page.cursor.is_none() {
+            break;
+        }
+        cursor = page.cursor;
+    }
+    Ok(out)
+}
+
+struct HelixEmotePage {
+    emotes: Vec<TwitchEmote>,
+    cursor: Option<String>,
+}
+
+async fn helix_emote_call(
+    client: &reqwest::Client,
+    access_token: &str,
+    url: &str,
+) -> Result<Vec<TwitchEmote>> {
+    let page = helix_emote_call_with_cursor(client, access_token, url).await?;
+    Ok(page.emotes)
+}
+
+async fn helix_emote_call_with_cursor(
+    client: &reqwest::Client,
+    access_token: &str,
+    url: &str,
+) -> Result<HelixEmotePage> {
+    let resp = client
+        .get(url)
+        .header("Client-Id", app_client_id())
+        .bearer_auth(access_token)
+        .send()
+        .await
+        .with_context(|| format!("GET {url}"))?;
+    if !resp.status().is_success() {
+        anyhow::bail!("{url}: {} — {}", resp.status(), resp.text().await.unwrap_or_default());
+    }
+    let data: Value = resp.json().await?;
+    let emotes = data
+        .get("data")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|e| {
+                    let id = e.get("id")?.as_str()?.to_string();
+                    let name = e.get("name")?.as_str()?.to_string();
+                    // `format` is an array. If it contains "animated" → animated.
+                    let animated = e
+                        .get("format")
+                        .and_then(|v| v.as_array())
+                        .map(|a| a.iter().any(|f| f.as_str() == Some("animated")))
+                        .unwrap_or(false);
+                    Some(TwitchEmote { name, id, animated })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let cursor = data
+        .pointer("/pagination/cursor")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(String::from);
+    Ok(HelixEmotePage { emotes, cursor })
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SocialLink {
@@ -185,7 +337,7 @@ pub async fn fetch_followed_channels(
         }
         let resp = client
             .get(&url)
-            .header("Client-Id", PUBLIC_CLIENT_ID)
+            .header("Client-Id", app_client_id())
             .bearer_auth(access_token)
             .send()
             .await

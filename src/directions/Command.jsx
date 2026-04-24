@@ -2,10 +2,50 @@
  * Sidebar rail (all channels) + main pane showing the selected channel.
  */
 
+import { useEffect, useMemo, useState } from 'react';
 import ChatView from '../components/ChatView.jsx';
+import ContextMenu from '../components/ContextMenu.jsx';
 import SocialsBanner from '../components/SocialsBanner.jsx';
 import TitleBanner from '../components/TitleBanner.jsx';
+import { usePlayerState } from '../hooks/usePlayerState.js';
+import { stopStream } from '../ipc.js';
 import { formatUptime, formatViewers } from '../utils/format.js';
+
+const FILTER_OPTS = [
+  { k: 'all',       l: 'All channels' },
+  { k: 'twitch',    l: 'Twitch',   icon: 't' },
+  { k: 'kick',      l: 'Kick',     icon: 'k' },
+  { k: 'youtube',   l: 'YouTube',  icon: 'y' },
+  { k: 'favorites', l: 'Favorites' },
+];
+const SORT_OPTS = [
+  { k: 'viewers',  l: 'Viewers'   },
+  { k: 'name',     l: 'Name'      },
+  { k: 'playing',  l: 'Playing'   },
+  { k: 'lastseen', l: 'Last seen' },
+  { k: 'timelive', l: 'Time live' },
+];
+
+const STORAGE_KEYS = {
+  filter:      'livestreamlist.sidebar.filter',
+  sort:        'livestreamlist.sidebar.sort',
+  hideOffline: 'livestreamlist.sidebar.hideOffline',
+};
+
+function loadPref(key, fallback) {
+  try {
+    const v = localStorage.getItem(key);
+    if (v == null) return fallback;
+    if (v === 'true') return true;
+    if (v === 'false') return false;
+    return v;
+  } catch {
+    return fallback;
+  }
+}
+function savePref(key, value) {
+  try { localStorage.setItem(key, String(value)); } catch {}
+}
 
 export default function Command({ ctx }) {
   const {
@@ -15,18 +55,53 @@ export default function Command({ ctx }) {
     openAddDialog,
     launchStream,
     openInBrowser,
+    removeChannel,
     setFavorite,
   } = ctx;
 
-  // Sort: live first (by viewers desc), then offline alpha
-  const sorted = [...livestreams].sort((a, b) => {
-    if (a.is_live !== b.is_live) return a.is_live ? -1 : 1;
-    if (a.is_live) return (b.viewers ?? 0) - (a.viewers ?? 0);
-    return a.display_name.localeCompare(b.display_name);
-  });
+  const playing = usePlayerState();
+  const [menu, setMenu] = useState(null); // { x, y, channel }
 
-  const liveCount = sorted.filter((l) => l.is_live).length;
-  const selected = sorted.find((l) => l.unique_key === selectedKey) ?? sorted[0];
+  const [filter, setFilter] = useState(() => loadPref(STORAGE_KEYS.filter, 'all'));
+  const [sort, setSort] = useState(() => loadPref(STORAGE_KEYS.sort, 'viewers'));
+  const [hideOffline, setHideOffline] = useState(() => loadPref(STORAGE_KEYS.hideOffline, false));
+  const [openMenu, setOpenMenu] = useState(null); // 'filter' | 'sort' | null
+
+  useEffect(() => { savePref(STORAGE_KEYS.filter, filter); }, [filter]);
+  useEffect(() => { savePref(STORAGE_KEYS.sort, sort); }, [sort]);
+  useEffect(() => { savePref(STORAGE_KEYS.hideOffline, hideOffline); }, [hideOffline]);
+
+  const filtered = useMemo(() => {
+    let list = livestreams.filter((l) => {
+      if (hideOffline && !l.is_live) return false;
+      switch (filter) {
+        case 'twitch':    return l.platform === 'twitch';
+        case 'kick':      return l.platform === 'kick';
+        case 'youtube':   return l.platform === 'youtube';
+        case 'favorites': return Boolean(l.favorite);
+        default:          return true;
+      }
+    });
+
+    const byName = (a, b) => a.display_name.localeCompare(b.display_name);
+    const cmp = {
+      viewers:  (a, b) => (b.viewers ?? -1) - (a.viewers ?? -1) || byName(a, b),
+      name:     byName,
+      playing:  (a, b) => Number(playing.has(b.unique_key)) - Number(playing.has(a.unique_key)) || byName(a, b),
+      lastseen: (a, b) => (ts(b.last_checked) - ts(a.last_checked)) || byName(a, b),
+      timelive: (a, b) => (ts(a.started_at) - ts(b.started_at)) || byName(a, b),
+    }[sort] ?? byName;
+
+    list = [...list];
+    // Live rows always float above offline rows, regardless of sort key.
+    list.sort((a, b) => (a.is_live === b.is_live ? cmp(a, b) : a.is_live ? -1 : 1));
+    return list;
+  }, [livestreams, filter, sort, hideOffline, playing]);
+
+  const liveCount = filtered.filter((l) => l.is_live).length;
+  const selected = filtered.find((l) => l.unique_key === selectedKey) ?? filtered[0];
+  const filterLabel = FILTER_OPTS.find((o) => o.k === filter)?.l ?? 'All';
+  const sortLabel = SORT_OPTS.find((o) => o.k === sort)?.l ?? 'Viewers';
 
   return (
     <>
@@ -43,21 +118,92 @@ export default function Command({ ctx }) {
             flexShrink: 0,
           }}
         >
-          <div style={{ padding: '10px 12px 6px', display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div style={{ padding: '10px 12px 4px', display: 'flex', alignItems: 'center', gap: 8 }}>
             <div className="rx-chiclet">Channels</div>
             <div style={{ flex: 1 }} />
             <div className="rx-chiclet" style={{ color: 'var(--zinc-400)' }}>
-              {liveCount}/{sorted.length}
+              {liveCount}/{filtered.length}
             </div>
           </div>
+          <div
+            style={{
+              padding: '2px 10px 8px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 2,
+              borderBottom: 'var(--hair)',
+            }}
+          >
+            <div style={{ position: 'relative' }}>
+              <IconBtn
+                title={`Filter: ${filterLabel}`}
+                active={openMenu === 'filter' || filter !== 'all'}
+                caret
+                onClick={() => setOpenMenu(openMenu === 'filter' ? null : 'filter')}
+              >
+                <IconFilter />
+              </IconBtn>
+              {openMenu === 'filter' && (
+                <Dropdown
+                  items={FILTER_OPTS}
+                  selected={filter}
+                  onSelect={setFilter}
+                  onClose={() => setOpenMenu(null)}
+                />
+              )}
+            </div>
+            <div style={{ position: 'relative' }}>
+              <IconBtn
+                title={`Sort: ${sortLabel}`}
+                active={openMenu === 'sort'}
+                caret
+                onClick={() => setOpenMenu(openMenu === 'sort' ? null : 'sort')}
+              >
+                <IconSort />
+              </IconBtn>
+              {openMenu === 'sort' && (
+                <Dropdown
+                  items={SORT_OPTS}
+                  selected={sort}
+                  onSelect={setSort}
+                  onClose={() => setOpenMenu(null)}
+                  width={130}
+                />
+              )}
+            </div>
+            <IconBtn
+              title={hideOffline ? 'Show offline channels' : 'Hide offline channels'}
+              active={hideOffline}
+              onClick={() => setHideOffline((v) => !v)}
+            >
+              <IconHide active={hideOffline} />
+            </IconBtn>
+            <div style={{ flex: 1 }} />
+            <span
+              className="rx-mono"
+              style={{ fontSize: 9, color: 'var(--zinc-600)', whiteSpace: 'nowrap' }}
+            >
+              {filterLabel.toLowerCase()} · {sortLabel.toLowerCase()}
+            </span>
+          </div>
           <div style={{ flex: 1, overflowY: 'auto' }}>
-            {sorted.map((ch) => {
+            {filtered.map((ch) => {
               const active = ch.unique_key === selected?.unique_key;
+              const isPlaying = playing.has(ch.unique_key);
               return (
                 <button
                   key={ch.unique_key}
                   type="button"
                   onClick={() => setSelectedKey(ch.unique_key)}
+                  onDoubleClick={() => {
+                    if (ch.is_live) launchStream(ch.unique_key);
+                  }}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    setSelectedKey(ch.unique_key);
+                    setMenu({ x: e.clientX, y: e.clientY, channel: ch });
+                  }}
+                  title={ch.is_live ? 'Double-click to play' : undefined}
                   style={{
                     width: '100%',
                     textAlign: 'left',
@@ -83,6 +229,18 @@ export default function Command({ ctx }) {
                       <span style={{ fontSize: 'var(--t-12)', color: 'var(--zinc-100)', fontWeight: 500 }}>
                         {ch.display_name}
                       </span>
+                      {isPlaying && (
+                        <span
+                          title="Playing"
+                          style={{
+                            color: 'var(--ok)',
+                            fontSize: 9,
+                            lineHeight: 1,
+                          }}
+                        >
+                          ▶
+                        </span>
+                      )}
                       <span className={`rx-plat ${ch.platform.charAt(0)}`}>{ch.platform.charAt(0).toUpperCase()}</span>
                     </div>
                     <div
@@ -145,6 +303,59 @@ export default function Command({ ctx }) {
           )}
         </div>
       </div>
+      {menu && (
+        <ContextMenu
+          x={menu.x}
+          y={menu.y}
+          onClose={() => setMenu(null)}
+        >
+          <ContextMenu.Item
+            disabled={!menu.channel.is_live || playing.has(menu.channel.unique_key)}
+            onClick={() => {
+              launchStream(menu.channel.unique_key);
+              setMenu(null);
+            }}
+          >
+            {menu.channel.is_live ? 'Play' : 'Play (offline)'}
+          </ContextMenu.Item>
+          <ContextMenu.Item
+            disabled={!playing.has(menu.channel.unique_key)}
+            onClick={() => {
+              stopStream(menu.channel.unique_key).catch(() => {});
+              setMenu(null);
+            }}
+          >
+            Stop
+          </ContextMenu.Item>
+          <ContextMenu.Item
+            onClick={() => {
+              openInBrowser(menu.channel.unique_key);
+              setMenu(null);
+            }}
+          >
+            Open in browser
+          </ContextMenu.Item>
+          <ContextMenu.Separator />
+          <ContextMenu.Item
+            onClick={() => {
+              setFavorite(menu.channel.unique_key, true);
+              setMenu(null);
+            }}
+          >
+            Pin as favorite
+          </ContextMenu.Item>
+          <ContextMenu.Separator />
+          <ContextMenu.Item
+            danger
+            onClick={() => {
+              removeChannel(menu.channel.unique_key);
+              setMenu(null);
+            }}
+          >
+            Delete channel
+          </ContextMenu.Item>
+        </ContextMenu>
+      )}
     </>
   );
 }
@@ -206,6 +417,195 @@ function SelectedPane({ channel, onLaunch, onOpenBrowser }) {
           </>
         }
       />
+    </>
+  );
+}
+
+/* ── timestamp helper for sort keys ────────────────────────────── */
+function ts(iso) {
+  if (!iso) return 0;
+  const d = new Date(iso).getTime();
+  return Number.isFinite(d) ? d : 0;
+}
+
+/* ── hairline SVG icons, 12px — match design language ──────────── */
+function IconFilter() {
+  return (
+    <svg
+      width="12"
+      height="12"
+      viewBox="0 0 12 12"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1"
+      strokeLinecap="square"
+    >
+      <path d="M1 2.5 L11 2.5 M3 6 L9 6 M5 9.5 L7 9.5" />
+    </svg>
+  );
+}
+function IconSort() {
+  return (
+    <svg
+      width="12"
+      height="12"
+      viewBox="0 0 12 12"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1"
+      strokeLinecap="square"
+      strokeLinejoin="miter"
+    >
+      <path d="M3 2 L3 10 M1.5 8.5 L3 10 L4.5 8.5" />
+      <path d="M9 10 L9 2 M7.5 3.5 L9 2 L10.5 3.5" />
+    </svg>
+  );
+}
+function IconHide({ active }) {
+  return (
+    <svg
+      width="12"
+      height="12"
+      viewBox="0 0 12 12"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1"
+      strokeLinecap="square"
+    >
+      <path d="M1 6 C3 3, 9 3, 11 6 C9 9, 3 9, 1 6 Z" />
+      <circle cx="6" cy="6" r="1.5" fill={active ? 'currentColor' : 'none'} />
+      {active && <path d="M1.5 1.5 L10.5 10.5" />}
+    </svg>
+  );
+}
+function IconCaret() {
+  return (
+    <svg width="7" height="7" viewBox="0 0 7 7" fill="none" stroke="currentColor" strokeWidth="1">
+      <path d="M1.5 2.5 L3.5 4.5 L5.5 2.5" />
+    </svg>
+  );
+}
+
+/* ── icon button with optional caret + active state + themed tooltip ── */
+function IconBtn({ children, caret, active, onClick, title }) {
+  const [hover, setHover] = useState(false);
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={title}
+      style={{
+        position: 'relative',
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 3,
+        padding: '3px 5px',
+        background: active ? 'var(--zinc-900)' : 'transparent',
+        border: '1px solid',
+        borderColor: active ? 'var(--zinc-800)' : 'transparent',
+        borderRadius: 3,
+        color: active ? 'var(--zinc-200)' : 'var(--zinc-500)',
+        cursor: 'pointer',
+        lineHeight: 0,
+        fontFamily: 'inherit',
+      }}
+      onMouseEnter={(e) => {
+        setHover(true);
+        if (!active) e.currentTarget.style.color = 'var(--zinc-300)';
+      }}
+      onMouseLeave={(e) => {
+        setHover(false);
+        if (!active) e.currentTarget.style.color = 'var(--zinc-500)';
+      }}
+    >
+      {children}
+      {caret && <IconCaret />}
+      {hover && title && (
+        <span
+          role="tooltip"
+          style={{
+            position: 'absolute',
+            top: 'calc(100% + 6px)',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            padding: '3px 8px',
+            background: 'var(--zinc-925)',
+            color: 'var(--zinc-300)',
+            border: '1px solid var(--zinc-800)',
+            borderRadius: 3,
+            fontFamily: 'var(--font-mono)',
+            fontSize: 10,
+            letterSpacing: '.02em',
+            whiteSpace: 'nowrap',
+            lineHeight: 1.4,
+            pointerEvents: 'none',
+            boxShadow: '0 4px 12px rgba(0,0,0,.4)',
+            zIndex: 50,
+          }}
+        >
+          {title}
+        </span>
+      )}
+    </button>
+  );
+}
+
+/* ── tiny dropdown, anchored under trigger ─────────────────────── */
+function Dropdown({ items, selected, onSelect, onClose, width = 150 }) {
+  return (
+    <>
+      <div
+        onClick={onClose}
+        style={{ position: 'fixed', inset: 0, zIndex: 10 }}
+      />
+      <div
+        style={{
+          position: 'absolute',
+          top: '100%',
+          left: 0,
+          marginTop: 4,
+          width,
+          zIndex: 11,
+          background: 'var(--zinc-925)',
+          border: '1px solid var(--zinc-800)',
+          borderRadius: 4,
+          boxShadow: '0 8px 24px rgba(0,0,0,.6), 0 0 0 1px rgba(255,255,255,.03)',
+          padding: '3px 0',
+        }}
+      >
+        {items.map((it) => (
+          <div
+            key={it.k}
+            onClick={() => {
+              onSelect(it.k);
+              onClose();
+            }}
+            style={{
+              padding: '5px 10px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              fontSize: 'var(--t-12)',
+              color: it.k === selected ? 'var(--zinc-100)' : 'var(--zinc-400)',
+              background: it.k === selected ? 'var(--zinc-900)' : 'transparent',
+              cursor: 'pointer',
+              whiteSpace: 'nowrap',
+            }}
+            onMouseEnter={(e) => {
+              if (it.k !== selected) e.currentTarget.style.background = 'var(--zinc-900)';
+            }}
+            onMouseLeave={(e) => {
+              if (it.k !== selected) e.currentTarget.style.background = 'transparent';
+            }}
+          >
+            <span style={{ width: 8, display: 'inline-flex', color: 'var(--zinc-500)' }}>
+              {it.k === selected ? '›' : ''}
+            </span>
+            {it.icon && <span className={`rx-plat ${it.icon}`}>{it.icon.toUpperCase()}</span>}
+            <span style={{ flex: 1 }}>{it.l}</span>
+          </div>
+        ))}
+      </div>
     </>
   );
 }

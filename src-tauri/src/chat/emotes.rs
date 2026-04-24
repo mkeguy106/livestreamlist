@@ -48,6 +48,16 @@ impl EmoteCache {
         *self.globals.write() = map;
     }
 
+    /// Fold new entries into globals without dropping what's already there.
+    /// Later sources (user emotes, Twitch globals after 3rd-party) win on
+    /// name collision — they're called later in `load_twitch_for_channel`.
+    pub fn merge_globals(&self, map: HashMap<String, Emote>) {
+        let mut guard = self.globals.write();
+        for (k, v) in map {
+            guard.insert(k, v);
+        }
+    }
+
     pub fn set_channel(&self, channel_key: &str, map: HashMap<String, Emote>) {
         self.channels.write().insert(channel_key.to_string(), map);
     }

@@ -15,6 +15,7 @@ export function useChat(channelKey) {
   const [messages, setMessages] = useState([]);
   const [status, setStatus] = useState('idle');
   const bufferRef = useRef([]);
+  const pausedRef = useRef(false);
 
   useEffect(() => {
     bufferRef.current = [];
@@ -66,7 +67,9 @@ export function useChat(channelKey) {
       unMsg = await listenEvent(`chat:message:${channelKey}`, (payload) => {
         if (cancelled) return;
         const next = [...bufferRef.current, payload];
-        if (next.length > BUFFER_SIZE) next.splice(0, next.length - BUFFER_SIZE);
+        if (!pausedRef.current && next.length > BUFFER_SIZE) {
+          next.splice(0, next.length - BUFFER_SIZE);
+        }
         bufferRef.current = next;
         setMessages(next);
       });
@@ -97,5 +100,21 @@ export function useChat(channelKey) {
     setMessages([]);
   }, []);
 
-  return { messages, status, clear };
+  /// Stop trimming the buffer so the view doesn't squeeze messages out from
+  /// under the user while they're scrolled up reading. Memory is bounded by
+  /// whatever timeout the caller uses before `resumeTrim`.
+  const pauseTrim = useCallback(() => {
+    pausedRef.current = true;
+  }, []);
+
+  const resumeTrim = useCallback(() => {
+    pausedRef.current = false;
+    if (bufferRef.current.length > BUFFER_SIZE) {
+      const trimmed = bufferRef.current.slice(-BUFFER_SIZE);
+      bufferRef.current = trimmed;
+      setMessages(trimmed);
+    }
+  }, []);
+
+  return { messages, status, clear, pauseTrim, resumeTrim };
 }
