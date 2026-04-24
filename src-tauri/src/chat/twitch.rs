@@ -153,7 +153,14 @@ async fn read_loop(
                 // still silently drop for ratelimit/slow-mode/ban.
                 let line = format!("PRIVMSG #{} :{}", cfg.channel_login.to_ascii_lowercase(), text);
                 let result = match ws.send(WsMessage::Text(line)).await {
-                    Ok(()) => Ok(()),
+                    Ok(()) => {
+                        // Local echo: IRC doesn't echo own PRIVMSG. Synthesize so
+                        // the user sees their own message and badges.
+                        if let Some(echo) = build_self_echo(cfg, &text) {
+                            persist_and_emit(cfg, log.as_deref_mut(), echo);
+                        }
+                        Ok(())
+                    }
                     Err(e) => {
                         log::warn!("twitch outbound send failed: {e:#}");
                         Err(format!("{e:#}"))
@@ -374,6 +381,51 @@ fn extract_reply_info(tags: &std::collections::HashMap<String, String>) -> Optio
         parent_login,
         parent_display_name,
         parent_text,
+    })
+}
+
+fn build_self_echo(cfg: &TwitchChatConfig, text: &str) -> Option<ChatMessage> {
+    // Anonymous (justinfan…) connections shouldn't echo — they can't even
+    // send. Require auth to be present.
+    let auth = cfg.auth.as_ref()?;
+    let login = auth.login.clone();
+    if login.is_empty() {
+        return None;
+    }
+
+    let mut badges = cfg.own_badges.lock().clone();
+    let room_snapshot = cfg.room_id.lock().clone();
+    cfg.badges
+        .resolve(Platform::Twitch, room_snapshot.as_deref(), &mut badges);
+
+    // Strip /me ACTION wrapping mirroring inbound behavior.
+    let (clean_text, is_action) = strip_action(text);
+
+    Some(ChatMessage {
+        id: format!(
+            "self-{}",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        ),
+        channel_key: cfg.channel_key.clone(),
+        platform: Platform::Twitch,
+        timestamp: chrono::Utc::now(),
+        user: ChatUser {
+            id: None,
+            login: login.clone(),
+            display_name: login,
+            color: None,
+            is_mod: badges.iter().any(|b| b.id.starts_with("moderator/")),
+            is_subscriber: badges.iter().any(|b| b.id.starts_with("subscriber/")),
+            is_broadcaster: badges.iter().any(|b| b.id.starts_with("broadcaster/")),
+            is_turbo: badges.iter().any(|b| b.id.starts_with("turbo/")),
+        },
+        text: clean_text,
+        emote_ranges: Vec::new(),
+        badges,
+        is_action,
+        is_first_message: false,
+        reply_to: None,
+        system: None,
     })
 }
 
