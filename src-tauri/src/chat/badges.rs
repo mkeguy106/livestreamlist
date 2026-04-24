@@ -5,6 +5,7 @@
 use crate::chat::models::ChatBadge;
 use crate::platforms::Platform;
 use parking_lot::Mutex;
+use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -91,24 +92,27 @@ impl BadgeCache {
     }
 }
 
-use serde::Deserialize;
-
+#[allow(dead_code)]
 const TWITCH_GLOBAL_URL: &str = "https://badges.twitch.tv/v1/badges/global/display";
 
+#[allow(dead_code)]
 fn twitch_channel_url(room_id: &str) -> String {
     format!("https://badges.twitch.tv/v1/badges/channels/{room_id}/display")
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct TwitchBadgesResponse {
-    pub badge_sets: std::collections::HashMap<String, TwitchBadgeSet>,
+    pub badge_sets: HashMap<String, TwitchBadgeSet>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct TwitchBadgeSet {
-    pub versions: std::collections::HashMap<String, TwitchBadgeVersion>,
+    pub versions: HashMap<String, TwitchBadgeVersion>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct TwitchBadgeVersion {
     pub image_url_4x: String,
@@ -132,6 +136,7 @@ impl TwitchBadgesResponse {
     }
 }
 
+#[allow(dead_code)]
 impl BadgeCache {
     /// Fetch + cache Twitch global badges. Idempotent.
     pub async fn ensure_twitch_global(self: &Arc<Self>, http: &reqwest::Client) {
