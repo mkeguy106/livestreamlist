@@ -173,3 +173,8 @@ body { background: var(--zinc-950); }
 .rx-plat.y { color: var(--youtube); }
 .rx-plat.k { color: var(--kick); }
 .rx-plat.c { color: var(--cb); }
+
+@keyframes usercard-pulse {
+  0%, 100% { opacity: 0.35; }
+  50%      { opacity: 0.55; }
+}
