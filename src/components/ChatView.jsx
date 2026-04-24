@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useAuth } from '../hooks/useAuth.js';
+import { useAuth } from '../hooks/useAuth.jsx';
 import { useChat } from '../hooks/useChat.js';
 import Composer from './Composer.jsx';
 import ConversationDialog from './ConversationDialog.jsx';

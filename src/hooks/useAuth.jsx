@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import {
   authStatus,
   kickLogin,
@@ -7,8 +7,15 @@ import {
   twitchLogout,
 } from '../ipc.js';
 
-/** Shared auth snapshot for both Twitch and Kick. */
-export function useAuth() {
+/**
+ * Shared auth state, lifted into a React Context so every component —
+ * titlebar button, composer, chat view's mention-highlight — sees the
+ * same snapshot. Without this, each `useAuth()` call kept its own state
+ * and a login in one component stayed invisible to the others.
+ */
+const AuthContext = createContext(null);
+
+export function AuthProvider({ children }) {
   const [state, setState] = useState({
     loading: true,
     twitch: null,
@@ -53,5 +60,18 @@ export function useAuth() {
     }
   }, []);
 
-  return { ...state, refresh, login, logout };
+  const value = useMemo(
+    () => ({ ...state, refresh, login, logout }),
+    [state, refresh, login, logout],
+  );
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+}
+
+export function useAuth() {
+  const ctx = useContext(AuthContext);
+  if (!ctx) {
+    throw new Error('useAuth must be used within an <AuthProvider>');
+  }
+  return ctx;
 }

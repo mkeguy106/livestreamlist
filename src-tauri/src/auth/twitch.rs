@@ -3,7 +3,7 @@
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 
-use super::callback_server::{self, CallbackResult};
+use super::callback_server::{self, CallbackResult, TWITCH_CALLBACK_PORT};
 use super::tokens;
 
 /// Publicly registered Twitch client ID (shared with `livestream.list.qt`).
@@ -16,6 +16,7 @@ const SCOPES: &[&str] = &[
     "user:read:follows",
     "user:read:chat",
     "user:write:chat",
+    "user:read:emotes", // /chat/emotes/user — subscriber + follower emotes
 ];
 
 const AUTH_URL: &str = "https://id.twitch.tv/oauth2/authorize";
@@ -34,8 +35,8 @@ pub struct TwitchIdentity {
 /// callback server, validates the token, stores it in the keyring, and
 /// returns the resolved identity.
 pub async fn login(client: &reqwest::Client) -> Result<TwitchIdentity> {
-    let server_rx = callback_server::spawn_once()?;
-    let redirect_uri = callback_server::redirect_uri();
+    let server_rx = callback_server::spawn_once(TWITCH_CALLBACK_PORT)?;
+    let redirect_uri = callback_server::redirect_uri(TWITCH_CALLBACK_PORT);
     let state = random_state();
     let scope = SCOPES.join(" ");
     let auth_url = format!(

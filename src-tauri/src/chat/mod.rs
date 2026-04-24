@@ -1,3 +1,4 @@
+mod emote_loader;
 pub mod emotes;
 mod irc;
 mod kick;
@@ -83,7 +84,9 @@ impl ChatManager {
                 _ => {}
             }
         }
-        self.emotes.set_globals(combined);
+        // merge rather than set — a fast channel connect may have already
+        // folded in Twitch globals/user emotes before this startup task wins.
+        self.emotes.merge_globals(combined);
     }
 
     /// Begin (or re-begin) a chat connection for `channel_key`.
@@ -95,6 +98,24 @@ impl ChatManager {
                 let (tx, rx) = mpsc::unbounded_channel::<String>();
                 let auth = auth::twitch::stored_auth_pair()
                     .map(|(login, token)| twitch::TwitchAuth { login, token });
+
+                // Fire the full emote fan-out in a detached task so it doesn't
+                // block the chat connection. Messages without emotes render
+                // fine; matched 3rd-party tokens swap in as the cache fills.
+                let emote_cache = Arc::clone(&self.emotes);
+                let http_clone = self.http.clone();
+                let key_clone = unique_key.clone();
+                let login_clone = channel_id.clone();
+                async_runtime::spawn(async move {
+                    emote_loader::load_twitch_for_channel(
+                        http_clone,
+                        emote_cache,
+                        key_clone,
+                        login_clone,
+                    )
+                    .await;
+                });
+
                 let cfg = twitch::TwitchChatConfig {
                     app: self.app.clone(),
                     channel_key: unique_key.clone(),

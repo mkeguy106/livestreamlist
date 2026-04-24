@@ -17,15 +17,24 @@
 use anyhow::{anyhow, Context, Result};
 use std::collections::HashMap;
 use std::io::{Read, Write};
-use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener, TcpStream};
 use std::time::Duration;
 use tokio::sync::oneshot;
 
-pub const CALLBACK_HOST: &str = "127.0.0.1";
-pub const CALLBACK_PORT: u16 = 65432;
+/// Matches the redirect URI registered for the shared Twitch/Kick client IDs
+/// (originally by `livestream.list.qt`). Host + path are part of the
+/// registration — changing either breaks the redirect. Port differs by
+/// platform so both apps can coexist:
+///   - Twitch: 65433
+///   - Kick:   65432
+/// Each auth module passes its own port to `spawn_once`.
+pub const CALLBACK_HOST: &str = "localhost";
+pub const CALLBACK_PATH: &str = "/redirect";
+pub const TWITCH_CALLBACK_PORT: u16 = 65433;
+pub const KICK_CALLBACK_PORT: u16 = 65432;
 
-pub fn redirect_uri() -> String {
-    format!("http://{CALLBACK_HOST}:{CALLBACK_PORT}/callback")
+pub fn redirect_uri(port: u16) -> String {
+    format!("http://{CALLBACK_HOST}:{port}{CALLBACK_PATH}")
 }
 
 /// What came back from the browser.
@@ -46,10 +55,20 @@ pub enum CallbackResult {
 /// Run the server to completion on a background blocking thread. Returns a
 /// oneshot receiver that fires with the first callback result. Drops with no
 /// result if the client closes the browser without finishing auth.
-pub fn spawn_once() -> Result<oneshot::Receiver<CallbackResult>> {
-    let addr: SocketAddr = (Ipv4Addr::new(127, 0, 0, 1), CALLBACK_PORT).into();
-    let listener = TcpListener::bind(addr)
-        .with_context(|| format!("binding {addr} (another OAuth flow in progress?)"))?;
+pub fn spawn_once(port: u16) -> Result<oneshot::Receiver<CallbackResult>> {
+    // Bind IPv6 dual-stack first so `localhost` resolves correctly whether
+    // the browser picks ::1 or 127.0.0.1 (Linux distros increasingly prefer
+    // IPv6 first via getaddrinfo + Happy Eyeballs). Fall back to IPv4 only
+    // if the OS won't give us dual-stack (e.g. strict IPV6_V6ONLY=1 default).
+    let v6_addr: SocketAddr = (Ipv6Addr::UNSPECIFIED, port).into();
+    let v4_addr: SocketAddr = (Ipv4Addr::LOCALHOST, port).into();
+    let listener = TcpListener::bind(v6_addr)
+        .or_else(|_| TcpListener::bind(v4_addr))
+        .with_context(|| {
+            format!(
+                "binding port {port} (another OAuth flow in progress?)"
+            )
+        })?;
     listener
         .set_nonblocking(false)
         .context("switching to blocking mode")?;
@@ -97,7 +116,7 @@ fn handle_conn(mut stream: TcpStream) -> Result<Option<CallbackResult>> {
 
     let (method, path, body_opt) = parse_request(&raw)?;
 
-    if method == "GET" && path.starts_with("/callback") {
+    if method == "GET" && path.starts_with(CALLBACK_PATH) {
         // Code flow: ?code=...&state=...
         if let Some(qs) = path.splitn(2, '?').nth(1) {
             let q = parse_query(qs);
