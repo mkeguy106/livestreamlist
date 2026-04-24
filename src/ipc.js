@@ -40,6 +40,14 @@ export const getSettings = () => invoke('get_settings');
 export const updateSettings = (patch) => invoke('update_settings', { patch });
 export const openUrl = (url) => invoke('open_url', { url });
 export const listSocials = (uniqueKey) => invoke('list_socials', { uniqueKey });
+export const getUserMetadata = (userKey) =>
+  invoke('get_user_metadata', { userKey });
+export const setUserMetadata = (userKey, patch) =>
+  invoke('set_user_metadata', { userKey, patch });
+export const getUserProfile = (channelKey, userId, login) =>
+  invoke('get_user_profile', { channelKey, userId, login });
+export const getUserMessages = (channelKey, userId, limit) =>
+  invoke('get_user_messages', { channelKey, userId, limit });
 
 /**
  * Subscribe to a Tauri-side event. Returns an unlisten function.
@@ -275,6 +283,73 @@ async function mockInvoke(name, args) {
     case 'open_url':
       window.open(args.url, '_blank', 'noopener');
       return null;
+    case 'get_user_metadata': {
+      const [platform, user_id] = (args.userKey || '').split(':');
+      return {
+        platform: platform || 'twitch',
+        user_id: user_id || '0',
+        last_known_login: 'mockuser',
+        last_known_display_name: 'MockUser',
+        nickname: null,
+        note: null,
+        blocked: false,
+        updated_at: new Date().toISOString(),
+      };
+    }
+    case 'set_user_metadata': {
+      const [platform, user_id] = (args.userKey || '').split(':');
+      return {
+        platform: platform || 'twitch',
+        user_id: user_id || '0',
+        last_known_login: args.patch?.login_hint ?? 'mockuser',
+        last_known_display_name: args.patch?.display_name_hint ?? 'MockUser',
+        nickname: typeof args.patch?.nickname === 'string'
+          ? args.patch.nickname
+          : args.patch?.nickname === null ? null : null,
+        note: typeof args.patch?.note === 'string'
+          ? args.patch.note
+          : args.patch?.note === null ? null : null,
+        blocked: !!args.patch?.blocked,
+        updated_at: new Date().toISOString(),
+      };
+    }
+    case 'get_user_profile':
+      return {
+        user_id: args.userId,
+        login: args.login,
+        display_name: args.login.charAt(0).toUpperCase() + args.login.slice(1),
+        profile_image_url: 'https://static-cdn.jtvnw.net/jtv_user_pictures/default-profile.png',
+        description: 'Mock bio for browser-dev mode.',
+        created_at: '2018-06-12T00:00:00Z',
+        broadcaster_type: 'partner',
+        follower_count: 12345,
+        following_since: '2024-01-01T00:00:00Z',
+        pronouns: 'they/them',
+      };
+    case 'get_user_messages':
+      return Array.from({ length: 5 }, (_, i) => ({
+        id: `mock-${i}`,
+        channel_key: args.channelKey,
+        platform: 'twitch',
+        timestamp: new Date(Date.now() - i * 60000).toISOString(),
+        user: {
+          id: args.userId,
+          login: 'mockuser',
+          display_name: 'MockUser',
+          color: '#9b8aff',
+          is_mod: false,
+          is_subscriber: true,
+          is_broadcaster: false,
+          is_turbo: false,
+        },
+        text: `Mock message ${i + 1}`,
+        emote_ranges: [],
+        badges: [],
+        is_action: false,
+        is_first_message: false,
+        reply_to: null,
+        system: null,
+      }));
     default:
       throw new Error(`[mock] unknown invoke ${name}`);
   }
