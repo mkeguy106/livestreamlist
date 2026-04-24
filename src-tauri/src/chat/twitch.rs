@@ -30,12 +30,10 @@ pub struct TwitchAuth {
 
 pub struct TwitchChatConfig {
     pub app: AppHandle,
-    #[allow(dead_code)]
     pub http: reqwest::Client,
     pub channel_key: String,
     pub channel_login: String,
     pub emotes: Arc<EmoteCache>,
-    #[allow(dead_code)]
     pub badges: Arc<crate::chat::badges::BadgeCache>,
     pub users: Arc<crate::users::UserStore>,
     pub auth: Option<TwitchAuth>,
@@ -43,11 +41,9 @@ pub struct TwitchChatConfig {
     /// Updated when ROOMSTATE arrives so build_privmsg / build_usernotice
     /// can scope their badge lookups. Interior-mutable since cfg is shared
     /// as `&TwitchChatConfig` through handle_line.
-    #[allow(dead_code)]
     pub room_id: parking_lot::Mutex<Option<String>>,
     /// Per-channel own-user badges captured from USERSTATE; used for
     /// local echo of own outgoing messages.
-    #[allow(dead_code)]
     pub own_badges: parking_lot::Mutex<Vec<crate::chat::models::ChatBadge>>,
 }
 
@@ -200,9 +196,25 @@ async fn handle_line(
                 .app
                 .emit(&format!("chat:moderation:{}", cfg.channel_key), ev);
         }
-        "NOTICE" | "ROOMSTATE" | "USERSTATE" | "GLOBALUSERSTATE" => {
-            // Not surfaced yet — state events for room mode / user state live
-            // behind their own UI that lands in Phase 4b with preferences.
+        "ROOMSTATE" => {
+            if let Some(rid) = extract_room_id(&msg) {
+                let already = cfg.room_id.lock().as_ref() == Some(&rid);
+                if !already {
+                    *cfg.room_id.lock() = Some(rid.clone());
+                    let cache = Arc::clone(&cfg.badges);
+                    let http = cfg.http.clone();
+                    tauri::async_runtime::spawn(async move {
+                        cache.ensure_twitch_channel(&http, &rid).await;
+                    });
+                }
+            }
+        }
+        "USERSTATE" | "GLOBALUSERSTATE" => {
+            let badges = extract_own_badges(&msg);
+            *cfg.own_badges.lock() = badges;
+        }
+        "NOTICE" => {
+            // Surface lands in Phase 4b with preferences.
         }
         _ => {}
     }
@@ -471,6 +483,14 @@ fn char_range_to_bytes(text: &str, char_start: usize, char_end: usize) -> (usize
     (bs, be)
 }
 
+fn extract_room_id(msg: &crate::chat::irc::IrcMessage<'_>) -> Option<String> {
+    msg.tags.get("room-id").filter(|s| !s.is_empty()).cloned()
+}
+
+fn extract_own_badges(msg: &crate::chat::irc::IrcMessage<'_>) -> Vec<ChatBadge> {
+    parse_badges(msg.tags.get("badges").map(String::as_str).unwrap_or(""))
+}
+
 fn parse_badges(tag: &str) -> Vec<ChatBadge> {
     if tag.is_empty() {
         return Vec::new();
@@ -552,5 +572,36 @@ mod tests {
     #[test]
     fn parse_badges_empty_returns_empty() {
         assert!(parse_badges("").is_empty());
+    }
+
+    #[test]
+    fn extract_room_id_from_roomstate() {
+        let line = "@emote-only=0;followers-only=-1;r9k=0;room-id=12345;slow=0;subs-only=0 :tmi.twitch.tv ROOMSTATE #shroud";
+        let m = crate::chat::irc::parse(line).unwrap();
+        assert_eq!(extract_room_id(&m), Some("12345".to_string()));
+    }
+
+    #[test]
+    fn extract_own_badges_from_userstate() {
+        let line = "@badge-info=subscriber/12;badges=broadcaster/1,subscriber/12;color=#FF0000;display-name=Me;mod=0;subscriber=1;user-type= :tmi.twitch.tv USERSTATE #shroud";
+        let m = crate::chat::irc::parse(line).unwrap();
+        let badges = extract_own_badges(&m);
+        let ids: Vec<&str> = badges.iter().map(|b| b.id.as_str()).collect();
+        assert!(ids.contains(&"broadcaster/1"));
+        assert!(ids.contains(&"subscriber/12"));
+        assert!(
+            badges
+                .iter()
+                .find(|b| b.id == "broadcaster/1")
+                .unwrap()
+                .is_mod
+        );
+        assert!(
+            !badges
+                .iter()
+                .find(|b| b.id == "subscriber/12")
+                .unwrap()
+                .is_mod
+        );
     }
 }
