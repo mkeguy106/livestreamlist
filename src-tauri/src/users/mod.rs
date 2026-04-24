@@ -5,8 +5,7 @@
 //! through `Arc<UserStore>` (sync, parking_lot Mutex inside).
 
 pub mod models;
-// TODO Task 2: re-enable when store.rs lands
-// pub mod store;
+pub mod store;
 
 pub use models::{FieldUpdate, UserMetadata, UserMetadataPatch};
-// pub use store::UserStore;
+pub use store::UserStore;

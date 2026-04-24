@@ -31,6 +31,10 @@ pub fn settings_path() -> Result<PathBuf> {
     Ok(config_dir()?.join("settings.json"))
 }
 
+pub fn users_path() -> Result<PathBuf> {
+    Ok(config_dir()?.join("users.json"))
+}
+
 pub fn atomic_write(path: &Path, contents: &[u8]) -> Result<()> {
     let tmp = path.with_extension("tmp");
     std::fs::write(&tmp, contents)
