@@ -3,6 +3,7 @@
  */
 
 import ChatView from '../components/ChatView.jsx';
+import SocialsBanner from '../components/SocialsBanner.jsx';
 import TitleBanner from '../components/TitleBanner.jsx';
 import { formatUptime, formatViewers } from '../utils/format.js';
 
@@ -198,7 +199,12 @@ function SelectedPane({ channel, onLaunch, onOpenBrowser }) {
       <ChatView
         channelKey={channel.unique_key}
         variant="irc"
-        header={<TitleBanner channel={channel} />}
+        header={
+          <>
+            <TitleBanner channel={channel} />
+            <SocialsBanner channelKey={channel.unique_key} />
+          </>
+        }
       />
     </>
   );

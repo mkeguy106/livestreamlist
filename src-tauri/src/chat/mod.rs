@@ -1,5 +1,6 @@
 mod emotes;
 mod irc;
+pub mod log_store;
 pub mod models;
 mod twitch;
 

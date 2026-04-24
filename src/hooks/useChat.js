@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { chatConnect, chatDisconnect, listenEvent } from '../ipc.js';
+import { chatConnect, chatDisconnect, listenEvent, replayChatHistory } from '../ipc.js';
 
 const BUFFER_SIZE = 250;
+const HISTORY_REPLAY = 100;
 
 /**
  * Subscribe to a channel's chat stream. Pass `null`/`undefined` to disable.
@@ -27,6 +28,20 @@ export function useChat(channelKey) {
     setStatus('connecting');
 
     (async () => {
+      // Seed buffer with recent history (from disk) so the pane isn't blank
+      // while we wait for the first live message.
+      try {
+        const history = await replayChatHistory(channelKey, HISTORY_REPLAY);
+        if (cancelled) return;
+        if (Array.isArray(history) && history.length > 0) {
+          bufferRef.current = history;
+          setMessages(history);
+        }
+      } catch (e) {
+        // Non-fatal — history is a nice-to-have.
+        console.warn('replay_chat_history', e);
+      }
+
       unMsg = await listenEvent(`chat:message:${channelKey}`, (payload) => {
         if (cancelled) return;
         const next = [...bufferRef.current, payload];
