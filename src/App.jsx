@@ -45,15 +45,19 @@ export default function App() {
   const { livestreams, loading, error, refresh } = useLivestreams({ intervalSeconds });
   const onTitlebarMouseDown = useDragHandler();
   const card = useUserCard();
+  // Destructure stable callbacks once so dependent useCallbacks don't
+  // rebuild on every card-state change (which would cascade re-renders
+  // through ctx → all three layouts → ChatView during active chat).
+  const { openFor: cardOpenFor, close: cardClose } = card;
 
   const hoverTimer = useRef(null);
+  const closeTimer = useRef(null);
   const overCard = useRef(false);
   const overAnchor = useRef(false);
 
-  // Hover and right-click placeholders — wired in Tasks 16 and 21.
   const onUsernameOpen = useCallback(
-    (user, rect, channelKey) => card.openFor(user, channelKey, rect),
-    [card],
+    (user, rect, channelKey) => cardOpenFor(user, channelKey, rect),
+    [cardOpenFor],
   );
 
   const [userCtx, setUserCtx] = useState({ open: false, point: null, user: null, channelKey: null, metadata: null });
@@ -80,21 +84,37 @@ export default function App() {
         // entering an anchor
         overAnchor.current = true;
         if (hoverTimer.current) clearTimeout(hoverTimer.current);
+        if (closeTimer.current) clearTimeout(closeTimer.current);
         hoverTimer.current = setTimeout(() => {
-          if (overAnchor.current) card.openFor(user, channelKey, rect);
+          if (overAnchor.current) cardOpenFor(user, channelKey, rect);
         }, hoverDelay);
       } else {
         // leaving the anchor
         overAnchor.current = false;
         if (hoverTimer.current) clearTimeout(hoverTimer.current);
         // Small delay so the cursor can move into the card before we close it.
-        setTimeout(() => {
-          if (!overAnchor.current && !overCard.current) card.close();
+        if (closeTimer.current) clearTimeout(closeTimer.current);
+        closeTimer.current = setTimeout(() => {
+          if (!overAnchor.current && !overCard.current) cardClose();
         }, 100);
       }
     },
-    [hoverEnabled, hoverDelay, card],
+    [hoverEnabled, hoverDelay, cardOpenFor, cardClose],
   );
+
+  const onCardHover = useCallback((over) => {
+    overCard.current = over;
+    if (!over) {
+      if (closeTimer.current) clearTimeout(closeTimer.current);
+      closeTimer.current = setTimeout(() => {
+        if (!overAnchor.current && !overCard.current) cardClose();
+      }, 100);
+    } else if (closeTimer.current) {
+      // Cursor entered the card before the close timer fired — keep it open.
+      clearTimeout(closeTimer.current);
+      closeTimer.current = null;
+    }
+  }, [cardClose]);
 
   // Apply appearance overrides to CSS variables on the root.
   useEffect(() => {
@@ -285,14 +305,7 @@ export default function App() {
           if (card.channelKey) openInBrowser(card.channelKey).catch((e) => console.error('open_in_browser', e));
           card.close();
         }}
-        onCardHover={(over) => {
-          overCard.current = over;
-          if (!over) {
-            setTimeout(() => {
-              if (!overAnchor.current && !overCard.current) card.close();
-            }, 100);
-          }
-        }}
+        onCardHover={onCardHover}
       />
       <UserCardContextMenu
         open={userCtx.open}
