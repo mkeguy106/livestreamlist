@@ -4,11 +4,13 @@ import Columns from './directions/Columns.jsx';
 import Focus from './directions/Focus.jsx';
 import AddChannelDialog from './components/AddChannelDialog.jsx';
 import LoginButton from './components/LoginButton.jsx';
+import UserCard from './components/UserCard.jsx';
 import WindowControls from './components/WindowControls.jsx';
 import PreferencesDialog from './components/PreferencesDialog.jsx';
 import { useDragHandler } from './hooks/useDragRegion.js';
 import { useLivestreams } from './hooks/useLivestreams.js';
 import { usePreferences } from './hooks/usePreferences.js';
+import { useUserCard } from './hooks/useUserCard.js';
 import { launchStream, listenEvent, openInBrowser, removeChannel, setFavorite } from './ipc.js';
 
 const LAYOUTS = [
@@ -36,6 +38,15 @@ export default function App() {
   const intervalSeconds = settings?.general?.refresh_interval_seconds;
   const { livestreams, loading, error, refresh } = useLivestreams({ intervalSeconds });
   const onTitlebarMouseDown = useDragHandler();
+  const card = useUserCard();
+
+  // Hover and right-click placeholders — wired in Tasks 16 and 21.
+  const onUsernameOpen = useCallback(
+    (user, rect, channelKey) => card.openFor(user, channelKey, rect),
+    [card],
+  );
+  const onUsernameContext = useCallback(() => {}, []);
+  const onUsernameHover = useCallback(() => {}, []);
 
   // Apply appearance overrides to CSS variables on the root.
   useEffect(() => {
@@ -130,7 +141,10 @@ export default function App() {
       removeChannel(key).then(refresh).catch((e) => console.error('remove_channel', e)),
     setFavorite: (key, fav) =>
       setFavorite(key, fav).then(refresh).catch((e) => console.error('set_favorite', e)),
-  }), [livestreams, loading, error, refresh, selectedKey]);
+    onUsernameOpen,
+    onUsernameContext,
+    onUsernameHover,
+  }), [livestreams, loading, error, refresh, selectedKey, onUsernameOpen, onUsernameContext, onUsernameHover]);
 
   const current = LAYOUTS.find((l) => l.id === layoutId) ?? LAYOUTS[0];
   const Layout = current.Component;
@@ -200,6 +214,21 @@ export default function App() {
 
       <AddChannelDialog open={addOpen} onClose={() => setAddOpen(false)} onAdded={refresh} />
       <PreferencesDialog open={prefsOpen} onClose={() => setPrefsOpen(false)} />
+      <UserCard
+        open={card.open}
+        anchor={card.anchor}
+        user={card.user}
+        metadata={card.metadata}
+        profile={card.profile}
+        profileLoading={card.profileLoading}
+        profileError={card.profileError}
+        onClose={card.close}
+        onOpenHistory={() => { card.close(); }}
+        onOpenChannel={() => {
+          if (card.channelKey) openInBrowser(card.channelKey).catch((e) => console.error('open_in_browser', e));
+          card.close();
+        }}
+      />
     </div>
   );
 }

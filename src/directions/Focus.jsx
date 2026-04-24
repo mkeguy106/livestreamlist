@@ -15,6 +15,9 @@ export default function Focus({ ctx }) {
     openAddDialog,
     launchStream,
     openInBrowser,
+    onUsernameOpen,
+    onUsernameContext,
+    onUsernameHover,
   } = ctx;
 
   // Tabs: live first (viewer-desc), then offline alpha
@@ -123,6 +126,9 @@ export default function Focus({ ctx }) {
           <ChatView
             channelKey={featured?.unique_key}
             variant="irc"
+            onUsernameOpen={onUsernameOpen}
+            onUsernameContext={onUsernameContext}
+            onUsernameHover={onUsernameHover}
             header={
               <>
                 <div

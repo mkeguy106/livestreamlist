@@ -25,6 +25,9 @@ export default function ChatView({
   variant = 'irc',
   header = null,
   footer = null,
+  onUsernameOpen,      // (user, anchorRect, channelKey) — left-click
+  onUsernameContext,   // (user, point, channelKey)      — right-click
+  onUsernameHover,     // (user | null, anchorRect | null, channelKey) — entering=true|false implicit via user!=null
 }) {
   const { messages, status, pauseTrim, resumeTrim } = useChat(channelKey);
   const auth = useAuth();
@@ -67,6 +70,19 @@ export default function ChatView({
     if (!userA || !userB || userA === userB) return;
     setConversation({ a: userA, b: userB });
   };
+
+  const handleOpen = useCallback(
+    (user, rect) => onUsernameOpen?.(user, rect, channelKey),
+    [onUsernameOpen, channelKey],
+  );
+  const handleContext = useCallback(
+    (user, point) => onUsernameContext?.(user, point, channelKey),
+    [onUsernameContext, channelKey],
+  );
+  const handleHover = useCallback(
+    (user, rect) => onUsernameHover?.(user, rect, channelKey),
+    [onUsernameHover, channelKey],
+  );
 
   const clearTimers = useCallback(() => {
     if (pauseTimerRef.current) {
@@ -190,9 +206,25 @@ export default function ChatView({
               m.system ? (
                 <SystemRow key={m.id} m={m} variant={variant} />
               ) : variant === 'compact' ? (
-                <CompactRow key={m.id} m={m} myLogin={myLogin} onOpenThread={openConversation} />
+                <CompactRow
+                  key={m.id}
+                  m={m}
+                  myLogin={myLogin}
+                  onOpenThread={openConversation}
+                  onUsernameOpen={handleOpen}
+                  onUsernameContext={handleContext}
+                  onUsernameHover={handleHover}
+                />
               ) : (
-                <IrcRow key={m.id} m={m} myLogin={myLogin} onOpenThread={openConversation} />
+                <IrcRow
+                  key={m.id}
+                  m={m}
+                  myLogin={myLogin}
+                  onOpenThread={openConversation}
+                  onUsernameOpen={handleOpen}
+                  onUsernameContext={handleContext}
+                  onUsernameHover={handleHover}
+                />
               ),
             )}
           </div>
@@ -263,7 +295,7 @@ function EmptyHint({ status }) {
   );
 }
 
-function IrcRow({ m, myLogin, onOpenThread }) {
+function IrcRow({ m, myLogin, onOpenThread, onUsernameOpen, onUsernameContext, onUsernameHover }) {
   const time = formatTime(m.timestamp);
   const mentionsMe = mentionsLogin(m.text, myLogin);
   return (
@@ -293,7 +325,28 @@ function IrcRow({ m, myLogin, onOpenThread }) {
           {time}
         </span>
         <span style={{ minWidth: 0 }}>
-          <span style={{ color: m.user.color || '#a1a1aa', fontWeight: 500 }}>
+          <span
+            data-user-card-anchor
+            style={{
+              color: m.user.color || '#a1a1aa',
+              fontWeight: 500,
+              cursor: 'pointer',
+            }}
+            onMouseDown={e => {
+              if (e.button !== 0) return;
+              onUsernameOpen?.(m.user, e.currentTarget.getBoundingClientRect());
+            }}
+            onContextMenu={e => {
+              e.preventDefault();
+              onUsernameContext?.(m.user, { x: e.clientX, y: e.clientY });
+            }}
+            onMouseEnter={e => {
+              onUsernameHover?.(m.user, e.currentTarget.getBoundingClientRect());
+            }}
+            onMouseLeave={() => {
+              onUsernameHover?.(null, null);
+            }}
+          >
             {m.user.display_name || m.user.login}
           </span>
           <span style={{ color: 'var(--zinc-600)' }}>:</span>{' '}
@@ -311,7 +364,7 @@ function IrcRow({ m, myLogin, onOpenThread }) {
   );
 }
 
-function CompactRow({ m, myLogin, onOpenThread }) {
+function CompactRow({ m, myLogin, onOpenThread, onUsernameOpen, onUsernameContext, onUsernameHover }) {
   const mentionsMe = mentionsLogin(m.text, myLogin);
   return (
     <div
@@ -332,6 +385,7 @@ function CompactRow({ m, myLogin, onOpenThread }) {
       )}
       <div style={{ display: 'flex', gap: 6, alignItems: 'baseline' }}>
         <span
+          data-user-card-anchor
           style={{
             color: m.user.color || '#a1a1aa',
             fontWeight: 500,
@@ -340,6 +394,21 @@ function CompactRow({ m, myLogin, onOpenThread }) {
             overflow: 'hidden',
             textOverflow: 'ellipsis',
             whiteSpace: 'nowrap',
+            cursor: 'pointer',
+          }}
+          onMouseDown={e => {
+            if (e.button !== 0) return;
+            onUsernameOpen?.(m.user, e.currentTarget.getBoundingClientRect());
+          }}
+          onContextMenu={e => {
+            e.preventDefault();
+            onUsernameContext?.(m.user, { x: e.clientX, y: e.clientY });
+          }}
+          onMouseEnter={e => {
+            onUsernameHover?.(m.user, e.currentTarget.getBoundingClientRect());
+          }}
+          onMouseLeave={() => {
+            onUsernameHover?.(null, null);
           }}
         >
           {m.user.display_name || m.user.login}

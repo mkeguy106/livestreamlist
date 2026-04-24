@@ -57,6 +57,9 @@ export default function Command({ ctx }) {
     openInBrowser,
     removeChannel,
     setFavorite,
+    onUsernameOpen,
+    onUsernameContext,
+    onUsernameHover,
   } = ctx;
 
   const playing = usePlayerState();
@@ -295,6 +298,9 @@ export default function Command({ ctx }) {
               onLaunch={() => launchStream(selected.unique_key)}
               onOpenBrowser={() => openInBrowser(selected.unique_key)}
               onFavorite={() => setFavorite(selected.unique_key, true)}
+              onUsernameOpen={onUsernameOpen}
+              onUsernameContext={onUsernameContext}
+              onUsernameHover={onUsernameHover}
             />
           ) : (
             <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--zinc-500)' }}>
@@ -360,7 +366,7 @@ export default function Command({ ctx }) {
   );
 }
 
-function SelectedPane({ channel, onLaunch, onOpenBrowser }) {
+function SelectedPane({ channel, onLaunch, onOpenBrowser, onUsernameOpen, onUsernameContext, onUsernameHover }) {
   return (
     <>
       <div
@@ -416,6 +422,9 @@ function SelectedPane({ channel, onLaunch, onOpenBrowser }) {
             <SocialsBanner channelKey={channel.unique_key} />
           </>
         }
+        onUsernameOpen={onUsernameOpen}
+        onUsernameContext={onUsernameContext}
+        onUsernameHover={onUsernameHover}
       />
     </>
   );

@@ -6,7 +6,7 @@ import ChatView from '../components/ChatView.jsx';
 import { formatViewers } from '../utils/format.js';
 
 export default function Columns({ ctx }) {
-  const { livestreams, openAddDialog, launchStream, openInBrowser } = ctx;
+  const { livestreams, openAddDialog, launchStream, openInBrowser, onUsernameOpen, onUsernameContext, onUsernameHover } = ctx;
 
   const live = livestreams
     .filter((l) => l.is_live)
@@ -40,6 +40,9 @@ export default function Columns({ ctx }) {
             accentColumn={ci === 0}
             onLaunch={() => launchStream(ch.unique_key)}
             onOpenBrowser={() => openInBrowser(ch.unique_key)}
+            onUsernameOpen={onUsernameOpen}
+            onUsernameContext={onUsernameContext}
+            onUsernameHover={onUsernameHover}
           />
         ))}
 
@@ -114,7 +117,7 @@ export default function Columns({ ctx }) {
   );
 }
 
-function Column({ channel, accentColumn, onLaunch, onOpenBrowser }) {
+function Column({ channel, accentColumn, onLaunch, onOpenBrowser, onUsernameOpen, onUsernameContext, onUsernameHover }) {
   const letter = channel.platform.charAt(0);
 
   return (
@@ -222,6 +225,9 @@ function Column({ channel, accentColumn, onLaunch, onOpenBrowser }) {
       <ChatView
         channelKey={channel.unique_key}
         variant="compact"
+        onUsernameOpen={onUsernameOpen}
+        onUsernameContext={onUsernameContext}
+        onUsernameHover={onUsernameHover}
         footer={
           <div style={{ borderTop: 'var(--hair)', padding: '6px 10px', display: 'flex', gap: 6 }}>
             <button
