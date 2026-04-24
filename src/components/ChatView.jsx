@@ -140,6 +140,8 @@ function IrcRow({ m, myLogin, onOpenThread }) {
         padding: '1px 14px',
         background: mentionsMe ? 'rgba(251,146,60,.08)' : undefined,
         borderLeft: mentionsMe ? '2px solid #fb923c' : '2px solid transparent',
+        opacity: m.hidden ? 0.35 : 1,
+        textDecoration: m.hidden ? 'line-through' : 'none',
       }}
     >
       {m.reply_to && (
@@ -185,6 +187,8 @@ function CompactRow({ m, myLogin, onOpenThread }) {
         padding: '1px 0 1px 4px',
         background: mentionsMe ? 'rgba(251,146,60,.08)' : undefined,
         borderLeft: mentionsMe ? '2px solid #fb923c' : '2px solid transparent',
+        opacity: m.hidden ? 0.35 : 1,
+        textDecoration: m.hidden ? 'line-through' : 'none',
       }}
     >
       {m.reply_to && (

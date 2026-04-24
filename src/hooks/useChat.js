@@ -6,7 +6,10 @@ const HISTORY_REPLAY = 100;
 
 /**
  * Subscribe to a channel's chat stream. Pass `null`/`undefined` to disable.
- * Returns a ring-buffered message list plus the connection status.
+ *
+ * Tracks Twitch-style moderation events (CLEARCHAT / CLEARMSG) — matched
+ * messages are flagged with `hidden: true` so the UI can grey or remove them
+ * without re-fetching the buffer.
  */
 export function useChat(channelKey) {
   const [messages, setMessages] = useState([]);
@@ -23,13 +26,32 @@ export function useChat(channelKey) {
 
     let unMsg = null;
     let unStatus = null;
+    let unMod = null;
     let cancelled = false;
 
     setStatus('connecting');
 
+    const applyMod = (event) => {
+      const { kind, target_login, target_msg_id } = event || {};
+      if (!kind) return;
+      let next = bufferRef.current;
+      if (kind === 'clear_chat') {
+        next = [];
+      } else if (kind === 'msg_delete' && target_msg_id) {
+        next = next.map((m) => (m.id === target_msg_id ? { ...m, hidden: true } : m));
+      } else if ((kind === 'ban' || kind === 'timeout') && target_login) {
+        const login = target_login.toLowerCase();
+        next = next.map((m) =>
+          m.user?.login?.toLowerCase() === login ? { ...m, hidden: true } : m,
+        );
+      } else {
+        return;
+      }
+      bufferRef.current = next;
+      if (!cancelled) setMessages(next);
+    };
+
     (async () => {
-      // Seed buffer with recent history (from disk) so the pane isn't blank
-      // while we wait for the first live message.
       try {
         const history = await replayChatHistory(channelKey, HISTORY_REPLAY);
         if (cancelled) return;
@@ -38,7 +60,6 @@ export function useChat(channelKey) {
           setMessages(history);
         }
       } catch (e) {
-        // Non-fatal — history is a nice-to-have.
         console.warn('replay_chat_history', e);
       }
 
@@ -53,6 +74,7 @@ export function useChat(channelKey) {
         if (cancelled) return;
         setStatus(payload?.status ?? 'closed');
       });
+      unMod = await listenEvent(`chat:moderation:${channelKey}`, applyMod);
       try {
         await chatConnect(channelKey);
       } catch (e) {
@@ -65,6 +87,7 @@ export function useChat(channelKey) {
       cancelled = true;
       if (unMsg) unMsg();
       if (unStatus) unStatus();
+      if (unMod) unMod();
       chatDisconnect(channelKey).catch(() => {});
     };
   }, [channelKey]);

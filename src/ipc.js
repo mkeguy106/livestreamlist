@@ -24,6 +24,7 @@ export const openInBrowser = (uniqueKey) => invoke('open_in_browser', { uniqueKe
 export const chatConnect = (uniqueKey) => invoke('chat_connect', { uniqueKey });
 export const chatDisconnect = (uniqueKey) => invoke('chat_disconnect', { uniqueKey });
 export const chatSend = (uniqueKey, text) => invoke('chat_send', { uniqueKey, text });
+export const chatOpenPopout = (uniqueKey) => invoke('chat_open_popout', { uniqueKey });
 export const listEmotes = (uniqueKey) => invoke('list_emotes', { uniqueKey });
 export const replayChatHistory = (uniqueKey, limit = 100) =>
   invoke('replay_chat_history', { uniqueKey, limit });
@@ -164,6 +165,9 @@ async function mockInvoke(name, args) {
       return null;
     case 'chat_disconnect':
       stopMockChat(args.uniqueKey);
+      return null;
+    case 'chat_open_popout':
+      window.open('https://example.com', '_blank', 'noopener');
       return null;
     case 'replay_chat_history':
       return [];

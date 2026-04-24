@@ -164,6 +164,107 @@ async fn list_socials(
 }
 
 #[tauri::command]
+fn chat_open_popout(
+    unique_key: String,
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let channel = state
+        .store
+        .lock()
+        .channels()
+        .iter()
+        .find(|c| c.unique_key() == unique_key)
+        .cloned()
+        .ok_or_else(|| format!("unknown channel {unique_key}"))?;
+
+    let livestream = state
+        .store
+        .lock()
+        .snapshot()
+        .into_iter()
+        .find(|l| l.unique_key == unique_key);
+
+    let (url, title) = match channel.platform {
+        Platform::Youtube => {
+            // YouTube's popout chat needs the live video id; we only have one
+            // when the channel is live right now.
+            let Some(ls) = livestream.as_ref().and_then(|l| l.title.as_ref().map(|_| l)) else {
+                return Err("channel isn't live".to_string());
+            };
+            let id_field = ls
+                .thumbnail_url
+                .as_ref()
+                .and_then(|u| yt_id_from_thumbnail(u))
+                .or_else(|| ls.game_slug.clone()); // legacy fallback; unused
+            let Some(video_id) = id_field else {
+                return Err("couldn't resolve the YouTube video id".to_string());
+            };
+            (
+                format!("https://www.youtube.com/live_chat?is_popout=1&v={video_id}"),
+                format!("YouTube · {}", channel.display_name),
+            )
+        }
+        Platform::Chaturbate => (
+            format!("https://chaturbate.com/{}/", channel.channel_id),
+            format!("Chaturbate · {}", channel.display_name),
+        ),
+        Platform::Twitch => (
+            format!("https://www.twitch.tv/popout/{}/chat?popout=", channel.channel_id),
+            format!("Twitch · {}", channel.display_name),
+        ),
+        Platform::Kick => (
+            format!("https://kick.com/popout/{}/chat", channel.channel_id),
+            format!("Kick · {}", channel.display_name),
+        ),
+    };
+
+    let label = format!("popout-{}", slugify(&unique_key));
+    // If a window with this label already exists, just focus it.
+    if let Some(existing) = app.get_webview_window(&label) {
+        let _ = existing.show();
+        let _ = existing.unminimize();
+        let _ = existing.set_focus();
+        return Ok(());
+    }
+
+    tauri::WebviewWindowBuilder::new(
+        &app,
+        label,
+        tauri::WebviewUrl::External(url.parse().map_err(err_string)?),
+    )
+    .title(title)
+    .inner_size(460.0, 700.0)
+    .min_inner_size(320.0, 480.0)
+    .build()
+    .map_err(err_string)?;
+
+    Ok(())
+}
+
+fn yt_id_from_thumbnail(url: &str) -> Option<String> {
+    // YouTube live thumbnails look like
+    // `https://i.ytimg.com/vi/{video_id}/hqdefault_live.jpg?…`.
+    let trim = url.trim();
+    let marker = "/vi/";
+    let start = trim.find(marker)? + marker.len();
+    let rest = &trim[start..];
+    let end = rest.find('/').unwrap_or(rest.len());
+    let id = &rest[..end];
+    if id.is_empty() {
+        None
+    } else {
+        Some(id.to_string())
+    }
+}
+
+fn slugify(s: &str) -> String {
+    s.chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect()
+}
+
+#[tauri::command]
 fn open_url(url: String) -> Result<(), String> {
     // Only http(s) — don't let the renderer hand us file:// or javascript: URIs.
     if !(url.starts_with("http://") || url.starts_with("https://")) {
@@ -403,6 +504,7 @@ pub fn run() {
             chat_connect,
             chat_disconnect,
             chat_send,
+            chat_open_popout,
             list_emotes,
             replay_chat_history,
             auth_status,
