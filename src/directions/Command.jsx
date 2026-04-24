@@ -486,14 +486,16 @@ function IconCaret() {
   );
 }
 
-/* ── icon button with optional caret + active state ────────────── */
+/* ── icon button with optional caret + active state + themed tooltip ── */
 function IconBtn({ children, caret, active, onClick, title }) {
+  const [hover, setHover] = useState(false);
   return (
     <button
       type="button"
       onClick={onClick}
-      title={title}
+      aria-label={title}
       style={{
+        position: 'relative',
         display: 'inline-flex',
         alignItems: 'center',
         gap: 3,
@@ -508,14 +510,42 @@ function IconBtn({ children, caret, active, onClick, title }) {
         fontFamily: 'inherit',
       }}
       onMouseEnter={(e) => {
+        setHover(true);
         if (!active) e.currentTarget.style.color = 'var(--zinc-300)';
       }}
       onMouseLeave={(e) => {
+        setHover(false);
         if (!active) e.currentTarget.style.color = 'var(--zinc-500)';
       }}
     >
       {children}
       {caret && <IconCaret />}
+      {hover && title && (
+        <span
+          role="tooltip"
+          style={{
+            position: 'absolute',
+            top: 'calc(100% + 6px)',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            padding: '3px 8px',
+            background: 'var(--zinc-925)',
+            color: 'var(--zinc-300)',
+            border: '1px solid var(--zinc-800)',
+            borderRadius: 3,
+            fontFamily: 'var(--font-mono)',
+            fontSize: 10,
+            letterSpacing: '.02em',
+            whiteSpace: 'nowrap',
+            lineHeight: 1.4,
+            pointerEvents: 'none',
+            boxShadow: '0 4px 12px rgba(0,0,0,.4)',
+            zIndex: 50,
+          }}
+        >
+          {title}
+        </span>
+      )}
     </button>
   );
 }
