@@ -1,16 +1,32 @@
 import { useCallback, useEffect, useState } from 'react';
-import { authStatus, twitchLogin, twitchLogout } from '../ipc.js';
+import {
+  authStatus,
+  kickLogin,
+  kickLogout,
+  twitchLogin,
+  twitchLogout,
+} from '../ipc.js';
 
-/** Shared auth snapshot — currently just Twitch; Kick lands in Phase 2b-2. */
+/** Shared auth snapshot for both Twitch and Kick. */
 export function useAuth() {
-  const [state, setState] = useState({ loading: true, twitch: null, error: null });
+  const [state, setState] = useState({
+    loading: true,
+    twitch: null,
+    kick: null,
+    error: null,
+  });
 
   const refresh = useCallback(async () => {
     try {
       const data = await authStatus();
-      setState({ loading: false, twitch: data?.twitch ?? null, error: null });
+      setState({
+        loading: false,
+        twitch: data?.twitch ?? null,
+        kick: data?.kick ?? null,
+        error: null,
+      });
     } catch (e) {
-      setState({ loading: false, twitch: null, error: String(e?.message ?? e) });
+      setState((s) => ({ ...s, loading: false, error: String(e?.message ?? e) }));
     }
   }, []);
 
@@ -18,23 +34,24 @@ export function useAuth() {
     refresh();
   }, [refresh]);
 
-  const loginTwitch = useCallback(async () => {
+  const login = useCallback(async (platform) => {
     try {
-      const id = await twitchLogin();
-      setState((s) => ({ ...s, twitch: id, error: null }));
+      const id = platform === 'kick' ? await kickLogin() : await twitchLogin();
+      setState((s) => ({ ...s, [platform]: id, error: null }));
     } catch (e) {
       setState((s) => ({ ...s, error: String(e?.message ?? e) }));
     }
   }, []);
 
-  const logoutTwitch = useCallback(async () => {
+  const logout = useCallback(async (platform) => {
     try {
-      await twitchLogout();
-      setState((s) => ({ ...s, twitch: null, error: null }));
+      if (platform === 'kick') await kickLogout();
+      else await twitchLogout();
+      setState((s) => ({ ...s, [platform]: null, error: null }));
     } catch (e) {
       setState((s) => ({ ...s, error: String(e?.message ?? e) }));
     }
   }, []);
 
-  return { ...state, refresh, loginTwitch, logoutTwitch };
+  return { ...state, refresh, login, logout };
 }

@@ -16,11 +16,13 @@ export default function Composer({ channelKey, platform, auth, mentionCandidates
   const [popup, setPopup] = useState(null); // { kind, query, start, items, index }
   const inputRef = useRef(null);
 
-  const authed = platform === 'twitch' ? Boolean(auth?.twitch) : false;
+  const platformAuth =
+    platform === 'twitch' ? auth?.twitch : platform === 'kick' ? auth?.kick : null;
+  const authed = Boolean(platformAuth);
   const placeholder = !authed
-    ? platform === 'twitch'
-      ? 'Log in to Twitch to chat'
-      : 'Sending for this platform arrives in Phase 2b-2'
+    ? platform === 'twitch' || platform === 'kick'
+      ? `Log in to ${platform[0].toUpperCase()}${platform.slice(1)} to chat`
+      : 'Sending for this platform arrives in Phase 2b-3'
     : 'Send a message…  —  `:` for emotes, `@` for mentions';
 
   // Cache emotes per-channel
@@ -153,7 +155,7 @@ export default function Composer({ channelKey, platform, auth, mentionCandidates
       )}
       <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
         <div className="rx-mono rx-chiclet" style={{ color: 'var(--zinc-600)' }}>
-          {authed ? `@${auth.twitch.login}` : platform}
+          {authed ? `@${platformAuth.login}` : platform}
         </div>
         <input
           ref={inputRef}

@@ -1,5 +1,6 @@
 pub mod emotes;
 mod irc;
+mod kick;
 pub mod log_store;
 pub mod models;
 mod twitch;
@@ -21,7 +22,7 @@ use crate::platforms::Platform;
 
 pub struct ChatManager {
     app: AppHandle,
-    http: reqwest::Client,
+    pub(crate) http: reqwest::Client,
     emotes: Arc<EmoteCache>,
     connections: Mutex<HashMap<String, ConnectionHandle>>,
 }
@@ -92,13 +93,8 @@ impl ChatManager {
         match platform {
             Platform::Twitch => {
                 let (tx, rx) = mpsc::unbounded_channel::<String>();
-
-                // Best-effort auth — if the keyring has a token + identity
-                // we'll use it; otherwise the connection drops to anonymous
-                // justinfan. No /validate round-trip here.
                 let auth = auth::twitch::stored_auth_pair()
                     .map(|(login, token)| twitch::TwitchAuth { login, token });
-
                 let cfg = twitch::TwitchChatConfig {
                     app: self.app.clone(),
                     channel_key: unique_key.clone(),
@@ -114,9 +110,26 @@ impl ChatManager {
                     .lock()
                     .insert(unique_key, ConnectionHandle { task, outbound: tx });
             }
+            Platform::Kick => {
+                let (tx, rx) = mpsc::unbounded_channel::<String>();
+                let cfg = kick::KickChatConfig {
+                    app: self.app.clone(),
+                    http: self.http.clone(),
+                    channel_key: unique_key.clone(),
+                    channel_slug: channel_id,
+                    emotes: Arc::clone(&self.emotes),
+                    outbound: rx,
+                };
+                let task = async_runtime::spawn(async move {
+                    kick::run(cfg).await;
+                });
+                self.connections
+                    .lock()
+                    .insert(unique_key, ConnectionHandle { task, outbound: tx });
+            }
             _ => {
-                // Kick / YouTube / Chaturbate wired in Phase 2b+.
-                log::info!("chat connect for {platform:?} not yet supported");
+                // YouTube / Chaturbate use embedded webviews, not Rust-side chat.
+                log::info!("chat connect for {platform:?} uses embedded webview");
             }
         }
         Ok(())

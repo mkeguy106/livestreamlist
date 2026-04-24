@@ -30,6 +30,8 @@ export const replayChatHistory = (uniqueKey, limit = 100) =>
 export const authStatus = () => invoke('auth_status');
 export const twitchLogin = () => invoke('twitch_login');
 export const twitchLogout = () => invoke('twitch_logout');
+export const kickLogin = () => invoke('kick_login');
+export const kickLogout = () => invoke('kick_logout');
 export const openUrl = (url) => invoke('open_url', { url });
 export const listSocials = (uniqueKey) => invoke('list_socials', { uniqueKey });
 
@@ -67,7 +69,7 @@ const MOCK_LIVE = {
 };
 
 let mockChannels = [...MOCK_CHANNELS];
-let mockAuth = { twitch: null };
+let mockAuth = { twitch: null, kick: null };
 
 function mockSnapshot() {
   const nowIso = new Date().toISOString();
@@ -182,10 +184,16 @@ async function mockInvoke(name, args) {
     case 'auth_status':
       return mockAuth;
     case 'twitch_login':
-      mockAuth = { twitch: { login: 'mock_user', user_id: '0', scopes: ['chat:edit'] } };
+      mockAuth = { ...mockAuth, twitch: { login: 'mock_user', user_id: '0', scopes: ['chat:edit'] } };
       return mockAuth.twitch;
     case 'twitch_logout':
-      mockAuth = { twitch: null };
+      mockAuth = { ...mockAuth, twitch: null };
+      return null;
+    case 'kick_login':
+      mockAuth = { ...mockAuth, kick: { login: 'mock_kick', user_id: '0' } };
+      return mockAuth.kick;
+    case 'kick_logout':
+      mockAuth = { ...mockAuth, kick: null };
       return null;
     case 'chat_send':
       mockEmit(`chat:message:${args.uniqueKey}`, {

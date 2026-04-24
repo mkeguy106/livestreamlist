@@ -105,9 +105,10 @@ async fn read_loop(
                     WsMessage::Frame(_) => {}
                 }
             }
-            Some(outbound) = cfg.outbound.recv() => {
-                // Outbound line already in IRC-wire form (e.g. "PRIVMSG #room :hello").
-                if let Err(e) = ws.send(WsMessage::Text(outbound)).await {
+            Some(text) = cfg.outbound.recv() => {
+                // Outbound is user text — format as PRIVMSG on the way out.
+                let line = format!("PRIVMSG #{} :{}", cfg.channel_login.to_ascii_lowercase(), text);
+                if let Err(e) = ws.send(WsMessage::Text(line)).await {
                     log::warn!("twitch outbound send failed: {e:#}");
                 }
             }
