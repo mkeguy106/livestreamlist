@@ -19,7 +19,7 @@ mod users;
 use channels::{Channel, ChannelStore, Livestream, SharedStore};
 use chat::ChatManager;
 use notify::NotifyTracker;
-use platforms::{parse_channel_input, Platform};
+use platforms::{parse_channel_input, pronouns::PronounsCache, Platform};
 use player::PlayerManager;
 use settings::{SharedSettings, Settings};
 use users::{UserMetadata, UserMetadataPatch, UserStore};
@@ -30,6 +30,7 @@ struct AppState {
     notifier: Arc<NotifyTracker>,
     settings: SharedSettings,
     users: Arc<UserStore>,
+    pronouns: Arc<PronounsCache>,
 }
 
 impl AppState {
@@ -56,12 +57,14 @@ impl AppState {
                 panic!("could not even fall back to /dev/null user store")
             })
         }));
+        let pronouns = PronounsCache::new(http.clone());
         Ok(Self {
             store: Arc::new(Mutex::new(store)),
             http,
             notifier: Arc::new(NotifyTracker::new()),
             settings: Arc::new(parking_lot::RwLock::new(settings)),
             users,
+            pronouns,
         })
     }
 }
@@ -489,6 +492,36 @@ fn set_user_metadata(
 }
 
 #[tauri::command]
+async fn get_user_profile(
+    state: State<'_, AppState>,
+    channel_key: String,
+    user_id: String,
+    login: String,
+) -> Result<platforms::twitch_users::UserProfile, String> {
+    let broadcaster_login = channel_key
+        .strip_prefix("twitch:")
+        .ok_or_else(|| format!("non-twitch channel_key {channel_key}"))?;
+
+    let broadcaster_id = platforms::twitch_users::fetch_user_by_login(
+        &state.http,
+        broadcaster_login,
+    )
+    .await
+    .map_err(err_string)?
+    .id;
+
+    platforms::twitch_users::build_profile(
+        &state.http,
+        &state.pronouns,
+        &broadcaster_id,
+        &user_id,
+        &login,
+    )
+    .await
+    .map_err(err_string)
+}
+
+#[tauri::command]
 fn list_emotes(
     unique_key: String,
     chat: State<'_, Arc<ChatManager>>,
@@ -705,6 +738,7 @@ pub fn run() {
             update_settings,
             get_user_metadata,
             set_user_metadata,
+            get_user_profile,
             auth_status,
             twitch_login,
             twitch_logout,
