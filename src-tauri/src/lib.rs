@@ -10,6 +10,7 @@ mod config;
 mod notify;
 mod platforms;
 mod refresh;
+mod settings;
 mod streamlink;
 mod tray;
 
@@ -17,11 +18,13 @@ use channels::{Channel, ChannelStore, Livestream, SharedStore};
 use chat::ChatManager;
 use notify::NotifyTracker;
 use platforms::{parse_channel_input, Platform};
+use settings::{SharedSettings, Settings};
 
 struct AppState {
     store: SharedStore,
     http: reqwest::Client,
     notifier: Arc<NotifyTracker>,
+    settings: SharedSettings,
 }
 
 impl AppState {
@@ -35,10 +38,15 @@ impl AppState {
             ))
             .timeout(std::time::Duration::from_secs(15))
             .build()?;
+        let settings = settings::load().unwrap_or_else(|e| {
+            log::warn!("settings load failed, using defaults: {e:#}");
+            Settings::default()
+        });
         Ok(Self {
             store: Arc::new(Mutex::new(store)),
             http,
             notifier: Arc::new(NotifyTracker::new()),
+            settings: Arc::new(parking_lot::RwLock::new(settings)),
         })
     }
 }
@@ -112,7 +120,14 @@ async fn refresh_all(
     // Fire desktop notifications for offline→live transitions, and update
     // the tray tooltip with the new counts.
     let channels = state.store.lock().channels().to_vec();
-    notifier.detect_and_notify(&app, &channels, &snapshot);
+    let notify_enabled = state.settings.read().general.notify_on_live;
+    if notify_enabled {
+        notifier.detect_and_notify(&app, &channels, &snapshot);
+    } else {
+        // Still advance the tracker so re-enabling doesn't retro-fire every
+        // currently-live channel.
+        notifier.seed(&snapshot);
+    }
     let live = snapshot.iter().filter(|l| l.is_live).count();
     tray::update_tooltip(&app, live, snapshot.len());
 
@@ -296,6 +311,28 @@ fn chat_connect(
 fn chat_disconnect(unique_key: String, chat: State<'_, Arc<ChatManager>>) -> Result<(), String> {
     chat.disconnect(&unique_key);
     Ok(())
+}
+
+#[tauri::command]
+fn get_settings(state: State<'_, AppState>) -> Settings {
+    state.settings.read().clone()
+}
+
+#[tauri::command]
+fn update_settings(
+    state: State<'_, AppState>,
+    patch: Settings,
+) -> Result<Settings, String> {
+    {
+        let mut g = state.settings.write();
+        *g = patch;
+    }
+    let snapshot = state.settings.read().clone();
+    if let Err(e) = settings::save(&snapshot) {
+        log::warn!("saving settings failed: {e:#}");
+        return Err(err_string(e));
+    }
+    Ok(snapshot)
 }
 
 #[tauri::command]
@@ -507,6 +544,8 @@ pub fn run() {
             chat_open_popout,
             list_emotes,
             replay_chat_history,
+            get_settings,
+            update_settings,
             auth_status,
             twitch_login,
             twitch_logout,

@@ -28,6 +28,18 @@ impl NotifyTracker {
         Self::default()
     }
 
+    /// Advance the tracker without emitting. Used when notifications are
+    /// disabled so toggling them back on doesn't retro-fire every currently
+    /// live channel.
+    pub fn seed(&self, snapshot: &[Livestream]) {
+        *self.seeded.lock() = true;
+        let mut prev = self.prev.lock();
+        prev.clear();
+        for ls in snapshot {
+            prev.insert(ls.unique_key.clone(), ls.is_live);
+        }
+    }
+
     /// Note: `channels` drives the `dont_notify` lookup; snapshot supplies
     /// the transient live state. Caller supplies both so we don't need to
     /// hold the store lock.

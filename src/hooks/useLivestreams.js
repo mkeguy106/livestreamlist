@@ -1,13 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { listLivestreams, refreshAll } from '../ipc.js';
 
-const REFRESH_MS = 60_000;
+const DEFAULT_REFRESH_MS = 60_000;
 
 /**
  * Shared livestream state — seeds from the cached snapshot, then kicks off a
- * real refresh and continues polling while mounted.
+ * real refresh and continues polling while mounted. The poll interval comes
+ * from the preferences general.refresh_interval_seconds (in seconds).
  */
-export function useLivestreams() {
+export function useLivestreams({ intervalSeconds } = {}) {
+  const intervalMs =
+    typeof intervalSeconds === 'number' && intervalSeconds >= 15
+      ? intervalSeconds * 1000
+      : DEFAULT_REFRESH_MS;
   const [livestreams, setLivestreams] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -36,12 +41,12 @@ export function useLivestreams() {
       } catch {}
       refresh();
     })();
-    const id = setInterval(refresh, REFRESH_MS);
+    const id = setInterval(refresh, intervalMs);
     return () => {
       mounted.current = false;
       clearInterval(id);
     };
-  }, [refresh]);
+  }, [refresh, intervalMs]);
 
   return { livestreams, loading, error, refresh };
 }

@@ -33,6 +33,8 @@ export const twitchLogin = () => invoke('twitch_login');
 export const twitchLogout = () => invoke('twitch_logout');
 export const kickLogin = () => invoke('kick_login');
 export const kickLogout = () => invoke('kick_logout');
+export const getSettings = () => invoke('get_settings');
+export const updateSettings = (patch) => invoke('update_settings', { patch });
 export const openUrl = (url) => invoke('open_url', { url });
 export const listSocials = (uniqueKey) => invoke('list_socials', { uniqueKey });
 
@@ -71,6 +73,11 @@ const MOCK_LIVE = {
 
 let mockChannels = [...MOCK_CHANNELS];
 let mockAuth = { twitch: null, kick: null };
+let mockSettings = {
+  general: { refresh_interval_seconds: 60, notify_on_live: true, close_to_tray: false },
+  appearance: { default_layout: 'command', accent_override: '', live_color_override: '' },
+  chat: { timestamp_24h: true, history_replay_count: 100 },
+};
 
 function mockSnapshot() {
   const nowIso = new Date().toISOString();
@@ -199,6 +206,11 @@ async function mockInvoke(name, args) {
     case 'kick_logout':
       mockAuth = { ...mockAuth, kick: null };
       return null;
+    case 'get_settings':
+      return mockSettings;
+    case 'update_settings':
+      mockSettings = args.patch;
+      return mockSettings;
     case 'chat_send':
       mockEmit(`chat:message:${args.uniqueKey}`, {
         id: `self-${Date.now()}`,

@@ -5,8 +5,10 @@ import Focus from './directions/Focus.jsx';
 import AddChannelDialog from './components/AddChannelDialog.jsx';
 import LoginButton from './components/LoginButton.jsx';
 import WindowControls from './components/WindowControls.jsx';
+import PreferencesDialog from './components/PreferencesDialog.jsx';
 import { useDragHandler } from './hooks/useDragRegion.js';
 import { useLivestreams } from './hooks/useLivestreams.js';
+import { usePreferences } from './hooks/usePreferences.js';
 import { launchStream, listenEvent, openInBrowser, removeChannel, setFavorite } from './ipc.js';
 
 const LAYOUTS = [
@@ -27,10 +29,39 @@ function loadInitialLayout() {
 export default function App() {
   const [layoutId, setLayoutId] = useState(loadInitialLayout);
   const [addOpen, setAddOpen] = useState(false);
+  const [prefsOpen, setPrefsOpen] = useState(false);
   const [selectedKey, setSelectedKey] = useState(null);
 
-  const { livestreams, loading, error, refresh } = useLivestreams();
+  const { settings } = usePreferences();
+  const intervalSeconds = settings?.general?.refresh_interval_seconds;
+  const { livestreams, loading, error, refresh } = useLivestreams({ intervalSeconds });
   const onTitlebarMouseDown = useDragHandler();
+
+  // Apply appearance overrides to CSS variables on the root.
+  useEffect(() => {
+    const root = document.documentElement;
+    const accent = settings?.appearance?.accent_override;
+    const live = settings?.appearance?.live_color_override;
+    if (accent && /^#[0-9a-f]{6}$/i.test(accent)) {
+      root.style.setProperty('--zinc-100', accent);
+    } else {
+      root.style.removeProperty('--zinc-100');
+    }
+    if (live && /^#[0-9a-f]{6}$/i.test(live)) {
+      root.style.setProperty('--live', live);
+    } else {
+      root.style.removeProperty('--live');
+    }
+  }, [settings?.appearance?.accent_override, settings?.appearance?.live_color_override]);
+
+  // Honor default layout on first launch (i.e. when localStorage hasn't been
+  // written yet by a user-driven switch).
+  useEffect(() => {
+    const saved = (() => { try { return localStorage.getItem(STORAGE_KEY); } catch { return null; } })();
+    if (saved) return;
+    const def = settings?.appearance?.default_layout;
+    if (def && LAYOUTS.some((l) => l.id === def)) setLayoutId(def);
+  }, [settings?.appearance?.default_layout]);
 
   // Default selection: first live channel, else first in list.
   useEffect(() => {
@@ -59,6 +90,9 @@ export default function App() {
         setAddOpen(true);
       } else if (e.key.toLowerCase() === 'r' && !(e.metaKey || e.ctrlKey)) {
         refresh();
+      } else if ((e.metaKey || e.ctrlKey) && e.key === ',') {
+        e.preventDefault();
+        setPrefsOpen(true);
       }
     };
     document.addEventListener('keydown', onKey);
@@ -138,6 +172,15 @@ export default function App() {
         <div className="rx-tb-label rx-mono">{rightLabel}</div>
         {error && <div className="rx-tb-label rx-mono" style={{ color: '#f87171' }}>· refresh failed</div>}
         <div style={{ width: 8 }} />
+        <button
+          type="button"
+          className="rx-btn rx-btn-ghost"
+          onClick={() => setPrefsOpen(true)}
+          title="Preferences (⌘,)"
+          style={{ padding: '2px 6px', fontSize: 10 }}
+        >
+          ⚙
+        </button>
         <LoginButton />
         <div style={{ width: 4 }} />
         <WindowControls />
@@ -156,6 +199,7 @@ export default function App() {
       </main>
 
       <AddChannelDialog open={addOpen} onClose={() => setAddOpen(false)} onAdded={refresh} />
+      <PreferencesDialog open={prefsOpen} onClose={() => setPrefsOpen(false)} />
     </div>
   );
 }
