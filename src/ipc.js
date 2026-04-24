@@ -20,6 +20,8 @@ export const removeChannel = (uniqueKey) => invoke('remove_channel', { uniqueKey
 export const setFavorite = (uniqueKey, favorite) => invoke('set_favorite', { uniqueKey, favorite });
 export const refreshAll = () => invoke('refresh_all');
 export const launchStream = (uniqueKey, quality) => invoke('launch_stream', { uniqueKey, quality });
+export const stopStream = (uniqueKey) => invoke('stop_stream', { uniqueKey });
+export const listPlaying = () => invoke('list_playing');
 export const openInBrowser = (uniqueKey) => invoke('open_in_browser', { uniqueKey });
 export const chatConnect = (uniqueKey) => invoke('chat_connect', { uniqueKey });
 export const chatDisconnect = (uniqueKey) => invoke('chat_disconnect', { uniqueKey });
@@ -74,6 +76,7 @@ const MOCK_LIVE = {
 
 let mockChannels = [...MOCK_CHANNELS];
 let mockAuth = { twitch: null, kick: null };
+const mockPlaying = new Set();
 let mockSettings = {
   general: { refresh_interval_seconds: 60, notify_on_live: true, close_to_tray: false },
   appearance: { default_layout: 'command', accent_override: '', live_color_override: '' },
@@ -250,7 +253,17 @@ async function mockInvoke(name, args) {
       return true;
     case 'launch_stream':
       console.warn('[mock] launch_stream', args);
+      mockPlaying.add(args.uniqueKey);
+      mockEmit('player:state', { playing: [...mockPlaying] });
       return 0;
+    case 'stop_stream':
+      if (mockPlaying.delete(args.uniqueKey)) {
+        mockEmit('player:state', { playing: [...mockPlaying] });
+        return true;
+      }
+      return false;
+    case 'list_playing':
+      return [...mockPlaying];
     case 'open_in_browser': {
       const c = mockChannels.find((c) => `${c.platform}:${c.channel_id}` === args.uniqueKey);
       if (c) {

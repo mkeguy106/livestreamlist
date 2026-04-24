@@ -9,6 +9,7 @@ mod chat;
 mod config;
 mod notify;
 mod platforms;
+mod player;
 mod refresh;
 mod settings;
 mod streamlink;
@@ -18,6 +19,7 @@ use channels::{Channel, ChannelStore, Livestream, SharedStore};
 use chat::ChatManager;
 use notify::NotifyTracker;
 use platforms::{parse_channel_input, Platform};
+use player::PlayerManager;
 use settings::{SharedSettings, Settings};
 
 struct AppState {
@@ -139,6 +141,7 @@ fn launch_stream(
     unique_key: String,
     quality: Option<String>,
     state: State<'_, AppState>,
+    player: State<'_, Arc<PlayerManager>>,
 ) -> Result<u32, String> {
     let channel = state
         .store
@@ -148,12 +151,25 @@ fn launch_stream(
         .find(|c| c.unique_key() == unique_key)
         .cloned()
         .ok_or_else(|| format!("unknown channel {unique_key}"))?;
-    streamlink::launch(
-        channel.platform,
-        &channel.channel_id,
-        quality.as_deref().unwrap_or("best"),
-    )
-    .map_err(err_string)
+    player
+        .launch(
+            channel.unique_key(),
+            channel.platform,
+            &channel.channel_id,
+            quality.as_deref().unwrap_or("best"),
+            None, // Turbo lives on a sibling branch; wire up when it lands
+        )
+        .map_err(err_string)
+}
+
+#[tauri::command]
+fn stop_stream(unique_key: String, player: State<'_, Arc<PlayerManager>>) -> bool {
+    player.stop(&unique_key)
+}
+
+#[tauri::command]
+fn list_playing(player: State<'_, Arc<PlayerManager>>) -> Vec<String> {
+    player.playing()
 }
 
 #[derive(serde::Serialize)]
@@ -584,6 +600,8 @@ pub fn run() {
             }
             let chat_mgr = ChatManager::new(app.handle().clone(), http_for_chat.clone());
             app.manage(chat_mgr);
+            let player_mgr = Arc::new(PlayerManager::new(app.handle().clone()));
+            app.manage(player_mgr);
             tray::build(&app.handle())?;
             Ok(())
         })
@@ -595,6 +613,8 @@ pub fn run() {
             set_favorite,
             refresh_all,
             launch_stream,
+            stop_stream,
+            list_playing,
             open_in_browser,
             open_url,
             list_socials,

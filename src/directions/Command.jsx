@@ -2,9 +2,13 @@
  * Sidebar rail (all channels) + main pane showing the selected channel.
  */
 
+import { useState } from 'react';
 import ChatView from '../components/ChatView.jsx';
+import ContextMenu from '../components/ContextMenu.jsx';
 import SocialsBanner from '../components/SocialsBanner.jsx';
 import TitleBanner from '../components/TitleBanner.jsx';
+import { usePlayerState } from '../hooks/usePlayerState.js';
+import { stopStream } from '../ipc.js';
 import { formatUptime, formatViewers } from '../utils/format.js';
 
 export default function Command({ ctx }) {
@@ -15,8 +19,12 @@ export default function Command({ ctx }) {
     openAddDialog,
     launchStream,
     openInBrowser,
+    removeChannel,
     setFavorite,
   } = ctx;
+
+  const playing = usePlayerState();
+  const [menu, setMenu] = useState(null); // { x, y, channel }
 
   // Sort: live first (by viewers desc), then offline alpha
   const sorted = [...livestreams].sort((a, b) => {
@@ -53,11 +61,21 @@ export default function Command({ ctx }) {
           <div style={{ flex: 1, overflowY: 'auto' }}>
             {sorted.map((ch) => {
               const active = ch.unique_key === selected?.unique_key;
+              const isPlaying = playing.has(ch.unique_key);
               return (
                 <button
                   key={ch.unique_key}
                   type="button"
                   onClick={() => setSelectedKey(ch.unique_key)}
+                  onDoubleClick={() => {
+                    if (ch.is_live) launchStream(ch.unique_key);
+                  }}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    setSelectedKey(ch.unique_key);
+                    setMenu({ x: e.clientX, y: e.clientY, channel: ch });
+                  }}
+                  title={ch.is_live ? 'Double-click to play' : undefined}
                   style={{
                     width: '100%',
                     textAlign: 'left',
@@ -83,6 +101,18 @@ export default function Command({ ctx }) {
                       <span style={{ fontSize: 'var(--t-12)', color: 'var(--zinc-100)', fontWeight: 500 }}>
                         {ch.display_name}
                       </span>
+                      {isPlaying && (
+                        <span
+                          title="Playing"
+                          style={{
+                            color: 'var(--ok)',
+                            fontSize: 9,
+                            lineHeight: 1,
+                          }}
+                        >
+                          ▶
+                        </span>
+                      )}
                       <span className={`rx-plat ${ch.platform.charAt(0)}`}>{ch.platform.charAt(0).toUpperCase()}</span>
                     </div>
                     <div
@@ -145,6 +175,59 @@ export default function Command({ ctx }) {
           )}
         </div>
       </div>
+      {menu && (
+        <ContextMenu
+          x={menu.x}
+          y={menu.y}
+          onClose={() => setMenu(null)}
+        >
+          <ContextMenu.Item
+            disabled={!menu.channel.is_live || playing.has(menu.channel.unique_key)}
+            onClick={() => {
+              launchStream(menu.channel.unique_key);
+              setMenu(null);
+            }}
+          >
+            {menu.channel.is_live ? 'Play' : 'Play (offline)'}
+          </ContextMenu.Item>
+          <ContextMenu.Item
+            disabled={!playing.has(menu.channel.unique_key)}
+            onClick={() => {
+              stopStream(menu.channel.unique_key).catch(() => {});
+              setMenu(null);
+            }}
+          >
+            Stop
+          </ContextMenu.Item>
+          <ContextMenu.Item
+            onClick={() => {
+              openInBrowser(menu.channel.unique_key);
+              setMenu(null);
+            }}
+          >
+            Open in browser
+          </ContextMenu.Item>
+          <ContextMenu.Separator />
+          <ContextMenu.Item
+            onClick={() => {
+              setFavorite(menu.channel.unique_key, true);
+              setMenu(null);
+            }}
+          >
+            Pin as favorite
+          </ContextMenu.Item>
+          <ContextMenu.Separator />
+          <ContextMenu.Item
+            danger
+            onClick={() => {
+              removeChannel(menu.channel.unique_key);
+              setMenu(null);
+            }}
+          >
+            Delete channel
+          </ContextMenu.Item>
+        </ContextMenu>
+      )}
     </>
   );
 }
