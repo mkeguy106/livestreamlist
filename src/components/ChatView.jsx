@@ -29,9 +29,11 @@ export default function ChatView({
   const { messages, status, pauseTrim, resumeTrim } = useChat(channelKey);
   const auth = useAuth();
   const listRef = useRef(null);
+  const contentRef = useRef(null);
   const pauseTimerRef = useRef(null);
   const countdownTimerRef = useRef(null);
   const suppressScrollRef = useRef(false); // ignore the onScroll fired by our own scrollTop=maximum
+  const autoScrollRef = useRef(true); // stable value for ResizeObserver callback closure
   const [autoScroll, setAutoScroll] = useState(true);
   const [pauseSecondsLeft, setPauseSecondsLeft] = useState(0);
   const [conversation, setConversation] = useState(null);
@@ -108,11 +110,32 @@ export default function ChatView({
     }, 1000);
   }, [clearTimers, pauseTrim, resumeAutoScroll]);
 
+  // Mirror autoScroll into a ref so the ResizeObserver callback always
+  // reads the latest value (the callback captures its closure at observe
+  // time; without this it'd stick to whatever autoScroll was on mount).
+  useEffect(() => {
+    autoScrollRef.current = autoScroll;
+  }, [autoScroll]);
+
   // Stick to bottom on new messages when auto-scroll is on.
   useEffect(() => {
     if (!autoScroll) return;
     scrollToBottom();
   }, [messages.length, autoScroll, scrollToBottom]);
+
+  // Emote images start at 0px and grow when they load — that grows the
+  // scrollHeight AFTER our scrollToBottom ran, leaving the latest row
+  // just below the visible area. Observe the content and re-pin on any
+  // size change while we're auto-following.
+  useEffect(() => {
+    const el = contentRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(() => {
+      if (autoScrollRef.current) scrollToBottom();
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [scrollToBottom]);
 
   // Cleanup on unmount / channel change.
   useEffect(() => () => clearTimers(), [clearTimers]);
@@ -152,21 +175,27 @@ export default function ChatView({
           style={{
             height: '100%',
             overflowY: 'auto',
-            padding: variant === 'compact' ? '4px 10px 8px' : '6px 0',
             fontSize: variant === 'compact' ? 'var(--t-11)' : 'var(--t-12)',
             lineHeight: 1.45,
           }}
         >
-          {messages.length === 0 && <EmptyHint status={status} />}
-          {messages.map((m) =>
-            m.system ? (
-              <SystemRow key={m.id} m={m} variant={variant} />
-            ) : variant === 'compact' ? (
-              <CompactRow key={m.id} m={m} myLogin={myLogin} onOpenThread={openConversation} />
-            ) : (
-              <IrcRow key={m.id} m={m} myLogin={myLogin} onOpenThread={openConversation} />
-            ),
-          )}
+          <div
+            ref={contentRef}
+            style={{
+              padding: variant === 'compact' ? '4px 10px 8px' : '6px 0',
+            }}
+          >
+            {messages.length === 0 && <EmptyHint status={status} />}
+            {messages.map((m) =>
+              m.system ? (
+                <SystemRow key={m.id} m={m} variant={variant} />
+              ) : variant === 'compact' ? (
+                <CompactRow key={m.id} m={m} myLogin={myLogin} onOpenThread={openConversation} />
+              ) : (
+                <IrcRow key={m.id} m={m} myLogin={myLogin} onOpenThread={openConversation} />
+              ),
+            )}
+          </div>
         </div>
         {!autoScroll && (
           <div
