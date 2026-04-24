@@ -522,6 +522,30 @@ async fn get_user_profile(
 }
 
 #[tauri::command]
+fn get_user_messages(
+    state: State<'_, AppState>,
+    channel_key: String,
+    user_id: String,
+    limit: usize,
+) -> Result<Vec<chat::models::ChatMessage>, String> {
+    let channel = state
+        .store
+        .lock()
+        .channels()
+        .iter()
+        .find(|c| c.unique_key() == channel_key)
+        .cloned()
+        .ok_or_else(|| format!("unknown channel {channel_key}"))?;
+    chat::log_store::read_user_messages(
+        channel.platform,
+        &channel.channel_id,
+        &user_id,
+        limit.min(1000),
+    )
+    .map_err(err_string)
+}
+
+#[tauri::command]
 fn list_emotes(
     unique_key: String,
     chat: State<'_, Arc<ChatManager>>,
@@ -739,6 +763,7 @@ pub fn run() {
             get_user_metadata,
             set_user_metadata,
             get_user_profile,
+            get_user_messages,
             auth_status,
             twitch_login,
             twitch_logout,
