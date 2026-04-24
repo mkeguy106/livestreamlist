@@ -23,7 +23,10 @@ export const launchStream = (uniqueKey, quality) => invoke('launch_stream', { un
 export const openInBrowser = (uniqueKey) => invoke('open_in_browser', { uniqueKey });
 export const chatConnect = (uniqueKey) => invoke('chat_connect', { uniqueKey });
 export const chatDisconnect = (uniqueKey) => invoke('chat_disconnect', { uniqueKey });
+export const replayChatHistory = (uniqueKey, limit = 100) =>
+  invoke('replay_chat_history', { uniqueKey, limit });
 export const openUrl = (url) => invoke('open_url', { url });
+export const listSocials = (uniqueKey) => invoke('list_socials', { uniqueKey });
 
 /**
  * Subscribe to a Tauri-side event. Returns an unlisten function.
@@ -154,6 +157,14 @@ async function mockInvoke(name, args) {
     case 'chat_disconnect':
       stopMockChat(args.uniqueKey);
       return null;
+    case 'replay_chat_history':
+      return [];
+    case 'list_socials':
+      // Stub sample so the UI still shows something in browser-dev mode.
+      return [
+        { id: 'twitter', name: 'twitter', title: 'Twitter',  url: 'https://twitter.com/' },
+        { id: 'discord', name: 'discord', title: 'Discord',  url: 'https://discord.com/' },
+      ];
     case 'list_channels':
       return mockChannels;
     case 'add_channel_from_input': {

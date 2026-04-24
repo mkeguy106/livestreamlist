@@ -3,6 +3,7 @@
  */
 
 import ChatView from '../components/ChatView.jsx';
+import SocialsBanner from '../components/SocialsBanner.jsx';
 import TitleBanner from '../components/TitleBanner.jsx';
 import { formatUptime, formatViewers } from '../utils/format.js';
 
@@ -139,6 +140,7 @@ export default function Focus({ ctx }) {
                   </span>
                 </div>
                 <TitleBanner channel={featured} />
+                <SocialsBanner channelKey={featured?.unique_key} />
               </>
             }
           />

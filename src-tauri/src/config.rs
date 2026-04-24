@@ -9,6 +9,20 @@ pub fn config_dir() -> Result<PathBuf> {
     Ok(dir)
 }
 
+pub fn data_dir() -> Result<PathBuf> {
+    let base = dirs::data_local_dir().context("no XDG data dir")?;
+    let dir = base.join("livestreamlist");
+    std::fs::create_dir_all(&dir)
+        .with_context(|| format!("creating data dir {}", dir.display()))?;
+    Ok(dir)
+}
+
+pub fn logs_dir() -> Result<PathBuf> {
+    let dir = data_dir()?.join("logs");
+    std::fs::create_dir_all(&dir)?;
+    Ok(dir)
+}
+
 pub fn channels_path() -> Result<PathBuf> {
     Ok(config_dir()?.join("channels.json"))
 }

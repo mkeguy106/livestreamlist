@@ -30,6 +30,29 @@ query ChannelLive($login: String!) {
 }
 "#;
 
+const SOCIALS_QUERY: &str = r#"
+query ChannelSocials($login: String!) {
+  user(login: $login) {
+    channel {
+      socialMedias {
+        id
+        name
+        title
+        url
+      }
+    }
+  }
+}
+"#;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SocialLink {
+    pub id: String,
+    pub name: String,
+    pub title: String,
+    pub url: String,
+}
+
 const BATCH_CAP: usize = 35;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -134,6 +157,38 @@ fn parse_live(user: &Value, requested_login: &str) -> Option<TwitchLive> {
         profile_image_url,
         stream,
     })
+}
+
+/// Fetch the channel's social-media links. Returns an empty list on 404 or
+/// an otherwise clean request; errors only on transport / malformed response.
+pub async fn fetch_socials(client: &reqwest::Client, login: &str) -> Result<Vec<SocialLink>> {
+    let body = json!({ "query": SOCIALS_QUERY, "variables": { "login": login } });
+    let resp = client
+        .post(GQL_URL)
+        .header("Client-ID", PUBLIC_CLIENT_ID)
+        .json(&body)
+        .send()
+        .await
+        .context("POST gql.twitch.tv (socials)")?;
+    if !resp.status().is_success() {
+        anyhow::bail!("Twitch socials {}: {}", resp.status(), resp.text().await.unwrap_or_default());
+    }
+    let data: Value = resp.json().await?;
+
+    let Some(list) = data.pointer("/data/user/channel/socialMedias").and_then(|v| v.as_array())
+    else { return Ok(Vec::new()) };
+
+    Ok(list
+        .iter()
+        .filter_map(|e| {
+            Some(SocialLink {
+                id: e.get("id")?.as_str()?.to_string(),
+                name: e.get("name")?.as_str()?.to_string(),
+                title: e.get("title").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                url: e.get("url")?.as_str()?.to_string(),
+            })
+        })
+        .collect())
 }
 
 fn parse_stream(s: &Value) -> Option<TwitchStream> {

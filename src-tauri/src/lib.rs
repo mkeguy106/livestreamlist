@@ -123,6 +123,28 @@ fn launch_stream(
 }
 
 #[tauri::command]
+async fn list_socials(
+    unique_key: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<platforms::twitch::SocialLink>, String> {
+    let channel = state
+        .store
+        .lock()
+        .channels()
+        .iter()
+        .find(|c| c.unique_key() == unique_key)
+        .cloned()
+        .ok_or_else(|| format!("unknown channel {unique_key}"))?;
+    match channel.platform {
+        Platform::Twitch => platforms::twitch::fetch_socials(&state.http, &channel.channel_id)
+            .await
+            .map_err(err_string),
+        // Other platforms land in Phase 3b+.
+        _ => Ok(Vec::new()),
+    }
+}
+
+#[tauri::command]
 fn open_url(url: String) -> Result<(), String> {
     // Only http(s) — don't let the renderer hand us file:// or javascript: URIs.
     if !(url.starts_with("http://") || url.starts_with("https://")) {
@@ -154,6 +176,24 @@ fn chat_connect(
 fn chat_disconnect(unique_key: String, chat: State<'_, Arc<ChatManager>>) -> Result<(), String> {
     chat.disconnect(&unique_key);
     Ok(())
+}
+
+#[tauri::command]
+fn replay_chat_history(
+    unique_key: String,
+    limit: usize,
+    state: State<'_, AppState>,
+) -> Result<Vec<chat::models::ChatMessage>, String> {
+    let channel = state
+        .store
+        .lock()
+        .channels()
+        .iter()
+        .find(|c| c.unique_key() == unique_key)
+        .cloned()
+        .ok_or_else(|| format!("unknown channel {unique_key}"))?;
+    chat::log_store::read_recent(channel.platform, &channel.channel_id, limit.min(1000))
+        .map_err(err_string)
 }
 
 #[tauri::command]
@@ -230,8 +270,10 @@ pub fn run() {
             launch_stream,
             open_in_browser,
             open_url,
+            list_socials,
             chat_connect,
             chat_disconnect,
+            replay_chat_history,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

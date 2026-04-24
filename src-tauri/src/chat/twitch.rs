@@ -8,6 +8,7 @@ use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
 
 use super::emotes::{self, EmoteCache};
 use super::irc::{self, IrcMessage};
+use super::log_store::ChatLogWriter;
 use super::models::{
     ChatBadge, ChatMessage, ChatStatus, ChatStatusEvent, ChatUser, EmoteRange, ReplyInfo,
     SystemEvent,
@@ -55,7 +56,8 @@ async fn connect_and_read(cfg: &TwitchChatConfig) -> Result<()> {
 
     emit_status(&cfg.app, &cfg.channel_key, ChatStatus::Connected, None);
 
-    read_loop(cfg, &mut ws).await
+    let mut log = ChatLogWriter::open(Platform::Twitch, &cfg.channel_login).ok();
+    read_loop(cfg, &mut ws, log.as_mut()).await
 }
 
 fn rand_suffix() -> u32 {
@@ -70,12 +72,13 @@ fn rand_suffix() -> u32 {
 async fn read_loop(
     cfg: &TwitchChatConfig,
     ws: &mut WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>,
+    mut log: Option<&mut ChatLogWriter>,
 ) -> Result<()> {
     while let Some(frame) = ws.next().await {
         match frame? {
             WsMessage::Text(text) => {
                 for line in text.split("\r\n").filter(|l| !l.is_empty()) {
-                    handle_line(cfg, ws, line).await?;
+                    handle_line(cfg, ws, log.as_deref_mut(), line).await?;
                 }
             }
             WsMessage::Binary(_) => {}
@@ -85,12 +88,16 @@ async fn read_loop(
             WsMessage::Frame(_) => {}
         }
     }
+    if let Some(l) = log {
+        let _ = l.flush();
+    }
     Ok(())
 }
 
 async fn handle_line(
     cfg: &TwitchChatConfig,
     ws: &mut WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>,
+    log: Option<&mut ChatLogWriter>,
     line: &str,
 ) -> Result<()> {
     let Some(msg) = irc::parse(line) else { return Ok(()) };
@@ -102,24 +109,33 @@ async fn handle_line(
         }
         "PRIVMSG" => {
             if let Some(chat_msg) = build_privmsg(cfg, &msg) {
-                let _ = cfg
-                    .app
-                    .emit(&format!("chat:message:{}", cfg.channel_key), chat_msg);
+                persist_and_emit(cfg, log, chat_msg);
             }
         }
         "USERNOTICE" => {
             if let Some(chat_msg) = build_usernotice(cfg, &msg) {
-                let _ = cfg
-                    .app
-                    .emit(&format!("chat:message:{}", cfg.channel_key), chat_msg);
+                persist_and_emit(cfg, log, chat_msg);
             }
         }
         "NOTICE" | "ROOMSTATE" | "USERSTATE" | "GLOBALUSERSTATE" | "CLEARCHAT" | "CLEARMSG" => {
-            // Moderation / state events — Phase 3b.
+            // Moderation / state events — Phase 3b+.
         }
         _ => {}
     }
     Ok(())
+}
+
+fn persist_and_emit(
+    cfg: &TwitchChatConfig,
+    log: Option<&mut ChatLogWriter>,
+    msg: ChatMessage,
+) {
+    if let Some(l) = log {
+        if let Err(e) = l.append(&msg) {
+            log::warn!("chat log append failed for {}: {e:#}", cfg.channel_key);
+        }
+    }
+    let _ = cfg.app.emit(&format!("chat:message:{}", cfg.channel_key), msg);
 }
 
 fn build_privmsg(cfg: &TwitchChatConfig, msg: &IrcMessage<'_>) -> Option<ChatMessage> {

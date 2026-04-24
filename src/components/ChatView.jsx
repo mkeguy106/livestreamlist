@@ -1,5 +1,6 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useChat } from '../hooks/useChat.js';
+import ConversationDialog from './ConversationDialog.jsx';
 import EmoteText from './EmoteText.jsx';
 
 /**
@@ -20,6 +21,12 @@ export default function ChatView({
   const { messages, status } = useChat(channelKey);
   const listRef = useRef(null);
   const stickToBottom = useRef(true);
+  const [conversation, setConversation] = useState(null);
+
+  const openConversation = (userA, userB) => {
+    if (!userA || !userB || userA === userB) return;
+    setConversation({ a: userA, b: userB });
+  };
 
   useEffect(() => {
     const el = listRef.current;
@@ -60,13 +67,19 @@ export default function ChatView({
           m.system ? (
             <SystemRow key={m.id} m={m} variant={variant} />
           ) : variant === 'compact' ? (
-            <CompactRow key={m.id} m={m} />
+            <CompactRow key={m.id} m={m} onOpenThread={openConversation} />
           ) : (
-            <IrcRow key={m.id} m={m} />
+            <IrcRow key={m.id} m={m} onOpenThread={openConversation} />
           ),
         )}
       </div>
       {footer ?? <ComposerPlaceholder />}
+      <ConversationDialog
+        open={Boolean(conversation)}
+        messages={messages}
+        pair={conversation}
+        onClose={() => setConversation(null)}
+      />
     </div>
   );
 }
@@ -83,11 +96,16 @@ function EmptyHint({ status }) {
   );
 }
 
-function IrcRow({ m }) {
+function IrcRow({ m, onOpenThread }) {
   const time = formatTime(m.timestamp);
   return (
     <div style={{ padding: '1px 14px' }}>
-      {m.reply_to && <ReplyContextRow reply={m.reply_to} />}
+      {m.reply_to && (
+        <ReplyContextRow
+          reply={m.reply_to}
+          onClick={() => onOpenThread?.(m.user.login, m.reply_to.parent_login)}
+        />
+      )}
       <div
         style={{
           display: 'grid',
@@ -117,10 +135,16 @@ function IrcRow({ m }) {
   );
 }
 
-function CompactRow({ m }) {
+function CompactRow({ m, onOpenThread }) {
   return (
     <div style={{ padding: '1px 0' }}>
-      {m.reply_to && <ReplyContextRow reply={m.reply_to} compact />}
+      {m.reply_to && (
+        <ReplyContextRow
+          reply={m.reply_to}
+          compact
+          onClick={() => onOpenThread?.(m.user.login, m.reply_to.parent_login)}
+        />
+      )}
       <div style={{ display: 'flex', gap: 6, alignItems: 'baseline' }}>
         <span
           style={{
@@ -143,10 +167,15 @@ function CompactRow({ m }) {
   );
 }
 
-function ReplyContextRow({ reply, compact = false }) {
+function ReplyContextRow({ reply, compact = false, onClick }) {
   return (
-    <div
+    <button
+      type="button"
+      onClick={onClick}
+      title={`Click to view the thread — ${reply.parent_display_name}: ${reply.parent_text}`}
       style={{
+        all: 'unset',
+        cursor: onClick ? 'pointer' : 'default',
         display: 'flex',
         gap: 4,
         alignItems: 'baseline',
@@ -156,7 +185,6 @@ function ReplyContextRow({ reply, compact = false }) {
         marginLeft: compact ? 0 : 68,
         paddingRight: 8,
       }}
-      title={`Replying to ${reply.parent_display_name}: ${reply.parent_text}`}
     >
       <span style={{ color: 'var(--zinc-600)' }}>↩</span>
       <span style={{ color: 'var(--zinc-400)' }}>@{reply.parent_display_name}</span>
@@ -171,7 +199,7 @@ function ReplyContextRow({ reply, compact = false }) {
       >
         {reply.parent_text}
       </span>
-    </div>
+    </button>
   );
 }
 
