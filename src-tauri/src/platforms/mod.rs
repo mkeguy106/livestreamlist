@@ -27,6 +27,16 @@ impl Platform {
             Platform::Chaturbate => "chaturbate",
         }
     }
+
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "twitch" => Some(Platform::Twitch),
+            "youtube" => Some(Platform::Youtube),
+            "kick" => Some(Platform::Kick),
+            "chaturbate" => Some(Platform::Chaturbate),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

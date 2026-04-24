@@ -181,6 +181,12 @@ impl ChatManager {
         self.emotes.list_for_channel(channel_key)
     }
 
+    /// Snapshot of every channel_key with a live connection. Used by
+    /// `set_user_metadata` to fan out a `user_blocked` moderation event.
+    pub fn connected_keys(&self) -> Vec<String> {
+        self.connections.lock().keys().cloned().collect()
+    }
+
     /// Disconnect and reconnect every live chat connection on `platform`.
     /// Called on login/logout so running tasks pick up new credentials.
     pub fn reconnect_platform(

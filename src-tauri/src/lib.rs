@@ -1,7 +1,7 @@
 use chrono::Utc;
 use parking_lot::Mutex;
 use std::sync::Arc;
-use tauri::{Manager, State};
+use tauri::{Emitter, Manager, State};
 
 mod auth;
 mod channels;
@@ -22,7 +22,7 @@ use notify::NotifyTracker;
 use platforms::{parse_channel_input, Platform};
 use player::PlayerManager;
 use settings::{SharedSettings, Settings};
-use users::UserStore;
+use users::{UserMetadata, UserMetadataPatch, UserStore};
 
 struct AppState {
     store: SharedStore,
@@ -425,6 +425,70 @@ fn update_settings(
 }
 
 #[tauri::command]
+fn get_user_metadata(
+    user_key: String,
+    state: State<'_, AppState>,
+) -> Result<UserMetadata, String> {
+    let (platform_str, user_id) = user_key
+        .split_once(':')
+        .ok_or_else(|| format!("invalid user_key {user_key}"))?;
+    let platform = Platform::from_str(platform_str)
+        .ok_or_else(|| format!("unknown platform {platform_str}"))?;
+    Ok(state
+        .users
+        .get(&user_key)
+        .unwrap_or_else(|| UserMetadata::new_default(platform, user_id.to_string())))
+}
+
+#[tauri::command]
+fn set_user_metadata(
+    app: tauri::AppHandle,
+    chat: State<'_, Arc<ChatManager>>,
+    state: State<'_, AppState>,
+    user_key: String,
+    patch: UserMetadataPatch,
+) -> Result<UserMetadata, String> {
+    let (platform_str, user_id) = user_key
+        .split_once(':')
+        .ok_or_else(|| format!("invalid user_key {user_key}"))?;
+    let platform = Platform::from_str(platform_str)
+        .ok_or_else(|| format!("unknown platform {platform_str}"))?;
+
+    let was_blocked = state.users.is_blocked(&user_key);
+    let new_blocked = patch.blocked.unwrap_or(was_blocked);
+
+    let result = state
+        .users
+        .apply(&user_key, platform, user_id, patch)
+        .map_err(err_string)?;
+
+    // If we just transitioned to blocked, fan out a moderation event to every
+    // currently-connected channel so already-rendered messages get purged
+    // client-side. The per-channel chat task picks the same store up on the
+    // next message and drops it server-side.
+    if !was_blocked && new_blocked {
+        let login = if !result.last_known_login.is_empty() {
+            result.last_known_login.clone()
+        } else {
+            // Fall back to user_id so the frontend still has *something* to
+            // match against if the row was created without hints.
+            user_id.to_string()
+        };
+        for chan_key in chat.connected_keys() {
+            let ev = chat::models::ChatModerationEvent {
+                channel_key: chan_key.clone(),
+                kind: "user_blocked".into(),
+                target_login: Some(login.clone()),
+                target_msg_id: None,
+                duration_seconds: None,
+            };
+            let _ = app.emit(&format!("chat:moderation:{chan_key}"), ev);
+        }
+    }
+    Ok(result)
+}
+
+#[tauri::command]
 fn list_emotes(
     unique_key: String,
     chat: State<'_, Arc<ChatManager>>,
@@ -639,6 +703,8 @@ pub fn run() {
             replay_chat_history,
             get_settings,
             update_settings,
+            get_user_metadata,
+            set_user_metadata,
             auth_status,
             twitch_login,
             twitch_logout,
