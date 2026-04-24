@@ -6,17 +6,21 @@ use tauri::{Manager, State};
 mod channels;
 mod chat;
 mod config;
+mod notify;
 mod platforms;
 mod refresh;
 mod streamlink;
+mod tray;
 
 use channels::{Channel, ChannelStore, Livestream, SharedStore};
 use chat::ChatManager;
+use notify::NotifyTracker;
 use platforms::{parse_channel_input, Platform};
 
 struct AppState {
     store: SharedStore,
     http: reqwest::Client,
+    notifier: Arc<NotifyTracker>,
 }
 
 impl AppState {
@@ -33,6 +37,7 @@ impl AppState {
         Ok(Self {
             store: Arc::new(Mutex::new(store)),
             http,
+            notifier: Arc::new(NotifyTracker::new()),
         })
     }
 }
@@ -94,10 +99,23 @@ fn set_favorite(
 }
 
 #[tauri::command]
-async fn refresh_all(state: State<'_, AppState>) -> Result<Vec<Livestream>, String> {
+async fn refresh_all(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Vec<Livestream>, String> {
     let store = Arc::clone(&state.store);
     let client = state.http.clone();
-    refresh::refresh_all(store, client).await.map_err(err_string)
+    let notifier = Arc::clone(&state.notifier);
+    let snapshot = refresh::refresh_all(store, client).await.map_err(err_string)?;
+
+    // Fire desktop notifications for offline→live transitions, and update
+    // the tray tooltip with the new counts.
+    let channels = state.store.lock().channels().to_vec();
+    notifier.detect_and_notify(&app, &channels, &snapshot);
+    let live = snapshot.iter().filter(|l| l.is_live).count();
+    tray::update_tooltip(&app, live, snapshot.len());
+
+    Ok(snapshot)
 }
 
 #[tauri::command]
@@ -247,6 +265,16 @@ pub fn run() {
 
     let http_for_chat = state.http.clone();
     tauri::Builder::default()
+        .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_single_instance::init(
+            |app: &tauri::AppHandle, _argv: Vec<String>, _cwd: String| {
+                if let Some(w) = app.get_webview_window("main") {
+                    let _ = w.show();
+                    let _ = w.unminimize();
+                    let _ = w.set_focus();
+                }
+            },
+        ))
         .manage(state)
         .setup(move |app| {
             if cfg!(debug_assertions) {
@@ -258,6 +286,7 @@ pub fn run() {
             }
             let chat_mgr = ChatManager::new(app.handle().clone(), http_for_chat.clone());
             app.manage(chat_mgr);
+            tray::build(&app.handle())?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
