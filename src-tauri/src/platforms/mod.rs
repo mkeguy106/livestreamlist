@@ -2,6 +2,7 @@ pub mod chaturbate;
 pub mod kick;
 pub mod pronouns;
 pub mod twitch;
+pub mod twitch_users;
 pub mod youtube;
 
 use serde::{Deserialize, Serialize};
