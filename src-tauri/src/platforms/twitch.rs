@@ -7,8 +7,14 @@ use std::collections::HashMap;
 const GQL_URL: &str = "https://gql.twitch.tv/gql";
 
 // Public web client ID — the one twitch.tv itself uses from the browser for
-// unauthenticated public reads. No secret.
+// unauthenticated public reads. Used only for gql.twitch.tv anonymous calls.
+// Authenticated Helix calls MUST use our registered app's client id or they
+// 401 with "Client ID and OAuth token do not match".
 const PUBLIC_CLIENT_ID: &str = "kimne78kx3ncx6brgo4mv6wki5h1ko";
+
+fn app_client_id() -> &'static str {
+    crate::auth::twitch::TWITCH_CLIENT_ID
+}
 
 const LIVE_QUERY: &str = r#"
 query ChannelLive($login: String!) {
@@ -65,7 +71,7 @@ pub async fn resolve_user_id(
     let url = format!("https://api.twitch.tv/helix/users?login={login}");
     let resp = client
         .get(&url)
-        .header("Client-Id", PUBLIC_CLIENT_ID)
+        .header("Client-Id", app_client_id())
         .bearer_auth(access_token)
         .send()
         .await
@@ -155,7 +161,7 @@ async fn helix_emote_call_with_cursor(
 ) -> Result<HelixEmotePage> {
     let resp = client
         .get(url)
-        .header("Client-Id", PUBLIC_CLIENT_ID)
+        .header("Client-Id", app_client_id())
         .bearer_auth(access_token)
         .send()
         .await
@@ -331,7 +337,7 @@ pub async fn fetch_followed_channels(
         }
         let resp = client
             .get(&url)
-            .header("Client-Id", PUBLIC_CLIENT_ID)
+            .header("Client-Id", app_client_id())
             .bearer_auth(access_token)
             .send()
             .await
