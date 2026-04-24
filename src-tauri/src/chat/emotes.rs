@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use parking_lot::RwLock;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -7,7 +8,7 @@ use std::sync::Arc;
 use super::models::EmoteRange;
 
 /// A single emote discovered from a provider — lookup key is its name.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Emote {
     pub name: String,
     pub url_1x: String,
@@ -62,6 +63,20 @@ impl EmoteCache {
             }
         }
         self.globals.read().get(name).cloned()
+    }
+
+    /// Flatten globals + this channel's overrides into a single sorted list.
+    /// Channel emotes shadow globals of the same name.
+    pub fn list_for_channel(&self, channel_key: &str) -> Vec<Emote> {
+        let mut out: HashMap<String, Emote> = self.globals.read().clone();
+        if let Some(ch) = self.channels.read().get(channel_key) {
+            for (name, emote) in ch.iter() {
+                out.insert(name.clone(), emote.clone());
+            }
+        }
+        let mut list: Vec<Emote> = out.into_values().collect();
+        list.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        list
     }
 
     /// Scan a text message for non-Twitch emote tokens (3rd-party emotes).

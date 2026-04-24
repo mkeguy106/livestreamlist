@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '../hooks/useAuth.js';
 import { useChat } from '../hooks/useChat.js';
 import Composer from './Composer.jsx';
@@ -27,6 +27,28 @@ export default function ChatView({
   const [conversation, setConversation] = useState(null);
 
   const platform = channelKey?.split(':')[0];
+  const myLogin = auth.twitch?.login?.toLowerCase() ?? null;
+
+  // Recent authors for @mention autocomplete. Last 50 messages is plenty;
+  // keeping it tight avoids re-filtering a large list on every keystroke.
+  const mentionCandidates = useMemo(() => {
+    const seen = new Set();
+    const out = [];
+    for (let i = messages.length - 1; i >= Math.max(0, messages.length - 50); i -= 1) {
+      const m = messages[i];
+      const login = m.user?.login;
+      if (login && !seen.has(login)) {
+        seen.add(login);
+        out.push(login);
+      }
+      const parent = m.reply_to?.parent_login;
+      if (parent && !seen.has(parent)) {
+        seen.add(parent);
+        out.push(parent);
+      }
+    }
+    return out;
+  }, [messages]);
 
   const openConversation = (userA, userB) => {
     if (!userA || !userB || userA === userB) return;
@@ -72,14 +94,19 @@ export default function ChatView({
           m.system ? (
             <SystemRow key={m.id} m={m} variant={variant} />
           ) : variant === 'compact' ? (
-            <CompactRow key={m.id} m={m} onOpenThread={openConversation} />
+            <CompactRow key={m.id} m={m} myLogin={myLogin} onOpenThread={openConversation} />
           ) : (
-            <IrcRow key={m.id} m={m} onOpenThread={openConversation} />
+            <IrcRow key={m.id} m={m} myLogin={myLogin} onOpenThread={openConversation} />
           ),
         )}
       </div>
       {footer ?? (
-        <Composer channelKey={channelKey} platform={platform} auth={auth} />
+        <Composer
+          channelKey={channelKey}
+          platform={platform}
+          auth={auth}
+          mentionCandidates={mentionCandidates}
+        />
       )}
       <ConversationDialog
         open={Boolean(conversation)}
@@ -103,10 +130,17 @@ function EmptyHint({ status }) {
   );
 }
 
-function IrcRow({ m, onOpenThread }) {
+function IrcRow({ m, myLogin, onOpenThread }) {
   const time = formatTime(m.timestamp);
+  const mentionsMe = mentionsLogin(m.text, myLogin);
   return (
-    <div style={{ padding: '1px 14px' }}>
+    <div
+      style={{
+        padding: '1px 14px',
+        background: mentionsMe ? 'rgba(251,146,60,.08)' : undefined,
+        borderLeft: mentionsMe ? '2px solid #fb923c' : '2px solid transparent',
+      }}
+    >
       {m.reply_to && (
         <ReplyContextRow
           reply={m.reply_to}
@@ -142,9 +176,16 @@ function IrcRow({ m, onOpenThread }) {
   );
 }
 
-function CompactRow({ m, onOpenThread }) {
+function CompactRow({ m, myLogin, onOpenThread }) {
+  const mentionsMe = mentionsLogin(m.text, myLogin);
   return (
-    <div style={{ padding: '1px 0' }}>
+    <div
+      style={{
+        padding: '1px 0 1px 4px',
+        background: mentionsMe ? 'rgba(251,146,60,.08)' : undefined,
+        borderLeft: mentionsMe ? '2px solid #fb923c' : '2px solid transparent',
+      }}
+    >
       {m.reply_to && (
         <ReplyContextRow
           reply={m.reply_to}
@@ -273,4 +314,18 @@ function formatTime(iso) {
   const m = String(d.getMinutes()).padStart(2, '0');
   const s = String(d.getSeconds()).padStart(2, '0');
   return `${h}:${m}:${s}`;
+}
+
+/**
+ * True if `text` contains an @-mention of `myLogin` as a whole word.
+ * Skipped when `myLogin` is null (not authed).
+ */
+function mentionsLogin(text, myLogin) {
+  if (!myLogin || !text) return false;
+  const re = new RegExp(`@${escapeRegex(myLogin)}\\b`, 'i');
+  return re.test(text);
+}
+
+function escapeRegex(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
