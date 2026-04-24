@@ -23,6 +23,19 @@ pub struct ChatMessage {
     pub is_first_message: bool,
     #[serde(default)]
     pub reply_to: Option<ReplyInfo>,
+    /// Non-user system message (sub/resub/raid/subgift/…) — in-band with chat.
+    /// Frontend renders these as styled system rows, not normal PRIVMSGs.
+    #[serde(default)]
+    pub system: Option<SystemEvent>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SystemEvent {
+    /// Twitch `msg-id` tag: `sub`, `resub`, `subgift`, `submysterygift`, `raid`,
+    /// `bitsbadgetier`, `announcement`, etc.
+    pub kind: String,
+    /// Formatted human-readable line ("PixelWarrior subscribed at Tier 1…").
+    pub text: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

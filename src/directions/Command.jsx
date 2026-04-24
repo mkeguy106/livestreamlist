@@ -3,6 +3,7 @@
  */
 
 import ChatView from '../components/ChatView.jsx';
+import TitleBanner from '../components/TitleBanner.jsx';
 import { formatUptime, formatViewers } from '../utils/format.js';
 
 export default function Command({ ctx }) {
@@ -194,13 +195,11 @@ function SelectedPane({ channel, onLaunch, onOpenBrowser }) {
         </button>
       </div>
 
-      {channel.is_live && channel.title && (
-        <div style={{ padding: '10px 16px 6px', color: 'var(--zinc-300)', fontSize: 'var(--t-12)' }}>
-          {channel.title}
-        </div>
-      )}
-
-      <ChatView channelKey={channel.unique_key} variant="irc" />
+      <ChatView
+        channelKey={channel.unique_key}
+        variant="irc"
+        header={<TitleBanner channel={channel} />}
+      />
     </>
   );
 }
