@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use chrono::Utc;
 use futures_util::{SinkExt, StreamExt};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::mpsc;
@@ -19,6 +20,8 @@ use super::OutboundMsg;
 use crate::platforms::Platform;
 
 const IRC_URL: &str = "wss://irc-ws.chat.twitch.tv";
+
+static SELF_ECHO_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// Auth context passed into a chat connection. When `None` the task falls
 /// back to an anonymous `justinfan*` read-only session (no sending).
@@ -402,10 +405,7 @@ fn build_self_echo(cfg: &TwitchChatConfig, text: &str) -> Option<ChatMessage> {
     let (clean_text, is_action) = strip_action(text);
 
     Some(ChatMessage {
-        id: format!(
-            "self-{}",
-            chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
-        ),
+        id: format!("self-{}", SELF_ECHO_SEQ.fetch_add(1, Ordering::Relaxed)),
         channel_key: cfg.channel_key.clone(),
         platform: Platform::Twitch,
         timestamp: chrono::Utc::now(),
