@@ -1,5 +1,6 @@
 pub mod chaturbate;
 pub mod kick;
+pub mod pronouns;
 pub mod twitch;
 pub mod youtube;
 

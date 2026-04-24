@@ -34,6 +34,7 @@ parking_lot = "0.12"
 tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
 futures-util = { version = "0.3", default-features = false, features = ["std", "sink"] }
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
+lru = "0.12"
 base64 = "0.22"
 sha2 = "0.10"
 rand = "0.8"
