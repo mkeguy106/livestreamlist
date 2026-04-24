@@ -33,6 +33,7 @@ export const twitchLogin = () => invoke('twitch_login');
 export const twitchLogout = () => invoke('twitch_logout');
 export const kickLogin = () => invoke('kick_login');
 export const kickLogout = () => invoke('kick_logout');
+export const importTwitchFollows = () => invoke('import_twitch_follows');
 export const getSettings = () => invoke('get_settings');
 export const updateSettings = (patch) => invoke('update_settings', { patch });
 export const openUrl = (url) => invoke('open_url', { url });
@@ -206,6 +207,8 @@ async function mockInvoke(name, args) {
     case 'kick_logout':
       mockAuth = { ...mockAuth, kick: null };
       return null;
+    case 'import_twitch_follows':
+      return { added: 0, skipped: 0, total_seen: 0 };
     case 'get_settings':
       return mockSettings;
     case 'update_settings':

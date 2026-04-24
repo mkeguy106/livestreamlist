@@ -159,6 +159,70 @@ fn parse_live(user: &Value, requested_login: &str) -> Option<TwitchLive> {
     })
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FollowedChannel {
+    pub broadcaster_login: String,
+    pub broadcaster_name: String,
+    pub broadcaster_id: String,
+    pub followed_at: Option<String>,
+}
+
+/// Pull the authenticated user's full follow list via Helix. Helix caps each
+/// page at 100; we paginate until the cursor is exhausted.
+pub async fn fetch_followed_channels(
+    client: &reqwest::Client,
+    access_token: &str,
+    user_id: &str,
+) -> Result<Vec<FollowedChannel>> {
+    let mut out = Vec::new();
+    let mut cursor: Option<String> = None;
+    loop {
+        let mut url = format!(
+            "https://api.twitch.tv/helix/channels/followed?user_id={user_id}&first=100"
+        );
+        if let Some(c) = &cursor {
+            url.push_str(&format!("&after={c}"));
+        }
+        let resp = client
+            .get(&url)
+            .header("Client-Id", PUBLIC_CLIENT_ID)
+            .bearer_auth(access_token)
+            .send()
+            .await
+            .context("GET /helix/channels/followed")?;
+        if !resp.status().is_success() {
+            anyhow::bail!(
+                "/helix/channels/followed {}: {}",
+                resp.status(),
+                resp.text().await.unwrap_or_default()
+            );
+        }
+        let data: Value = resp.json().await?;
+        if let Some(list) = data.get("data").and_then(|v| v.as_array()) {
+            for e in list {
+                let Some(login) = e.get("broadcaster_login").and_then(|v| v.as_str()) else { continue };
+                let name = e.get("broadcaster_name").and_then(|v| v.as_str()).unwrap_or(login);
+                let id = e.get("broadcaster_id").and_then(|v| v.as_str()).unwrap_or("");
+                out.push(FollowedChannel {
+                    broadcaster_login: login.to_string(),
+                    broadcaster_name: name.to_string(),
+                    broadcaster_id: id.to_string(),
+                    followed_at: e.get("followed_at").and_then(|v| v.as_str()).map(String::from),
+                });
+            }
+        }
+        cursor = data
+            .pointer("/pagination/cursor")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(String::from);
+        if cursor.is_none() {
+            break;
+        }
+    }
+    Ok(out)
+}
+
 /// Fetch the channel's social-media links. Returns an empty list on 404 or
 /// an otherwise clean request; errors only on transport / malformed response.
 pub async fn fetch_socials(client: &reqwest::Client, login: &str) -> Result<Vec<SocialLink>> {

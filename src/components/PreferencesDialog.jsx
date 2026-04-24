@@ -1,9 +1,12 @@
 import { useEffect, useState } from 'react';
+import { useAuth } from '../hooks/useAuth.js';
 import { usePreferences } from '../hooks/usePreferences.js';
+import { importTwitchFollows } from '../ipc.js';
 
 const TABS = [
   { id: 'general', label: 'General' },
   { id: 'appearance', label: 'Appearance' },
+  { id: 'accounts', label: 'Accounts' },
 ];
 
 export default function PreferencesDialog({ open, onClose }) {
@@ -105,9 +108,77 @@ export default function PreferencesDialog({ open, onClose }) {
           {error && <div style={{ color: '#f87171', fontSize: 'var(--t-11)' }}>{error}</div>}
           {settings && tab === 'general' && <GeneralTab settings={settings} patch={patch} />}
           {settings && tab === 'appearance' && <AppearanceTab settings={settings} patch={patch} />}
+          {tab === 'accounts' && <AccountsTab />}
         </div>
       </div>
     </div>
+  );
+}
+
+function AccountsTab() {
+  const { twitch, kick, login, logout } = useAuth();
+  const [importState, setImportState] = useState(null); // {running, result, error}
+
+  const runImport = async () => {
+    setImportState({ running: true });
+    try {
+      const r = await importTwitchFollows();
+      setImportState({ running: false, result: r });
+    } catch (e) {
+      setImportState({ running: false, error: String(e?.message ?? e) });
+    }
+  };
+
+  return (
+    <>
+      <Row label="Twitch" hint={twitch ? `Logged in as @${twitch.login}` : 'Not logged in'}>
+        {twitch ? (
+          <button type="button" className="rx-btn rx-btn-ghost" onClick={() => logout('twitch')}>
+            Log out
+          </button>
+        ) : (
+          <button type="button" className="rx-btn" onClick={() => login('twitch')}>
+            Log in to Twitch
+          </button>
+        )}
+      </Row>
+
+      <Row label="Kick" hint={kick ? `Logged in as @${kick.login}` : 'Not logged in'}>
+        {kick ? (
+          <button type="button" className="rx-btn rx-btn-ghost" onClick={() => logout('kick')}>
+            Log out
+          </button>
+        ) : (
+          <button type="button" className="rx-btn" onClick={() => login('kick')}>
+            Log in to Kick
+          </button>
+        )}
+      </Row>
+
+      <Row
+        label="Import Twitch follows"
+        hint="Adds every channel you follow on Twitch to this app. Existing entries are skipped."
+      >
+        <button
+          type="button"
+          className="rx-btn"
+          onClick={runImport}
+          disabled={!twitch || importState?.running}
+        >
+          {importState?.running ? 'Importing…' : 'Import now'}
+        </button>
+        {importState?.result && (
+          <div style={{ marginTop: 6, fontSize: 'var(--t-11)', color: 'var(--zinc-400)' }}>
+            Added {importState.result.added} · skipped {importState.result.skipped} · seen {importState.result.total_seen}
+          </div>
+        )}
+        {importState?.error && (
+          <div style={{ marginTop: 6, fontSize: 'var(--t-11)', color: '#f87171' }}>
+            {importState.error}
+          </div>
+        )}
+      </Row>
+    </>
   );
 }
 

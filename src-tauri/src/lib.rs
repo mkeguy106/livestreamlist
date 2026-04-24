@@ -156,6 +156,66 @@ fn launch_stream(
     .map_err(err_string)
 }
 
+#[derive(serde::Serialize)]
+struct ImportResult {
+    added: u32,
+    skipped: u32,
+    total_seen: u32,
+}
+
+#[tauri::command]
+async fn import_twitch_follows(
+    state: State<'_, AppState>,
+) -> Result<ImportResult, String> {
+    let token = auth::twitch::stored_token()
+        .map_err(err_string)?
+        .ok_or_else(|| "not logged in to Twitch".to_string())?;
+    let identity = auth::twitch::stored_identity()
+        .ok_or_else(|| "missing Twitch identity — log in again".to_string())?;
+
+    let follows = platforms::twitch::fetch_followed_channels(
+        &state.http,
+        &token,
+        &identity.user_id,
+    )
+    .await
+    .map_err(err_string)?;
+
+    let mut added = 0u32;
+    let mut skipped = 0u32;
+    let total_seen = follows.len() as u32;
+
+    for f in follows {
+        let channel = Channel {
+            platform: Platform::Twitch,
+            channel_id: f.broadcaster_login.clone(),
+            display_name: if f.broadcaster_name.is_empty() {
+                f.broadcaster_login.clone()
+            } else {
+                f.broadcaster_name
+            },
+            favorite: false,
+            dont_notify: false,
+            auto_play: false,
+            added_at: Some(Utc::now()),
+        };
+        if state.store.lock().contains(Platform::Twitch, &channel.channel_id) {
+            skipped += 1;
+            continue;
+        }
+        match state.store.lock().add(channel) {
+            Ok(()) => added += 1,
+            Err(_) => skipped += 1,
+        }
+    }
+
+    Ok(ImportResult {
+        added,
+        skipped,
+        total_seen,
+    })
+}
+
 #[tauri::command]
 async fn list_socials(
     unique_key: String,
@@ -551,6 +611,7 @@ pub fn run() {
             twitch_logout,
             kick_login,
             kick_logout,
+            import_twitch_follows,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
