@@ -6,7 +6,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::config;
+use crate::platforms::chaturbate::ChaturbateLive;
+use crate::platforms::kick::{KickLive, KickStream};
 use crate::platforms::twitch::TwitchStream;
+use crate::platforms::youtube::{YouTubeLive, YouTubeStream};
 use crate::platforms::Platform;
 
 /// Persisted channel — the user-configured list, independent of live status.
@@ -72,6 +75,40 @@ impl Livestream {
         }
         ls
     }
+
+    pub fn from_kick(channel: &Channel, live: &KickLive) -> Self {
+        let mut ls = Self::offline_for(channel, live.avatar_url.clone());
+        ls.display_name = live.display_name.clone();
+        if let Some(stream) = &live.stream {
+            apply_kick_stream(&mut ls, stream);
+        }
+        ls
+    }
+
+    pub fn from_youtube(channel: &Channel, live: &YouTubeLive) -> Self {
+        let mut ls = Self::offline_for(channel, None);
+        ls.display_name = live.display_name.clone();
+        if let Some(stream) = &live.stream {
+            apply_youtube_stream(&mut ls, stream);
+        }
+        ls
+    }
+
+    pub fn from_chaturbate(channel: &Channel, live: &ChaturbateLive) -> Self {
+        let mut ls = Self::offline_for(channel, None);
+        ls.display_name = live.display_name.clone();
+        if live.is_public_live() {
+            ls.is_live = true;
+            ls.title = live.title.clone();
+            ls.viewers = live.viewers;
+            ls.thumbnail_url = live.thumbnail_url.clone();
+        } else if live.room_status != "offline" {
+            // "private", "hidden", "group" — not live for our purposes but
+            // worth surfacing as a non-error status so the UI can dim the row.
+            ls.error = Some(live.room_status.clone());
+        }
+        ls
+    }
 }
 
 fn apply_twitch_stream(ls: &mut Livestream, s: &TwitchStream) {
@@ -80,6 +117,25 @@ fn apply_twitch_stream(ls: &mut Livestream, s: &TwitchStream) {
     ls.game = s.game.clone();
     ls.game_slug = s.game_slug.clone();
     ls.viewers = Some(s.viewers);
+    ls.started_at = s.started_at;
+    ls.thumbnail_url = s.thumbnail_url.clone();
+}
+
+fn apply_kick_stream(ls: &mut Livestream, s: &KickStream) {
+    ls.is_live = true;
+    ls.title = if s.title.is_empty() { None } else { Some(s.title.clone()) };
+    ls.game = s.game.clone();
+    ls.game_slug = s.game_slug.clone();
+    ls.viewers = Some(s.viewers);
+    ls.started_at = s.started_at;
+    ls.thumbnail_url = s.thumbnail_url.clone();
+}
+
+fn apply_youtube_stream(ls: &mut Livestream, s: &YouTubeStream) {
+    ls.is_live = true;
+    ls.title = if s.title.is_empty() { None } else { Some(s.title.clone()) };
+    ls.game = s.game.clone();
+    ls.viewers = s.viewers;
     ls.started_at = s.started_at;
     ls.thumbnail_url = s.thumbnail_url.clone();
 }
