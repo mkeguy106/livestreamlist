@@ -8,6 +8,7 @@ import NicknameDialog from './components/NicknameDialog.jsx';
 import NoteDialog from './components/NoteDialog.jsx';
 import UserCard from './components/UserCard.jsx';
 import UserCardContextMenu from './components/UserCardContextMenu.jsx';
+import UserHistoryDialog from './components/UserHistoryDialog.jsx';
 import WindowControls from './components/WindowControls.jsx';
 import PreferencesDialog from './components/PreferencesDialog.jsx';
 import { useDragHandler } from './hooks/useDragRegion.js';
@@ -52,6 +53,7 @@ export default function App() {
   const [userCtx, setUserCtx] = useState({ open: false, point: null, user: null, channelKey: null, metadata: null });
   const [nickDlg, setNickDlg] = useState({ open: false });
   const [noteDlg, setNoteDlg] = useState({ open: false });
+  const [historyDlg, setHistoryDlg] = useState({ open: false });
 
   const onUsernameContext = useCallback(async (user, point, channelKey) => {
     let metadata = null;
@@ -232,6 +234,12 @@ export default function App() {
       </main>
 
       <AddChannelDialog open={addOpen} onClose={() => setAddOpen(false)} onAdded={refresh} />
+      <UserHistoryDialog
+        open={historyDlg.open}
+        channelKey={historyDlg.channelKey}
+        user={historyDlg.user}
+        onClose={() => setHistoryDlg({ open: false })}
+      />
       <PreferencesDialog open={prefsOpen} onClose={() => setPrefsOpen(false)} />
       <UserCard
         open={card.open}
@@ -242,7 +250,10 @@ export default function App() {
         profileLoading={card.profileLoading}
         profileError={card.profileError}
         onClose={card.close}
-        onOpenHistory={() => { card.close(); }}
+        onOpenHistory={() => {
+          setHistoryDlg({ open: true, channelKey: card.channelKey, user: card.user });
+          card.close();
+        }}
         onOpenChannel={() => {
           if (card.channelKey) openInBrowser(card.channelKey).catch((e) => console.error('open_in_browser', e));
           card.close();
