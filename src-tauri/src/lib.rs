@@ -22,12 +22,14 @@ use notify::NotifyTracker;
 use platforms::{parse_channel_input, Platform};
 use player::PlayerManager;
 use settings::{SharedSettings, Settings};
+use users::UserStore;
 
 struct AppState {
     store: SharedStore,
     http: reqwest::Client,
     notifier: Arc<NotifyTracker>,
     settings: SharedSettings,
+    users: Arc<UserStore>,
 }
 
 impl AppState {
@@ -45,11 +47,21 @@ impl AppState {
             log::warn!("settings load failed, using defaults: {e:#}");
             Settings::default()
         });
+        let users = Arc::new(UserStore::open_default().unwrap_or_else(|e| {
+            log::warn!("user store open failed, using empty: {e:#}");
+            // Empty store with no path won't persist, but avoids panicking on
+            // start. Realistically open_default already handles parse errors;
+            // this fallback only fires if the config dir itself is unreadable.
+            UserStore::open(std::path::PathBuf::from("/dev/null")).unwrap_or_else(|_| {
+                panic!("could not even fall back to /dev/null user store")
+            })
+        }));
         Ok(Self {
             store: Arc::new(Mutex::new(store)),
             http,
             notifier: Arc::new(NotifyTracker::new()),
             settings: Arc::new(parking_lot::RwLock::new(settings)),
+            users,
         })
     }
 }
