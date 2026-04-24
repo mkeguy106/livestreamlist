@@ -6,6 +6,7 @@ import { importTwitchFollows } from '../ipc.js';
 const TABS = [
   { id: 'general', label: 'General' },
   { id: 'appearance', label: 'Appearance' },
+  { id: 'chat', label: 'Chat' },
   { id: 'accounts', label: 'Accounts' },
 ];
 
@@ -108,6 +109,7 @@ export default function PreferencesDialog({ open, onClose }) {
           {error && <div style={{ color: '#f87171', fontSize: 'var(--t-11)' }}>{error}</div>}
           {settings && tab === 'general' && <GeneralTab settings={settings} patch={patch} />}
           {settings && tab === 'appearance' && <AppearanceTab settings={settings} patch={patch} />}
+          {settings && tab === 'chat' && <ChatTab settings={settings} patch={patch} />}
           {tab === 'accounts' && <AccountsTab />}
         </div>
       </div>
@@ -311,6 +313,58 @@ function AppearanceTab({ settings, patch }) {
       </Row>
     </>
   );
+}
+
+function ChatTab({ settings, patch }) {
+  const c = settings.chat || {};
+  return (
+    <>
+      <Row label="24-hour timestamps">
+        <Toggle
+          checked={c.timestamp_24h !== false}
+          onChange={(v) => patch((prev) => ({ ...prev, chat: { ...c, timestamp_24h: v } }))}
+        />
+      </Row>
+
+      <Row
+        label="Open user card on hover"
+        hint="When off, only clicking the username opens the card."
+      >
+        <Toggle
+          checked={c.user_card_hover !== false}
+          onChange={(v) => patch((prev) => ({ ...prev, chat: { ...c, user_card_hover: v } }))}
+        />
+      </Row>
+
+      <Row label="Hover delay (ms)">
+        <input
+          className="rx-input"
+          type="number"
+          min="0"
+          max="2000"
+          step="50"
+          value={c.user_card_hover_delay_ms ?? 400}
+          onChange={(e) =>
+            patch((prev) => ({
+              ...prev,
+              chat: {
+                ...c,
+                user_card_hover_delay_ms: Math.max(0, Number(e.target.value) || 0),
+              },
+            }))
+          }
+          style={{ width: 90 }}
+        />
+      </Row>
+
+      <BlockedUsersList />
+    </>
+  );
+}
+
+function BlockedUsersList() {
+  // Filled in by Task 20.
+  return null;
 }
 
 function ColorField({ value, onChange, placeholder }) {

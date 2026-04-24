@@ -71,15 +71,28 @@ impl Default for AppearanceSettings {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatSettings {
+    #[serde(default = "default_timestamp_24h")]
     pub timestamp_24h: bool,
+    #[serde(default = "default_history_replay_count")]
     pub history_replay_count: u32,
+    #[serde(default = "default_user_card_hover")]
+    pub user_card_hover: bool,
+    #[serde(default = "default_user_card_hover_delay_ms")]
+    pub user_card_hover_delay_ms: u32,
 }
+
+fn default_timestamp_24h() -> bool { true }
+fn default_history_replay_count() -> u32 { 100 }
+fn default_user_card_hover() -> bool { true }
+fn default_user_card_hover_delay_ms() -> u32 { 400 }
 
 impl Default for ChatSettings {
     fn default() -> Self {
         Self {
-            timestamp_24h: true,
-            history_replay_count: 100,
+            timestamp_24h: default_timestamp_24h(),
+            history_replay_count: default_history_replay_count(),
+            user_card_hover: default_user_card_hover(),
+            user_card_hover_delay_ms: default_user_card_hover_delay_ms(),
         }
     }
 }
