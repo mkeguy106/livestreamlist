@@ -712,6 +712,7 @@ pub fn run() {
     let state = AppState::new().expect("failed to initialize app state");
 
     let http_for_chat = state.http.clone();
+    let users_for_chat = Arc::clone(&state.users);
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_single_instance::init(
@@ -732,7 +733,11 @@ pub fn run() {
                         .build(),
                 )?;
             }
-            let chat_mgr = ChatManager::new(app.handle().clone(), http_for_chat.clone());
+            let chat_mgr = ChatManager::new(
+                app.handle().clone(),
+                http_for_chat.clone(),
+                users_for_chat.clone(),
+            );
             app.manage(chat_mgr);
             let player_mgr = Arc::new(PlayerManager::new(app.handle().clone()));
             app.manage(player_mgr);

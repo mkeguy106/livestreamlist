@@ -25,6 +25,7 @@ pub struct ChatManager {
     app: AppHandle,
     pub(crate) http: reqwest::Client,
     emotes: Arc<EmoteCache>,
+    users: Arc<crate::users::UserStore>,
     connections: Mutex<HashMap<String, ConnectionHandle>>,
 }
 
@@ -34,12 +35,13 @@ struct ConnectionHandle {
 }
 
 impl ChatManager {
-    pub fn new(app: AppHandle, http: reqwest::Client) -> Arc<Self> {
+    pub fn new(app: AppHandle, http: reqwest::Client, users: Arc<crate::users::UserStore>) -> Arc<Self> {
         let cache = EmoteCache::new();
         let mgr = Arc::new(Self {
             app,
             http,
             emotes: cache,
+            users,
             connections: Mutex::new(HashMap::new()),
         });
 
@@ -121,6 +123,7 @@ impl ChatManager {
                     channel_key: unique_key.clone(),
                     channel_login: channel_id,
                     emotes: Arc::clone(&self.emotes),
+                    users: Arc::clone(&self.users),
                     auth,
                     outbound: rx,
                 };

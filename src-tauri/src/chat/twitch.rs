@@ -31,6 +31,7 @@ pub struct TwitchChatConfig {
     pub channel_key: String,
     pub channel_login: String,
     pub emotes: Arc<EmoteCache>,
+    pub users: Arc<crate::users::UserStore>,
     pub auth: Option<TwitchAuth>,
     pub outbound: mpsc::UnboundedReceiver<String>,
 }
@@ -170,6 +171,12 @@ fn persist_and_emit(
     log: Option<&mut ChatLogWriter>,
     msg: ChatMessage,
 ) {
+    if let Some(uid) = msg.user.id.as_deref() {
+        let key = format!("twitch:{uid}");
+        if cfg.users.is_blocked(&key) {
+            return; // skip emit AND skip log write
+        }
+    }
     if let Some(l) = log {
         if let Err(e) = l.append(&msg) {
             log::warn!("chat log append failed for {}: {e:#}", cfg.channel_key);
