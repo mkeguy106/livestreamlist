@@ -5,13 +5,14 @@ import Focus from './directions/Focus.jsx';
 import AddChannelDialog from './components/AddChannelDialog.jsx';
 import LoginButton from './components/LoginButton.jsx';
 import UserCard from './components/UserCard.jsx';
+import UserCardContextMenu from './components/UserCardContextMenu.jsx';
 import WindowControls from './components/WindowControls.jsx';
 import PreferencesDialog from './components/PreferencesDialog.jsx';
 import { useDragHandler } from './hooks/useDragRegion.js';
 import { useLivestreams } from './hooks/useLivestreams.js';
 import { usePreferences } from './hooks/usePreferences.js';
 import { useUserCard } from './hooks/useUserCard.js';
-import { launchStream, listenEvent, openInBrowser, removeChannel, setFavorite } from './ipc.js';
+import { getUserMetadata, launchStream, listenEvent, openInBrowser, removeChannel, setFavorite, setUserMetadata } from './ipc.js';
 
 const LAYOUTS = [
   { id: 'command', label: 'Command', letter: 'A', Component: Command },
@@ -45,7 +46,21 @@ export default function App() {
     (user, rect, channelKey) => card.openFor(user, channelKey, rect),
     [card],
   );
-  const onUsernameContext = useCallback(() => {}, []);
+
+  const [userCtx, setUserCtx] = useState({ open: false, point: null, user: null, channelKey: null, metadata: null });
+
+  const onUsernameContext = useCallback(async (user, point, channelKey) => {
+    let metadata = null;
+    if (user.id) {
+      try {
+        metadata = await getUserMetadata(`twitch:${user.id}`);
+      } catch (e) {
+        console.error('get_user_metadata', e);
+      }
+    }
+    setUserCtx({ open: true, point, user, channelKey, metadata });
+  }, []);
+
   const onUsernameHover = useCallback(() => {}, []);
 
   // Apply appearance overrides to CSS variables on the root.
@@ -227,6 +242,29 @@ export default function App() {
         onOpenChannel={() => {
           if (card.channelKey) openInBrowser(card.channelKey).catch((e) => console.error('open_in_browser', e));
           card.close();
+        }}
+      />
+      <UserCardContextMenu
+        open={userCtx.open}
+        point={userCtx.point}
+        user={userCtx.user || {}}
+        metadata={userCtx.metadata}
+        onClose={() => setUserCtx(c => ({ ...c, open: false }))}
+        onEditNickname={() => { /* Task 17 wires the dialog */ }}
+        onEditNote={() => { /* Task 17 wires the dialog */ }}
+        onToggleBlocked={async () => {
+          if (!userCtx.user?.id) return;
+          const userKey = `twitch:${userCtx.user.id}`;
+          try {
+            await setUserMetadata(userKey, {
+              blocked: !userCtx.metadata?.blocked,
+              login_hint: userCtx.user.login,
+              display_name_hint: userCtx.user.display_name,
+            });
+          } catch (e) {
+            console.error('set_user_metadata', e);
+          }
+          if (card.open && card.user?.id === userCtx.user?.id) card.refreshMetadata();
         }}
       />
     </div>
