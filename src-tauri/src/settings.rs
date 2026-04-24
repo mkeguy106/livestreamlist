@@ -149,8 +149,14 @@ mod tests {
         let json = b"{}";
         let s: Settings = serde_json::from_slice(json).expect("parse empty");
         assert!(s.chat.show_badges, "show_badges default should be true");
-        assert!(s.chat.show_mod_badges, "show_mod_badges default should be true");
-        assert!(s.chat.show_timestamps, "show_timestamps default should be true");
+        assert!(
+            s.chat.show_mod_badges,
+            "show_mod_badges default should be true"
+        );
+        assert!(
+            s.chat.show_timestamps,
+            "show_timestamps default should be true"
+        );
     }
 
     #[test]
