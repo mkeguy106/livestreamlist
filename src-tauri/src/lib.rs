@@ -21,7 +21,7 @@ use chat::ChatManager;
 use notify::NotifyTracker;
 use platforms::{parse_channel_input, pronouns::PronounsCache, Platform};
 use player::PlayerManager;
-use settings::{SharedSettings, Settings};
+use settings::{Settings, SharedSettings};
 use users::{UserMetadata, UserMetadataPatch, UserStore};
 
 struct AppState {
@@ -53,9 +53,8 @@ impl AppState {
             // Empty store with no path won't persist, but avoids panicking on
             // start. Realistically open_default already handles parse errors;
             // this fallback only fires if the config dir itself is unreadable.
-            UserStore::open(std::path::PathBuf::from("/dev/null")).unwrap_or_else(|_| {
-                panic!("could not even fall back to /dev/null user store")
-            })
+            UserStore::open(std::path::PathBuf::from("/dev/null"))
+                .unwrap_or_else(|_| panic!("could not even fall back to /dev/null user store"))
         }));
         let pronouns = PronounsCache::new(http.clone());
         Ok(Self {
@@ -84,10 +83,7 @@ fn list_channels(state: State<'_, AppState>) -> Vec<Channel> {
 }
 
 #[tauri::command]
-fn add_channel_from_input(
-    input: String,
-    state: State<'_, AppState>,
-) -> Result<Channel, String> {
+fn add_channel_from_input(input: String, state: State<'_, AppState>) -> Result<Channel, String> {
     let parsed = parse_channel_input(&input)
         .ok_or_else(|| format!("couldn't recognise '{input}' as a channel URL"))?;
     let channel = Channel {
@@ -133,7 +129,9 @@ async fn refresh_all(
     let store = Arc::clone(&state.store);
     let client = state.http.clone();
     let notifier = Arc::clone(&state.notifier);
-    let snapshot = refresh::refresh_all(store, client).await.map_err(err_string)?;
+    let snapshot = refresh::refresh_all(store, client)
+        .await
+        .map_err(err_string)?;
 
     // Fire desktop notifications for offline→live transitions, and update
     // the tray tooltip with the new counts.
@@ -196,22 +194,17 @@ struct ImportResult {
 }
 
 #[tauri::command]
-async fn import_twitch_follows(
-    state: State<'_, AppState>,
-) -> Result<ImportResult, String> {
+async fn import_twitch_follows(state: State<'_, AppState>) -> Result<ImportResult, String> {
     let token = auth::twitch::stored_token()
         .map_err(err_string)?
         .ok_or_else(|| "not logged in to Twitch".to_string())?;
     let identity = auth::twitch::stored_identity()
         .ok_or_else(|| "missing Twitch identity — log in again".to_string())?;
 
-    let follows = platforms::twitch::fetch_followed_channels(
-        &state.http,
-        &token,
-        &identity.user_id,
-    )
-    .await
-    .map_err(err_string)?;
+    let follows =
+        platforms::twitch::fetch_followed_channels(&state.http, &token, &identity.user_id)
+            .await
+            .map_err(err_string)?;
 
     let mut added = 0u32;
     let mut skipped = 0u32;
@@ -231,7 +224,11 @@ async fn import_twitch_follows(
             auto_play: false,
             added_at: Some(Utc::now()),
         };
-        if state.store.lock().contains(Platform::Twitch, &channel.channel_id) {
+        if state
+            .store
+            .lock()
+            .contains(Platform::Twitch, &channel.channel_id)
+        {
             skipped += 1;
             continue;
         }
@@ -296,7 +293,10 @@ fn chat_open_popout(
         Platform::Youtube => {
             // YouTube's popout chat needs the live video id; we only have one
             // when the channel is live right now.
-            let Some(ls) = livestream.as_ref().and_then(|l| l.title.as_ref().map(|_| l)) else {
+            let Some(ls) = livestream
+                .as_ref()
+                .and_then(|l| l.title.as_ref().map(|_| l))
+            else {
                 return Err("channel isn't live".to_string());
             };
             let id_field = ls
@@ -317,7 +317,10 @@ fn chat_open_popout(
             format!("Chaturbate · {}", channel.display_name),
         ),
         Platform::Twitch => (
-            format!("https://www.twitch.tv/popout/{}/chat?popout=", channel.channel_id),
+            format!(
+                "https://www.twitch.tv/popout/{}/chat?popout=",
+                channel.channel_id
+            ),
             format!("Twitch · {}", channel.display_name),
         ),
         Platform::Kick => (
@@ -411,10 +414,7 @@ fn get_settings(state: State<'_, AppState>) -> Settings {
 }
 
 #[tauri::command]
-fn update_settings(
-    state: State<'_, AppState>,
-    patch: Settings,
-) -> Result<Settings, String> {
+fn update_settings(state: State<'_, AppState>, patch: Settings) -> Result<Settings, String> {
     {
         let mut g = state.settings.write();
         *g = patch;
@@ -428,10 +428,7 @@ fn update_settings(
 }
 
 #[tauri::command]
-fn get_user_metadata(
-    user_key: String,
-    state: State<'_, AppState>,
-) -> Result<UserMetadata, String> {
+fn get_user_metadata(user_key: String, state: State<'_, AppState>) -> Result<UserMetadata, String> {
     let (platform_str, user_id) = user_key
         .split_once(':')
         .ok_or_else(|| format!("invalid user_key {user_key}"))?;
@@ -502,13 +499,11 @@ async fn get_user_profile(
         .strip_prefix("twitch:")
         .ok_or_else(|| format!("non-twitch channel_key {channel_key}"))?;
 
-    let broadcaster_id = platforms::twitch_users::fetch_user_by_login(
-        &state.http,
-        broadcaster_login,
-    )
-    .await
-    .map_err(err_string)?
-    .id;
+    let broadcaster_id =
+        platforms::twitch_users::fetch_user_by_login(&state.http, broadcaster_login)
+            .await
+            .map_err(err_string)?
+            .id;
 
     platforms::twitch_users::build_profile(
         &state.http,
@@ -547,7 +542,12 @@ fn get_user_messages(
 
 #[tauri::command]
 fn list_blocked_users(state: State<'_, AppState>) -> Vec<UserMetadata> {
-    let mut v: Vec<_> = state.users.snapshot().into_iter().filter(|m| m.blocked).collect();
+    let mut v: Vec<_> = state
+        .users
+        .snapshot()
+        .into_iter()
+        .filter(|m| m.blocked)
+        .collect();
     v.sort_by(|a, b| {
         a.last_known_display_name
             .to_lowercase()
@@ -557,15 +557,12 @@ fn list_blocked_users(state: State<'_, AppState>) -> Vec<UserMetadata> {
 }
 
 #[tauri::command]
-fn list_emotes(
-    unique_key: String,
-    chat: State<'_, Arc<ChatManager>>,
-) -> Vec<chat::Emote> {
+fn list_emotes(unique_key: String, chat: State<'_, Arc<ChatManager>>) -> Vec<chat::Emote> {
     chat.list_emotes(&unique_key)
 }
 
 #[tauri::command]
-fn chat_send(
+async fn chat_send(
     unique_key: String,
     text: String,
     state: State<'_, AppState>,
@@ -589,7 +586,9 @@ fn chat_send(
     }
 
     match channel.platform {
-        Platform::Twitch | Platform::Kick => chat.send_raw(&unique_key, clean).map_err(err_string),
+        Platform::Twitch | Platform::Kick => {
+            chat.send_raw(&unique_key, clean).await.map_err(err_string)
+        }
         _ => Err("sending not yet supported for this platform".to_string()),
     }
 }
@@ -605,9 +604,7 @@ async fn auth_status(state: State<'_, AppState>) -> Result<AuthStatus, String> {
     let twitch = auth::twitch::status(&state.http)
         .await
         .map_err(err_string)?;
-    let kick = auth::kick::status(&state.http)
-        .await
-        .map_err(err_string)?;
+    let kick = auth::kick::status(&state.http).await.map_err(err_string)?;
     Ok(AuthStatus { twitch, kick })
 }
 
@@ -616,9 +613,7 @@ async fn twitch_login(
     state: State<'_, AppState>,
     chat: State<'_, Arc<ChatManager>>,
 ) -> Result<auth::twitch::TwitchIdentity, String> {
-    let identity = auth::twitch::login(&state.http)
-        .await
-        .map_err(err_string)?;
+    let identity = auth::twitch::login(&state.http).await.map_err(err_string)?;
     // Auth state changed — reconnect any live Twitch chat tasks so they
     // pick up the new credentials.
     chat.reconnect_platform(Platform::Twitch, &state.store);
