@@ -92,47 +92,72 @@ impl BadgeCache {
     }
 }
 
-#[allow(dead_code)]
-const TWITCH_GLOBAL_URL: &str = "https://badges.twitch.tv/v1/badges/global/display";
+const TWITCH_GQL_URL: &str = "https://gql.twitch.tv/gql";
+// Twitch's own public web Client-ID used by twitch.tv. Documented in many
+// third-party Twitch tools (Chatterino, FFZ). Required for anonymous GQL.
+const TWITCH_PUBLIC_CLIENT_ID: &str = "kimne78kx3ncx6brgo4mv6wki5h1ko";
 
-#[allow(dead_code)]
-fn twitch_channel_url(room_id: &str) -> String {
-    format!("https://badges.twitch.tv/v1/badges/channels/{room_id}/display")
+const TWITCH_GLOBAL_BADGES_QUERY: &str =
+    "{ badges { setID version imageURL(size: QUADRUPLE) title } }";
+
+fn twitch_channel_badges_query(room_id: &str) -> String {
+    format!(
+        "{{ user(id: \"{room_id}\") {{ broadcastBadges {{ setID version imageURL(size: QUADRUPLE) title }} }} }}"
+    )
 }
 
 #[allow(dead_code)]
 #[derive(Debug, Deserialize)]
-pub struct TwitchBadgesResponse {
-    pub badge_sets: HashMap<String, TwitchBadgeSet>,
-}
-
-#[allow(dead_code)]
-#[derive(Debug, Deserialize)]
-pub struct TwitchBadgeSet {
-    pub versions: HashMap<String, TwitchBadgeVersion>,
-}
-
-#[allow(dead_code)]
-#[derive(Debug, Deserialize)]
-pub struct TwitchBadgeVersion {
-    pub image_url_4x: String,
+pub struct TwitchGqlBadge {
+    #[serde(rename = "setID")]
+    pub set_id: String,
+    pub version: String,
+    #[serde(rename = "imageURL")]
+    pub image_url: String,
     #[serde(default)]
     pub title: String,
 }
 
-impl TwitchBadgesResponse {
-    pub fn into_entries(self) -> impl Iterator<Item = (String, BadgeUrl)> {
-        self.badge_sets.into_iter().flat_map(|(set, body)| {
-            body.versions.into_iter().map(move |(ver, v)| {
-                (
-                    format!("{set}/{ver}"),
-                    BadgeUrl {
-                        url: v.image_url_4x,
-                        title: v.title,
-                    },
-                )
-            })
-        })
+#[allow(dead_code)]
+#[derive(Debug, Deserialize)]
+pub struct TwitchGqlGlobalData {
+    pub badges: Vec<TwitchGqlBadge>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Deserialize)]
+pub struct TwitchGqlGlobalResponse {
+    pub data: TwitchGqlGlobalData,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Deserialize)]
+pub struct TwitchGqlUser {
+    #[serde(rename = "broadcastBadges", default)]
+    pub broadcast_badges: Vec<TwitchGqlBadge>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Deserialize)]
+pub struct TwitchGqlChannelData {
+    pub user: Option<TwitchGqlUser>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Deserialize)]
+pub struct TwitchGqlChannelResponse {
+    pub data: TwitchGqlChannelData,
+}
+
+impl TwitchGqlBadge {
+    fn into_entry(self) -> (String, BadgeUrl) {
+        (
+            format!("{}/{}", self.set_id, self.version),
+            BadgeUrl {
+                url: self.image_url,
+                title: self.title,
+            },
+        )
     }
 }
 
@@ -142,11 +167,19 @@ impl BadgeCache {
         if self.is_global_loaded(Platform::Twitch) {
             return;
         }
-        match http.get(TWITCH_GLOBAL_URL).send().await {
-            Ok(r) if r.status().is_success() => match r.json::<TwitchBadgesResponse>().await {
+        let body = serde_json::json!({ "query": TWITCH_GLOBAL_BADGES_QUERY });
+        match http
+            .post(TWITCH_GQL_URL)
+            .header("Client-ID", TWITCH_PUBLIC_CLIENT_ID)
+            .json(&body)
+            .send()
+            .await
+        {
+            Ok(r) if r.status().is_success() => match r.json::<TwitchGqlGlobalResponse>().await {
                 Ok(body) => {
-                    for (id, badge) in body.into_entries() {
-                        self.insert(Platform::Twitch, Scope::Global, id, badge);
+                    for badge in body.data.badges {
+                        let (id, url) = badge.into_entry();
+                        self.insert(Platform::Twitch, Scope::Global, id, url);
                     }
                     self.mark_global_loaded(Platform::Twitch);
                 }
@@ -162,17 +195,26 @@ impl BadgeCache {
         if self.is_channel_loaded(Platform::Twitch, room_id) {
             return;
         }
-        let url = twitch_channel_url(room_id);
-        match http.get(&url).send().await {
-            Ok(r) if r.status().is_success() => match r.json::<TwitchBadgesResponse>().await {
+        let body = serde_json::json!({ "query": twitch_channel_badges_query(room_id) });
+        match http
+            .post(TWITCH_GQL_URL)
+            .header("Client-ID", TWITCH_PUBLIC_CLIENT_ID)
+            .json(&body)
+            .send()
+            .await
+        {
+            Ok(r) if r.status().is_success() => match r.json::<TwitchGqlChannelResponse>().await {
                 Ok(body) => {
-                    for (id, badge) in body.into_entries() {
-                        self.insert(
-                            Platform::Twitch,
-                            Scope::Channel(room_id.to_string()),
-                            id,
-                            badge,
-                        );
+                    if let Some(user) = body.data.user {
+                        for badge in user.broadcast_badges {
+                            let (id, url) = badge.into_entry();
+                            self.insert(
+                                Platform::Twitch,
+                                Scope::Channel(room_id.to_string()),
+                                id,
+                                url,
+                            );
+                        }
                     }
                     self.mark_channel_loaded(Platform::Twitch, room_id);
                 }
@@ -357,49 +399,43 @@ mod tests {
     }
 
     #[test]
-    fn parse_twitch_response_extracts_image_url_4x() {
+    fn parse_twitch_gql_global_extracts_entries() {
         let json = r#"{
-            "badge_sets": {
-                "broadcaster": {
-                    "versions": {
-                        "1": {
-                            "image_url_1x": "https://x/1.png",
-                            "image_url_2x": "https://x/2.png",
-                            "image_url_4x": "https://x/4.png",
-                            "title": "Broadcaster",
-                            "click_action": "",
-                            "click_url": ""
-                        }
+            "data": {
+                "badges": [
+                    {
+                        "setID": "broadcaster",
+                        "version": "1",
+                        "imageURL": "https://static-cdn.jtvnw.net/badges/v1/aaa/3",
+                        "title": "Broadcaster"
+                    },
+                    {
+                        "setID": "subscriber",
+                        "version": "0",
+                        "imageURL": "https://static-cdn.jtvnw.net/badges/v1/bbb/3",
+                        "title": "Subscriber"
                     }
-                },
-                "subscriber": {
-                    "versions": {
-                        "0": {
-                            "image_url_1x": "https://y/0_1.png",
-                            "image_url_2x": "https://y/0_2.png",
-                            "image_url_4x": "https://y/0_4.png",
-                            "title": "Subscriber",
-                            "click_action": "",
-                            "click_url": ""
-                        }
-                    }
-                }
+                ]
             }
         }"#;
-        let parsed: TwitchBadgesResponse = serde_json::from_str(json).expect("parse");
-        let entries: Vec<(String, BadgeUrl)> = parsed.into_entries().collect();
-        let map: std::collections::HashMap<String, BadgeUrl> = entries.into_iter().collect();
+        let parsed: TwitchGqlGlobalResponse = serde_json::from_str(json).expect("parse");
+        let entries: Vec<(String, BadgeUrl)> = parsed
+            .data
+            .badges
+            .into_iter()
+            .map(|b| b.into_entry())
+            .collect();
+        let map: std::collections::HashMap<String, String> = entries
+            .iter()
+            .map(|(k, v)| (k.clone(), v.url.clone()))
+            .collect();
         assert_eq!(
-            map.get("broadcaster/1").map(|b| b.url.as_str()),
-            Some("https://x/4.png")
+            map.get("broadcaster/1").map(String::as_str),
+            Some("https://static-cdn.jtvnw.net/badges/v1/aaa/3")
         );
         assert_eq!(
-            map.get("subscriber/0").map(|b| b.url.as_str()),
-            Some("https://y/0_4.png")
-        );
-        assert_eq!(
-            map.get("broadcaster/1").map(|b| b.title.as_str()),
-            Some("Broadcaster")
+            map.get("subscriber/0").map(String::as_str),
+            Some("https://static-cdn.jtvnw.net/badges/v1/bbb/3")
         );
     }
 
