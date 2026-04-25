@@ -1,7 +1,7 @@
 import { useRoomState } from '../hooks/useRoomState.js';
 
 /**
- * Single-row banner above the chat message list summarising every active
+ * Single-row banner pinned above the chat composer summarising every active
  * restrictive chat mode. Dismissible per-session-per-channel; reappears when
  * the underlying state changes.
  */
@@ -20,7 +20,6 @@ export default function ChatModeBanner({ channelKey, variant = 'irc' }) {
         padding: compact ? '3px 8px' : '4px 14px',
         background: 'rgba(255,255,255,.025)',
         borderTop: 'var(--hair)',
-        borderBottom: 'var(--hair)',
         borderLeft: '2px solid var(--warn)',
         color: 'var(--zinc-300)',
         fontSize: compact ? 10 : 'var(--t-11)',
