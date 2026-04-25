@@ -25,7 +25,7 @@ use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
 use super::badges::classify_mod_kick;
 use super::emotes::EmoteCache;
 use super::log_store::ChatLogWriter;
-use super::models::{ChatBadge, ChatMessage, ChatStatus, ChatStatusEvent, ChatUser, EmoteRange};
+use super::models::{ChatBadge, ChatMessage, ChatRoomState, ChatStatus, ChatStatusEvent, ChatUser, EmoteRange};
 use super::OutboundMsg;
 use crate::auth;
 use crate::platforms::Platform;
@@ -462,6 +462,52 @@ fn emit_status(app: &AppHandle, channel_key: &str, status: ChatStatus, message: 
     );
 }
 
+/// Parse Kick chatroom mode flags from the JSON object that contains
+/// `slow_mode` / `subscribers_mode` / `followers_mode` / `emotes_mode`. Used
+/// for both REST channel responses and Pusher `ChatroomUpdatedEvent` payloads.
+pub fn parse_chatroom_modes(v: &serde_json::Value) -> ChatRoomState {
+    let slow_seconds = if v
+        .pointer("/slow_mode/enabled")
+        .and_then(|x| x.as_bool())
+        .unwrap_or(false)
+    {
+        v.pointer("/slow_mode/message_interval")
+            .and_then(|x| x.as_u64())
+            .unwrap_or(0) as u32
+    } else {
+        0
+    };
+
+    let followers_only_minutes = if v
+        .pointer("/followers_mode/enabled")
+        .and_then(|x| x.as_bool())
+        .unwrap_or(false)
+    {
+        v.pointer("/followers_mode/min_duration")
+            .and_then(|x| x.as_i64())
+            .unwrap_or(0) as i32
+    } else {
+        -1
+    };
+
+    let subs_only = v
+        .pointer("/subscribers_mode/enabled")
+        .and_then(|x| x.as_bool())
+        .unwrap_or(false);
+    let emote_only = v
+        .pointer("/emotes_mode/enabled")
+        .and_then(|x| x.as_bool())
+        .unwrap_or(false);
+
+    ChatRoomState {
+        slow_seconds,
+        followers_only_minutes,
+        subs_only,
+        emote_only,
+        r9k: false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -508,5 +554,49 @@ mod tests {
     fn errors_when_user_id_missing() {
         let data = serde_json::json!({ "chatroom": { "id": 2 } });
         assert!(parse_channel_ids(&data).is_err());
+    }
+
+    #[test]
+    fn parses_kick_chatroom_modes_all_off() {
+        let v = serde_json::json!({
+            "slow_mode":         { "enabled": false, "message_interval": 0 },
+            "subscribers_mode":  { "enabled": false },
+            "followers_mode":    { "enabled": false, "min_duration": 0 },
+            "emotes_mode":       { "enabled": false }
+        });
+        let s = parse_chatroom_modes(&v);
+        assert_eq!(s.slow_seconds, 0);
+        assert_eq!(s.followers_only_minutes, -1);
+        assert!(!s.subs_only);
+        assert!(!s.emote_only);
+        assert!(!s.r9k);
+    }
+
+    #[test]
+    fn parses_kick_chatroom_modes_all_on() {
+        let v = serde_json::json!({
+            "slow_mode":         { "enabled": true,  "message_interval": 10 },
+            "subscribers_mode":  { "enabled": true },
+            "followers_mode":    { "enabled": true,  "min_duration": 30 },
+            "emotes_mode":       { "enabled": true }
+        });
+        let s = parse_chatroom_modes(&v);
+        assert_eq!(s.slow_seconds, 10);
+        assert_eq!(s.followers_only_minutes, 30);
+        assert!(s.subs_only);
+        assert!(s.emote_only);
+    }
+
+    #[test]
+    fn kick_disabled_overrides_leftover_value() {
+        let v = serde_json::json!({
+            "slow_mode":         { "enabled": false, "message_interval": 99 },
+            "subscribers_mode":  { "enabled": false },
+            "followers_mode":    { "enabled": false, "min_duration": 60 },
+            "emotes_mode":       { "enabled": false }
+        });
+        let s = parse_chatroom_modes(&v);
+        assert_eq!(s.slow_seconds, 0);
+        assert_eq!(s.followers_only_minutes, -1);
     }
 }
