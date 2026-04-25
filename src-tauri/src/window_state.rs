@@ -158,12 +158,41 @@ fn validate_and_fix(window: &tauri::WebviewWindow) -> Result<()> {
 }
 
 /// Center the window on the primary monitor at the default size.
-/// Used when no saved state exists (first launch).
+/// Used when no saved state exists (or saved geometry matches conf defaults).
 fn center_on_primary(window: &tauri::WebviewWindow) -> Result<()> {
     let primary = primary_rect(window)?;
     let target = centered_rect_in_monitor(primary, DEFAULT_SIZE);
-    log::info!("window_state: first launch; centering on primary at {:?}", target);
+    log::info!(
+        "window_state: no saved state (or saved geometry matches defaults); centering on primary at {target:?}",
+    );
     apply_rect(window, target)?;
+    Ok(())
+}
+
+/// The set of fields the plugin saves and we restore. Keep this in sync with
+/// the `Builder::with_state_flags(...)` call in `lib.rs::run`.
+pub(crate) fn state_flags() -> StateFlags {
+    StateFlags::POSITION | StateFlags::SIZE | StateFlags::MAXIMIZED
+}
+
+/// Restore saved geometry and validate it. If no saved state exists (detected
+/// by comparing before/after), center on the primary monitor instead.
+fn restore_and_validate(window: &tauri::WebviewWindow) -> Result<()> {
+    let flags = state_flags();
+
+    let before = current_window_rect(window)?;
+    window
+        .restore_state(flags)
+        .context("plugin restore_state")?;
+    let after = current_window_rect(window)?;
+
+    let restored_something = before != after;
+
+    if restored_something {
+        validate_and_fix(window)?;
+    } else {
+        center_on_primary(window)?;
+    }
     Ok(())
 }
 
@@ -189,27 +218,16 @@ pub fn register(app: &tauri::App) -> Result<()> {
         .get_webview_window("main")
         .ok_or_else(|| anyhow!("main window missing during window_state::register"))?;
 
-    let flags = StateFlags::POSITION | StateFlags::SIZE | StateFlags::MAXIMIZED;
-
-    // restore_state succeeds even if no saved file exists — it's a no-op
-    // in that case. We detect "no saved state" by checking whether the
-    // restore actually moved the window from its config-default geometry.
-    let before = current_window_rect(&window)?;
-    window
-        .restore_state(flags)
-        .context("plugin restore_state")?;
-    let after = current_window_rect(&window)?;
-
-    let restored_something = before != after;
-
-    if restored_something {
-        validate_and_fix(&window)?;
-    } else {
-        center_on_primary(&window)?;
+    if let Err(e) = restore_and_validate(&window) {
+        log::warn!(
+            "window_state: startup geometry restore failed ({e:#}); falling back to config defaults"
+        );
     }
 
     window.show().context("window.show")?;
-    let _ = window.set_focus();
+    if let Err(e) = window.set_focus() {
+        log::warn!("window_state: set_focus failed ({e}); compositor may not raise the window");
+    }
     Ok(())
 }
 
