@@ -205,6 +205,7 @@ export default function ChatView({
           style={{
             height: '100%',
             overflowY: 'auto',
+            overflowX: 'hidden',
             fontSize: variant === 'compact' ? 'var(--t-11)' : 'var(--t-12)',
             lineHeight: 1.45,
           }}

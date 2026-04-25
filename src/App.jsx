@@ -11,6 +11,7 @@ import UserCardContextMenu from './components/UserCardContextMenu.jsx';
 import UserHistoryDialog from './components/UserHistoryDialog.jsx';
 import WindowControls from './components/WindowControls.jsx';
 import PreferencesDialog from './components/PreferencesDialog.jsx';
+import ResizeHandles from './components/ResizeHandles.jsx';
 import { useDragHandler } from './hooks/useDragRegion.js';
 import { useLivestreams } from './hooks/useLivestreams.js';
 import { usePreferences } from './hooks/usePreferences.jsx';
@@ -257,6 +258,7 @@ export default function App() {
 
   return (
     <div className="rx-root">
+      <ResizeHandles />
       <div className="rx-titlebar" data-tauri-drag-region onMouseDown={onTitlebarMouseDown}>
         <div className="rx-tb-dots" role="tablist" aria-label="Layout">
           {LAYOUTS.map((l) => (
