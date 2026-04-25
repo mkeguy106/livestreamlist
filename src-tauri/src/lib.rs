@@ -15,6 +15,7 @@ mod settings;
 mod streamlink;
 mod tray;
 mod users;
+mod window_state;
 
 use channels::{Channel, ChannelStore, Livestream, SharedStore};
 use chat::ChatManager;
