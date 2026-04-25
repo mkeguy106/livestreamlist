@@ -100,13 +100,28 @@ fn current_window_rect(window: &tauri::WebviewWindow) -> Result<Rect> {
     })
 }
 
-/// Pick the primary monitor. Tauri exposes `primary_monitor()` directly.
+/// Pick the primary monitor, falling back to the first available monitor.
+///
+/// Wayland has no canonical concept of a primary monitor, so
+/// `primary_monitor()` commonly returns `Ok(None)` on KDE/GNOME Wayland even
+/// when monitors are present. In that case we fall back to whatever
+/// `available_monitors()` reports first — this is what most cross-platform
+/// toolkits do, and it gives a usable answer instead of failing the whole
+/// startup geometry path.
 fn primary_rect(window: &tauri::WebviewWindow) -> Result<Rect> {
-    let primary = window
+    if let Some(primary) = window
         .primary_monitor()
         .context("querying primary monitor")?
-        .ok_or_else(|| anyhow!("no primary monitor reported"))?;
-    Ok(monitor_to_rect(&primary))
+    {
+        return Ok(monitor_to_rect(&primary));
+    }
+    let monitors = window
+        .available_monitors()
+        .context("enumerating monitors")?;
+    let fallback = monitors
+        .first()
+        .ok_or_else(|| anyhow!("no monitors reported by the compositor"))?;
+    Ok(monitor_to_rect(fallback))
 }
 
 fn all_monitor_rects(window: &tauri::WebviewWindow) -> Result<Vec<Rect>> {
@@ -132,15 +147,24 @@ fn apply_rect(window: &tauri::WebviewWindow, rect: Rect) -> Result<()> {
 fn validate_and_fix(window: &tauri::WebviewWindow) -> Result<()> {
     let current = current_window_rect(window)?;
     let monitors = all_monitor_rects(window)?;
-    let primary = primary_rect(window)?;
 
     let size_ok = is_size_sane(current.w, current.h);
-    let position_ok = is_titlebar_reachable(current, &monitors);
+    // If the compositor reports no monitors (rare, but observed on some
+    // Wayland sessions), we cannot meaningfully validate position. Trust the
+    // saved geometry rather than fail — anything we'd recenter to would be a
+    // guess too.
+    let position_ok = if monitors.is_empty() {
+        true
+    } else {
+        is_titlebar_reachable(current, &monitors)
+    };
 
     if size_ok && position_ok {
         return Ok(());
     }
 
+    // Only resolve the primary monitor when we actually need a target.
+    let primary = primary_rect(window)?;
     let desired = if size_ok {
         (current.w, current.h)
     } else {
