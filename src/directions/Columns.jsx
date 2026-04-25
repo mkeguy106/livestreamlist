@@ -225,6 +225,7 @@ function Column({ channel, accentColumn, onLaunch, onOpenBrowser, onUsernameOpen
       <ChatView
         channelKey={channel.unique_key}
         variant="compact"
+        isLive={Boolean(channel.is_live)}
         onUsernameOpen={onUsernameOpen}
         onUsernameContext={onUsernameContext}
         onUsernameHover={onUsernameHover}

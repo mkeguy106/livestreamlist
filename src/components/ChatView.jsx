@@ -5,6 +5,7 @@ import { usePreferences } from '../hooks/usePreferences.jsx';
 import ChatModeBanner from './ChatModeBanner.jsx';
 import Composer from './Composer.jsx';
 import ConversationDialog from './ConversationDialog.jsx';
+import EmbeddedChat from './EmbeddedChat.jsx';
 import EmoteText from './EmoteText.jsx';
 import UserBadges from './UserBadges.jsx';
 
@@ -28,10 +29,38 @@ export default function ChatView({
   variant = 'irc',
   header = null,
   footer = null,
+  isLive = true,
   onUsernameOpen,      // (user, anchorRect, channelKey) — left-click
   onUsernameContext,   // (user, point, channelKey)      — right-click
   onUsernameHover,     // (user | null, anchorRect | null, channelKey) — entering=true|false implicit via user!=null
 }) {
+  // YouTube and Chaturbate don't have a built-in chat client — we mount the
+  // platform's own /live_chat (or room) page as a child webview overlaid on
+  // the chat pane. Branch out before the IRC-style state machinery runs.
+  const platform = channelKey?.split(':')[0];
+  if (platform === 'youtube' || platform === 'chaturbate') {
+    return (
+      <div
+        style={{
+          flex: 1,
+          display: 'flex',
+          flexDirection: 'column',
+          minHeight: 0,
+          overflow: 'hidden',
+        }}
+      >
+        {header}
+        <div style={{ flex: 1, position: 'relative', minHeight: 0, overflow: 'hidden' }}>
+          <EmbeddedChat
+            channelKey={channelKey}
+            isLive={isLive}
+            placeholderText="Channel isn't live — chat will appear here when it goes live."
+          />
+        </div>
+      </div>
+    );
+  }
+
   const { messages, status, pauseTrim, resumeTrim } = useChat(channelKey);
   const auth = useAuth();
   const listRef = useRef(null);
@@ -44,7 +73,6 @@ export default function ChatView({
   const [pauseSecondsLeft, setPauseSecondsLeft] = useState(0);
   const [conversation, setConversation] = useState(null);
 
-  const platform = channelKey?.split(':')[0];
   const myLogin =
     (platform === 'kick' ? auth.kick?.login : auth.twitch?.login)?.toLowerCase() ?? null;
 

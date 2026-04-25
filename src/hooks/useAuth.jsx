@@ -5,6 +5,9 @@ import {
   kickLogout,
   twitchLogin,
   twitchLogout,
+  youtubeLogin,
+  youtubeLoginPaste,
+  youtubeLogout,
 } from '../ipc.js';
 
 /**
@@ -20,6 +23,7 @@ export function AuthProvider({ children }) {
     loading: true,
     twitch: null,
     kick: null,
+    youtube: { browser: null, has_paste: false },
     error: null,
   });
 
@@ -30,6 +34,7 @@ export function AuthProvider({ children }) {
         loading: false,
         twitch: data?.twitch ?? null,
         kick: data?.kick ?? null,
+        youtube: data?.youtube ?? { browser: null, has_paste: false },
         error: null,
       });
     } catch (e) {
@@ -43,26 +48,49 @@ export function AuthProvider({ children }) {
 
   const login = useCallback(async (platform) => {
     try {
+      if (platform === 'youtube') {
+        await youtubeLogin();
+        await refresh();
+        return;
+      }
       const id = platform === 'kick' ? await kickLogin() : await twitchLogin();
       setState((s) => ({ ...s, [platform]: id, error: null }));
     } catch (e) {
       setState((s) => ({ ...s, error: String(e?.message ?? e) }));
+      throw e;
     }
-  }, []);
+  }, [refresh]);
 
   const logout = useCallback(async (platform) => {
     try {
       if (platform === 'kick') await kickLogout();
-      else await twitchLogout();
+      else if (platform === 'youtube') {
+        await youtubeLogout();
+        await refresh();
+        return;
+      } else {
+        await twitchLogout();
+      }
       setState((s) => ({ ...s, [platform]: null, error: null }));
     } catch (e) {
       setState((s) => ({ ...s, error: String(e?.message ?? e) }));
+      throw e;
     }
-  }, []);
+  }, [refresh]);
+
+  const loginYoutubePaste = useCallback(async (text) => {
+    try {
+      await youtubeLoginPaste(text);
+      await refresh();
+    } catch (e) {
+      setState((s) => ({ ...s, error: String(e?.message ?? e) }));
+      throw e;
+    }
+  }, [refresh]);
 
   const value = useMemo(
-    () => ({ ...state, refresh, login, logout }),
-    [state, refresh, login, logout],
+    () => ({ ...state, refresh, login, logout, loginYoutubePaste }),
+    [state, refresh, login, logout, loginYoutubePaste],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

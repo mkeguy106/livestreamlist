@@ -36,6 +36,11 @@ pub struct GeneralSettings {
     pub refresh_interval_seconds: u32,
     pub notify_on_live: bool,
     pub close_to_tray: bool,
+    /// yt-dlp browser name to pull cookies from (`chrome`, `firefox`, `brave`,
+    /// etc.). `None` falls back to the pasted cookies file when present, then
+    /// to anonymous. See `auth::youtube` for detection + consumption.
+    #[serde(default)]
+    pub youtube_cookies_browser: Option<String>,
 }
 
 impl Default for GeneralSettings {
@@ -44,6 +49,7 @@ impl Default for GeneralSettings {
             refresh_interval_seconds: 60,
             notify_on_live: true,
             close_to_tray: false,
+            youtube_cookies_browser: None,
         }
     }
 }

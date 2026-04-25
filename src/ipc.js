@@ -27,6 +27,12 @@ export const chatConnect = (uniqueKey) => invoke('chat_connect', { uniqueKey });
 export const chatDisconnect = (uniqueKey) => invoke('chat_disconnect', { uniqueKey });
 export const chatSend = (uniqueKey, text) => invoke('chat_send', { uniqueKey, text });
 export const chatOpenPopout = (uniqueKey) => invoke('chat_open_popout', { uniqueKey });
+export const embedMount = (uniqueKey, x, y, width, height) =>
+  invoke('embed_mount', { uniqueKey, x, y, width, height });
+export const embedPosition = (uniqueKey, x, y, width, height) =>
+  invoke('embed_position', { uniqueKey, x, y, width, height });
+export const embedUnmount = (uniqueKey) => invoke('embed_unmount', { uniqueKey });
+export const embedSetVisible = (visible) => invoke('embed_set_visible', { visible });
 export const listEmotes = (uniqueKey) => invoke('list_emotes', { uniqueKey });
 export const replayChatHistory = (uniqueKey, limit = 100) =>
   invoke('replay_chat_history', { uniqueKey, limit });
@@ -35,6 +41,10 @@ export const twitchLogin = () => invoke('twitch_login');
 export const twitchLogout = () => invoke('twitch_logout');
 export const kickLogin = () => invoke('kick_login');
 export const kickLogout = () => invoke('kick_logout');
+export const youtubeLogin = () => invoke('youtube_login');
+export const youtubeLoginPaste = (text) => invoke('youtube_login_paste', { text });
+export const youtubeLogout = () => invoke('youtube_logout');
+export const youtubeDetectBrowsers = () => invoke('youtube_detect_browsers');
 export const importTwitchFollows = () => invoke('import_twitch_follows');
 export const getSettings = () => invoke('get_settings');
 export const updateSettings = (patch) => invoke('update_settings', { patch });

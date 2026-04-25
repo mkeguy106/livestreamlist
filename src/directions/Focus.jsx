@@ -126,6 +126,7 @@ export default function Focus({ ctx }) {
           <ChatView
             channelKey={featured?.unique_key}
             variant="irc"
+            isLive={Boolean(featured?.is_live)}
             onUsernameOpen={onUsernameOpen}
             onUsernameContext={onUsernameContext}
             onUsernameHover={onUsernameHover}
