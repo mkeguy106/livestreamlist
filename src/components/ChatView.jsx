@@ -343,12 +343,17 @@ function IrcRow({
       <div
         style={{
           display: 'grid',
-          gridTemplateColumns: showTimestamps ? '58px minmax(0, 1fr)' : 'minmax(0, 1fr)',
+          gridTemplateColumns: showTimestamps
+            ? `${timestamp24h ? 58 : 78}px minmax(0, 1fr)`
+            : 'minmax(0, 1fr)',
           columnGap: 10,
         }}
       >
         {showTimestamps && (
-          <span className="rx-mono" style={{ fontSize: 10, color: 'var(--zinc-600)' }}>
+          <span
+            className="rx-mono"
+            style={{ fontSize: 10, color: 'var(--zinc-600)', whiteSpace: 'nowrap' }}
+          >
             {time}
           </span>
         )}
