@@ -70,9 +70,13 @@ Twitch is the hardest one and it's done; the others are straightforward ports.
 
 ### YouTube + Chaturbate chat (embedded)
 
-- [ ] Tauri's `webview` can create additional web-only windows — embed YouTube's native `/live_chat?…&is_popout=1` in an isolated webview, persisted cookie store
-- [ ] Same pattern for Chaturbate's room page; inject the DOM-isolation CSS/JS from `livestream.list.qt`'s `chaturbate_web_chat.py`
-- [ ] Sign-in flows: host a small `_YouTubeLoginWindow` / `_ChaturbateLoginWindow` that holds a cookie-tracking webview
+- [ ] **YouTube embedded chat** — mount YouTube's own `/live_chat?v={video_id}&is_popout=1` inside a Tauri `WebviewWindow` (or inline iframe if cross-origin allows — evaluate both). Keeping YouTube's own chat widget means we get super-chats, membership badges, memberships-only / subscribers-only slow-mode, polls and pinned moderator messages for free instead of reimplementing. A dedicated `QWebEngineProfile` in Qt becomes a Tauri `WebviewWindow` with a dedicated profile directory under `~/.local/share/livestreamlist/webviews/youtube/`. Inject a small CSS patch on `navigation-completed` to match the embed to our zinc theme (background, scrollbar, font).
+- [ ] **Chaturbate embedded chat** — same pattern for the full room page (`https://chaturbate.com/{slug}/`). Inject the DOM-isolation CSS/JS from `livestream.list.qt`'s `chaturbate_web_chat.py` to hide the video player, sidebar, ads, and header so only the chat column is visible. Persistent cookie profile at `~/.local/share/livestreamlist/webviews/chaturbate/`.
+- [ ] **YouTube cookie login** — YouTube's authenticated endpoints (send chat, read subscriptions) need the five Google session cookies: `SID`, `HSID`, `SSID`, `APISID`, `SAPISID`. Ship two auth paths:
+  - (a) **In-app sign-in** — open a small `youtube-login` WebviewWindow at `https://accounts.google.com/signin`. Track `cookieChanged` events on the profile; once all five target cookies are present, close the window and save them to the keyring (entry: `livestreamlist-youtube`). No user manual-paste needed. This is the preferred path.
+  - (b) **Manual paste fallback** — Preferences → Accounts → YouTube → "Paste cookies" multiline input. Required for Flatpak sandboxed builds where the in-app webview can't persist cookies. See `livestream.list.qt/docs/youtube-cookies.md` for user-facing docs.
+- [ ] **Chaturbate login** — small `chaturbate-login` WebviewWindow at `https://chaturbate.com/auth/login/`. Poll the profile's cookie store for the site session cookie (`csrftoken` + logged-in marker); close the window and persist the profile once signed in. The same profile is reused by the chat embed and the follow-import call.
+- [ ] **YouTube multi-concurrent-stream channels** (NASA-style) — some channels (NASA Space Station, news outlets, event channels) broadcast 2+ simultaneous live streams from one channel id. The Qt app detects this in `api/youtube.py::_fetch_concurrent_live_video_ids` by scraping the channel's `/streams` page for all currently-live video IDs, then fetching each video's `ytInitialPlayerResponse` to get per-stream title / viewers / thumbnails. Model change: our `Livestream.unique_key` must gain a video-id suffix for YouTube so two concurrent streams from one channel can coexist as separate list entries (`youtube:{channel_id}:{video_id}`). Refresh flow returns a `Vec<Livestream>` per YouTube channel, flattened into the store.
 
 ---
 
@@ -89,6 +93,7 @@ Twitch is the hardest one and it's done; the others are straightforward ports.
 - [ ] Emote picker popup (search, category tabs, viewport culling)
 - [ ] Tab completion for emotes (`:`) and mentions (`@`)
 - [ ] **Third-party Twitch chat preload** — on chat connect, fetch the last N messages from a public history service (e.g. `recent-messages.robotty.de/api/v2/recent-messages/{login}`) and replay them before the live IRC stream starts. Matches the Qt app's pre-load behavior so a freshly opened channel isn't an empty box for the first 30 seconds. Configurable message cap (default 100) and respect the service's TTL / rate limits; gracefully skip when the service is unreachable.
+- [ ] **Twitch whispers (DMs)** — send and receive one-to-one messages with other Twitch users. IRC whispers were deprecated in 2023; the current path is Helix `POST /helix/whispers?from_user_id=X&to_user_id=Y` for sending and EventSub `user.whisper.message` for receiving. Needs scope `user:manage:whispers`. UI: a separate "Whispers" tab list alongside channel tabs, one conversation per partner. Per-partner history persisted as JSONL under `~/.local/share/livestreamlist/whispers/{user_id}.jsonl` (mirror of Qt's `chat/whisper_store.py`). Rate limits to respect: 40/sec to known recipients, 100/day to new recipients for verified phone numbers.
 
 ---
 
@@ -100,6 +105,11 @@ These are small-scoped UX fixes that don't belong under a "phase" but should lan
 - [ ] **Global hover + focus audit** — sweep every interactive element and normalize hover / focus-visible styling against `tokens.css`. Known offenders: chat emotes, the account chip in the titlebar, the preferences icon, add-channel and refresh buttons, layout-switcher dots, column header controls. Currently several of them fall through to WebKit's native cursor / outline, breaking the visual identity.
 - [ ] **Channel-list search** — a slim search input pinned at the top of the channel rail (Command layout) that filters the visible list live as the user types. Match by `display_name` and `channel_id`, case-insensitive. Use the existing `.rx-input` class so it lands without new design decisions.
 - [ ] **Last-selected-channel memory** — persist `last_selected_channel_key` across runs. On launch: if that channel is live, select it and open its chat in the main pane. If it's offline, fall back to selecting the top entry of the (live-first, then favorites, then alpha) channel list.
+- [ ] **UI scale setting (accessibility)** — slider under Preferences → Appearance → UI Scale, range 75% – 200% in 5% steps, default 100%. Needed for users with low vision and for 4K-at-small-physical-size setups where the default sizing is too tight. Implementation options to evaluate:
+  - (a) `WebviewWindow::set_zoom()` — Tauri 2 exposes WebKit/Chromium's page zoom. Best typography quality; scales the whole webview uniformly including fonts, images, and layout.
+  - (b) CSS-variable approach — add `:root { font-size: calc(16px * var(--ui-scale)); }` and express every sizing token in `rem`. More invasive (needs a sweep of `tokens.css` and the inline-styled components), but gives us pixel-perfect control and survives future webview runtime changes.
+  - (c) `document.body.style.zoom` — quick, cross-browser, but known to break fixed-position overlays and has subpixel-layout artifacts.
+  Pick after a prototype comparison on 4K + 1440p + 1080p. Persist as `settings.appearance.ui_scale`. Apply *before* first paint so the app doesn't reflow after the React tree mounts.
 
 ---
 
@@ -114,16 +124,17 @@ These are small-scoped UX fixes that don't belong under a "phase" but should lan
 - [ ] **Single-instance guard** — `tauri-plugin-single-instance`. Second launch focuses existing window. CLI `--allow-multiple` bypass
 - [ ] **Background mode** — close → hide to tray, don't quit
 - [ ] Log viewer / "Open log directory"
-- [ ] Import/export settings+channels to JSON (NOT tokens/cookies)
+- [ ] **Import/export settings + channels** — single-file JSON bundle containing `channels.json`, `settings.json`, saved theme files, and Phase 6's saved column groups. Top-level `version` string matching the app's `Cargo.toml` package version; on import, refuse files from a newer version, offer a best-effort migration from older versions. **Never includes credentials** (OAuth tokens live in the system keyring; YouTube/Chaturbate cookies live in webview profile directories). On import, offer `replace` vs `merge` semantics for channels (show a diff: adds / removes / updates; user picks per-row or bulk); settings replace wholesale. Emit a format compatible with Qt's `livestream-list-export-YYYY-MM-DD.json` where reasonable so users can migrate between the two apps.
 - [ ] **Developer tab + context-menu hardening** — the default WebKit right-click menu (back / forward / reload / Inspect Element) leaks development tooling to normal users. Disable it by default via `tauri.conf.json` + a `contextmenu` listener in the shell HTML. Add a new "Developer" tab in Preferences with two toggles (both default off): "Show developer context menu" (re-enables the native menu including Inspect Element) and "Verbose logging" (promotes `log::debug!` calls to stdout + writes a detailed trace log to `~/.local/share/livestreamlist/logs/debug.log` for issue reports).
 
 ---
 
 ## Phase 5 — Import follows / spellcheck / Turbo / release
 
-- [ ] **Import follows from Twitch** — Helix `GET /channels/followed?user_id=…` (requires `user:read:follows`)
-- [ ] **Import follows from Kick** — REST endpoint (auth required)
-- [ ] **Import follows from Chaturbate** — bulk room-list endpoint with session cookies
+- [ ] **Import follows from Twitch** — Helix `GET /channels/followed?user_id=…` (requires `user:read:follows`). Paginate until cursor exhausted; dedupe against existing channels in the store.
+- [ ] **Import follows from Kick** — authenticated REST endpoint (`GET /api/internal/v1/channels/followed` or the public-API equivalent once Kick stabilises it). Requires the Kick OAuth token from Phase 2b.
+- [ ] **Import follows from Chaturbate** — bulk room-list endpoint (`/api/ts/roomlist/room-list/?follow=true`) with the logged-in session cookies from Phase 2b's Chaturbate sign-in. Paginate through all followed rooms; add each as a Chaturbate channel.
+- [ ] **Import subscriptions from YouTube** — gated behind YouTube cookie login (Phase 2b). Request the authenticated subscriptions page (`https://www.youtube.com/feed/channels`) or the authenticated internal API (`youtubei/v1/browse` with `browseId=FEsubscriptions`); parse the subscription list for channel IDs, handles, and display names. Include a checkbox **"Only import channels that do livestreams"** (checked by default — matches Qt's `YouTubeImportDialog.filter_checkbox`); when on, hit each candidate channel's `/live` URL and drop channels that redirect to `/videos` (i.e., never-live VOD-only channels). Progress bar during the filter pass — typical subscription list of a few hundred channels takes 30–60 s with 10-way concurrency.
 - [ ] **Spellcheck / autocorrect** — ship `hunspell` on Linux via the `hunspell` crate or subprocess; fall back to a pure-Rust `symspell` on Windows/macOS. Skip rules for emotes, URLs, mentions, all-caps. Red wavy underlines in composer; green underline on auto-correction for 3 s. Distance-1 Damerau-Levenshtein for auto; distance-≤ 2 for manual suggestions
 - [ ] Adult word list (`data/adult.txt`) bundled to suppress false positives on chat slang
 - [ ] **Twitch Turbo auth** — must use browser `auth-token` cookie (not the OAuth token — it's client-ID-bound). `Authorization: OAuth {cookie}` when passed to streamlink. Offer a login button that scrapes the cookie from a local WebView session. Once wired, subscribers get their subscribed quality tiers and Turbo users get ad-free playback automatically — same behavior as the Qt app
