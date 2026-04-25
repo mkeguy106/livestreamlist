@@ -6,7 +6,9 @@
 //! centering math, and the deferred-show startup sequence that fixes KDE
 //! Wayland's place-under-cursor / load-behind behavior.
 
-#![allow(dead_code)] // wired up in Task 6
+use anyhow::{anyhow, Context, Result};
+use tauri::{Manager, PhysicalPosition, PhysicalSize};
+use tauri_plugin_window_state::{StateFlags, WindowExt};
 
 /// Physical-pixel rectangle. `x,y` is the upper-left.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -72,6 +74,143 @@ pub(crate) fn is_titlebar_reachable(win: Rect, monitors: &[Rect]) -> bool {
         h: TITLEBAR_HEIGHT_PX.min(win.h),
     };
     monitors.iter().any(|m| titlebar.intersects(m))
+}
+
+fn monitor_to_rect(m: &tauri::Monitor) -> Rect {
+    let pos = m.position();
+    let size = m.size();
+    Rect {
+        x: pos.x,
+        y: pos.y,
+        w: size.width,
+        h: size.height,
+    }
+}
+
+fn current_window_rect(window: &tauri::WebviewWindow) -> Result<Rect> {
+    let pos: PhysicalPosition<i32> = window
+        .outer_position()
+        .context("reading outer_position")?;
+    let size: PhysicalSize<u32> = window.outer_size().context("reading outer_size")?;
+    Ok(Rect {
+        x: pos.x,
+        y: pos.y,
+        w: size.width,
+        h: size.height,
+    })
+}
+
+/// Pick the primary monitor. Tauri exposes `primary_monitor()` directly.
+fn primary_rect(window: &tauri::WebviewWindow) -> Result<Rect> {
+    let primary = window
+        .primary_monitor()
+        .context("querying primary monitor")?
+        .ok_or_else(|| anyhow!("no primary monitor reported"))?;
+    Ok(monitor_to_rect(&primary))
+}
+
+fn all_monitor_rects(window: &tauri::WebviewWindow) -> Result<Vec<Rect>> {
+    let monitors = window
+        .available_monitors()
+        .context("enumerating monitors")?;
+    Ok(monitors.iter().map(monitor_to_rect).collect())
+}
+
+/// Apply a rect to the window using physical-pixel APIs.
+fn apply_rect(window: &tauri::WebviewWindow, rect: Rect) -> Result<()> {
+    window
+        .set_position(PhysicalPosition::new(rect.x, rect.y))
+        .context("set_position")?;
+    window
+        .set_size(PhysicalSize::new(rect.w, rect.h))
+        .context("set_size")?;
+    Ok(())
+}
+
+/// Read the current geometry, run our validators, and override with a centered
+/// rect if the saved state is unreachable or corrupt.
+fn validate_and_fix(window: &tauri::WebviewWindow) -> Result<()> {
+    let current = current_window_rect(window)?;
+    let monitors = all_monitor_rects(window)?;
+    let primary = primary_rect(window)?;
+
+    let size_ok = is_size_sane(current.w, current.h);
+    let position_ok = is_titlebar_reachable(current, &monitors);
+
+    if size_ok && position_ok {
+        return Ok(());
+    }
+
+    let desired = if size_ok {
+        (current.w, current.h)
+    } else {
+        DEFAULT_SIZE
+    };
+    let target = centered_rect_in_monitor(primary, desired);
+    log::info!(
+        "window_state: saved geometry unreachable (size_ok={}, pos_ok={}); recentering on primary to {:?}",
+        size_ok,
+        position_ok,
+        target,
+    );
+    apply_rect(window, target)?;
+    Ok(())
+}
+
+/// Center the window on the primary monitor at the default size.
+/// Used when no saved state exists (first launch).
+fn center_on_primary(window: &tauri::WebviewWindow) -> Result<()> {
+    let primary = primary_rect(window)?;
+    let target = centered_rect_in_monitor(primary, DEFAULT_SIZE);
+    log::info!("window_state: first launch; centering on primary at {:?}", target);
+    apply_rect(window, target)?;
+    Ok(())
+}
+
+/// Wire up startup window-state behavior for the main window.
+///
+/// Sequence:
+///   1. Ask the plugin to restore saved position/size/maximized (no-op if
+///      the JSON file is missing — first launch).
+///   2. If geometry is unreachable or corrupt, override with a centered rect
+///      on the primary monitor.
+///   3. If no saved state existed, center on the primary monitor at the
+///      default size.
+///   4. Show the window. This is the moment the compositor first sees it,
+///      so the geometry we set above is what gets mapped — no smart-placement.
+///   5. Bring it to the front via xdg-activation / SetForegroundWindow /
+///      makeKeyAndOrderFront.
+///
+/// The window must have `"visible": false` in `tauri.conf.json` for this to
+/// have its intended effect on Wayland — without that, the compositor maps
+/// the window before we can position it.
+pub fn register(app: &tauri::App) -> Result<()> {
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| anyhow!("main window missing during window_state::register"))?;
+
+    let flags = StateFlags::POSITION | StateFlags::SIZE | StateFlags::MAXIMIZED;
+
+    // restore_state succeeds even if no saved file exists — it's a no-op
+    // in that case. We detect "no saved state" by checking whether the
+    // restore actually moved the window from its config-default geometry.
+    let before = current_window_rect(&window)?;
+    window
+        .restore_state(flags)
+        .context("plugin restore_state")?;
+    let after = current_window_rect(&window)?;
+
+    let restored_something = before != after;
+
+    if restored_something {
+        validate_and_fix(&window)?;
+    } else {
+        center_on_primary(&window)?;
+    }
+
+    window.show().context("window.show")?;
+    let _ = window.set_focus();
+    Ok(())
 }
 
 #[cfg(test)]
