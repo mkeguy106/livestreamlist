@@ -16,7 +16,7 @@ import { useDragHandler } from './hooks/useDragRegion.js';
 import { useLivestreams } from './hooks/useLivestreams.js';
 import { usePreferences } from './hooks/usePreferences.jsx';
 import { useUserCard } from './hooks/useUserCard.js';
-import { getUserMetadata, launchStream, listenEvent, openInBrowser, removeChannel, setFavorite, setUserMetadata } from './ipc.js';
+import { embedSetVisible, getUserMetadata, launchStream, listenEvent, openInBrowser, removeChannel, setFavorite, setUserMetadata } from './ipc.js';
 
 const LAYOUTS = [
   { id: 'command', label: 'Command', letter: 'A', Component: Command },
@@ -221,6 +221,15 @@ export default function App() {
       if (unlisten) unlisten();
     };
   }, [refresh]);
+
+  // Native child webviews (YouTube/Chaturbate inline chat) sit above the HTML
+  // layer on Linux/Wayland — anything that overlaps them gets occluded. Hide
+  // every embed while a full-window modal is up; restore on close.
+  const anyDialogOpen = addOpen || prefsOpen || nickDlg.open || noteDlg.open
+    || historyDlg.open || userCtx.open || card.open;
+  useEffect(() => {
+    embedSetVisible(!anyDialogOpen).catch(() => {});
+  }, [anyDialogOpen]);
 
   const ctx = useMemo(() => ({
     livestreams,

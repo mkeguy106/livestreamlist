@@ -44,17 +44,24 @@ fn live_url(channel_id: &str) -> String {
 /// Spawn `yt-dlp` for a single channel. Returns `None` when yt-dlp reports the
 /// channel is not currently live; bubbles real errors (missing binary, network
 /// failure, timeout) up.
-pub async fn fetch_live(channel_id: &str) -> Result<Option<YouTubeLive>> {
+pub async fn fetch_live(
+    channel_id: &str,
+    cookies_browser: Option<&str>,
+) -> Result<Option<YouTubeLive>> {
     let url = live_url(channel_id);
-    let run = Command::new("yt-dlp")
-        .arg("--dump-single-json")
+    let mut cmd = Command::new("yt-dlp");
+    cmd.arg("--dump-single-json")
         .arg("--no-download")
         .arg("--no-warnings")
         .arg("--skip-download")
-        .arg("--no-playlist")
-        .arg(&url)
-        .kill_on_drop(true)
-        .output();
+        .arg("--no-playlist");
+    // Authenticate as the signed-in user when a browser is configured or a
+    // pasted cookies file is on disk. Lets age-restricted / member-only / sub-
+    // only livestreams resolve correctly.
+    for arg in crate::auth::youtube::yt_dlp_cookie_args(cookies_browser) {
+        cmd.arg(arg);
+    }
+    let run = cmd.arg(&url).kill_on_drop(true).output();
 
     let out = match timeout(TIMEOUT, run).await {
         Err(_) => anyhow::bail!("yt-dlp timed out for {url}"),

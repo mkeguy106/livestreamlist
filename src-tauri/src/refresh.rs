@@ -12,7 +12,11 @@ const YT_CONCURRENCY: usize = 5;
 
 /// Refresh all channels' live status across every supported platform in
 /// parallel. Commits all results to the store under a single lock.
-pub async fn refresh_all(store: SharedStore, client: reqwest::Client) -> Result<Vec<Livestream>> {
+pub async fn refresh_all(
+    store: SharedStore,
+    client: reqwest::Client,
+    youtube_cookies_browser: Option<String>,
+) -> Result<Vec<Livestream>> {
     let channels = { store.lock().channels().to_vec() };
 
     // Split by platform
@@ -32,7 +36,7 @@ pub async fn refresh_all(store: SharedStore, client: reqwest::Client) -> Result<
     // Fire all four fetch groups in parallel
     let twitch_fut = twitch::fetch_live(&client, &twitch_logins);
     let kick_fut = fetch_kick_all(&client, &kick_slugs);
-    let youtube_fut = fetch_youtube_all(&youtube_ids);
+    let youtube_fut = fetch_youtube_all(&youtube_ids, youtube_cookies_browser.as_deref());
     let cb_fut = fetch_chaturbate_all(&client, &cb_names);
 
     let (twitch_res, kick_map, youtube_map, cb_map) =
@@ -120,12 +124,20 @@ async fn fetch_chaturbate_all(
 }
 
 /// Run yt-dlp in batches of YT_CONCURRENCY to keep the subprocess load bounded.
-async fn fetch_youtube_all(ids: &[String]) -> HashMap<String, youtube::YouTubeLive> {
+async fn fetch_youtube_all(
+    ids: &[String],
+    cookies_browser: Option<&str>,
+) -> HashMap<String, youtube::YouTubeLive> {
     let mut out = HashMap::new();
     for chunk in ids.chunks(YT_CONCURRENCY) {
         let futs: Vec<_> = chunk
             .iter()
-            .map(|id| async move { (id.clone(), youtube::fetch_live(id).await) })
+            .map(|id| async move {
+                (
+                    id.clone(),
+                    youtube::fetch_live(id, cookies_browser).await,
+                )
+            })
             .collect();
         let results = join_all(futs).await;
         for (id, res) in results {

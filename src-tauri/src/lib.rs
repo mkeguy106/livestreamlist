@@ -7,6 +7,7 @@ mod auth;
 mod channels;
 mod chat;
 mod config;
+mod embed;
 mod notify;
 mod platforms;
 mod player;
@@ -130,7 +131,8 @@ async fn refresh_all(
     let store = Arc::clone(&state.store);
     let client = state.http.clone();
     let notifier = Arc::clone(&state.notifier);
-    let snapshot = refresh::refresh_all(store, client)
+    let yt_browser = state.settings.read().general.youtube_cookies_browser.clone();
+    let snapshot = refresh::refresh_all(store, client, yt_browser)
         .await
         .map_err(err_string)?;
 
@@ -377,6 +379,47 @@ fn slugify(s: &str) -> String {
 }
 
 #[tauri::command]
+fn embed_mount(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    embeds: State<'_, Arc<embed::EmbedManager>>,
+    unique_key: String,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+) -> Result<bool, String> {
+    embeds
+        .mount(&app, &state.store, &unique_key, x, y, width, height)
+        .map_err(err_string)
+}
+
+#[tauri::command]
+fn embed_position(
+    embeds: State<'_, Arc<embed::EmbedManager>>,
+    unique_key: String,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+) -> Result<(), String> {
+    embeds
+        .position(&unique_key, x, y, width, height)
+        .map_err(err_string)
+}
+
+#[tauri::command]
+fn embed_unmount(embeds: State<'_, Arc<embed::EmbedManager>>, unique_key: String) {
+    embeds.unmount(&unique_key);
+}
+
+#[tauri::command]
+fn embed_set_visible(embeds: State<'_, Arc<embed::EmbedManager>>, visible: bool) {
+    embeds.set_visible_all(visible);
+}
+
+
+#[tauri::command]
 fn open_url(url: String) -> Result<(), String> {
     // Only http(s) — don't let the renderer hand us file:// or javascript: URIs.
     if !(url.starts_with("http://") || url.starts_with("https://")) {
@@ -599,6 +642,15 @@ async fn chat_send(
 struct AuthStatus {
     twitch: Option<auth::twitch::TwitchIdentity>,
     kick: Option<auth::kick::KickIdentity>,
+    youtube: YoutubeAuthStatus,
+}
+
+#[derive(serde::Serialize)]
+struct YoutubeAuthStatus {
+    /// Configured browser name, if any (`chrome`, `firefox`, …).
+    browser: Option<String>,
+    /// True when a manually-pasted cookies file is on disk.
+    has_paste: bool,
 }
 
 #[tauri::command]
@@ -607,7 +659,13 @@ async fn auth_status(state: State<'_, AppState>) -> Result<AuthStatus, String> {
         .await
         .map_err(err_string)?;
     let kick = auth::kick::status(&state.http).await.map_err(err_string)?;
-    Ok(AuthStatus { twitch, kick })
+    let browser = state.settings.read().general.youtube_cookies_browser.clone();
+    let has_paste = auth::youtube::cookies_file_present();
+    Ok(AuthStatus {
+        twitch,
+        kick,
+        youtube: YoutubeAuthStatus { browser, has_paste },
+    })
 }
 
 #[tauri::command]
@@ -650,6 +708,60 @@ fn kick_logout(
     auth::kick::logout().map_err(err_string)?;
     chat.reconnect_platform(Platform::Kick, &state.store);
     Ok(())
+}
+
+#[tauri::command]
+async fn youtube_login(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<bool, String> {
+    auth::youtube::login_via_webview(app.clone())
+        .await
+        .map_err(err_string)?;
+    clear_youtube_browser_pref(&state);
+    if let Err(e) = auth::youtube::inject_into_main_webview(&app) {
+        log::warn!("post-login cookie injection failed: {e:#}");
+    }
+    Ok(true)
+}
+
+#[tauri::command]
+fn youtube_login_paste(
+    text: String,
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<bool, String> {
+    let cookies = auth::youtube::parse_pasted(&text).map_err(err_string)?;
+    auth::youtube::save(&cookies).map_err(err_string)?;
+    clear_youtube_browser_pref(&state);
+    if let Err(e) = auth::youtube::inject_into_main_webview(&app) {
+        log::warn!("post-login cookie injection failed: {e:#}");
+    }
+    Ok(true)
+}
+
+#[tauri::command]
+fn youtube_logout(state: State<'_, AppState>) -> Result<(), String> {
+    auth::youtube::clear().map_err(err_string)?;
+    clear_youtube_browser_pref(&state);
+    Ok(())
+}
+
+fn clear_youtube_browser_pref(state: &State<'_, AppState>) {
+    let mut g = state.settings.write();
+    if g.general.youtube_cookies_browser.is_some() {
+        g.general.youtube_cookies_browser = None;
+        let snapshot = g.clone();
+        drop(g);
+        if let Err(e) = settings::save(&snapshot) {
+            log::warn!("clearing youtube_cookies_browser failed: {e:#}");
+        }
+    }
+}
+
+#[tauri::command]
+fn youtube_detect_browsers() -> Vec<auth::youtube::DetectedBrowser> {
+    auth::youtube::detect_browsers()
 }
 
 #[tauri::command]
@@ -769,6 +881,18 @@ pub fn run() {
             app.manage(chat_mgr);
             let player_mgr = Arc::new(PlayerManager::new(app.handle().clone()));
             app.manage(player_mgr);
+            let embed_mgr = embed::EmbedManager::new();
+            app.manage(embed_mgr);
+            // No focus-tracking hide: `transient_for(main)` makes the WM
+            // stack the embed above the main window, so when the user
+            // switches to another app it naturally goes behind. Manual
+            // hide/show on focus loss triggered KWin's window-close
+            // animation on every alt-tab.
+            // Seed the main webview's cookie jar with stored YouTube cookies
+            // so any /live_chat iframe in the React tree is signed in.
+            if let Err(e) = auth::youtube::inject_into_main_webview(app.handle()) {
+                log::warn!("youtube cookie injection failed: {e:#}");
+            }
             tray::build(&app.handle())?;
             window_state::register(app)?;
             Ok(())
@@ -790,6 +914,10 @@ pub fn run() {
             chat_disconnect,
             chat_send,
             chat_open_popout,
+            embed_mount,
+            embed_position,
+            embed_unmount,
+            embed_set_visible,
             list_emotes,
             replay_chat_history,
             get_settings,
@@ -804,6 +932,10 @@ pub fn run() {
             twitch_logout,
             kick_login,
             kick_logout,
+            youtube_login,
+            youtube_login_paste,
+            youtube_logout,
+            youtube_detect_browsers,
             import_twitch_follows,
         ])
         .run(tauri::generate_context!())

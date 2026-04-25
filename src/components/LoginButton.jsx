@@ -2,14 +2,14 @@ import { useEffect, useRef, useState } from 'react';
 import { useAuth } from '../hooks/useAuth.jsx';
 
 /**
- * Titlebar dropdown showing Twitch + Kick auth state and a login/logout
- * action per platform.
+ * Titlebar dropdown showing Twitch / Kick / YouTube auth state and a
+ * login/logout action per platform.
  *
  * Dropdown stays OPEN during login so the OAuth callback errors surface
  * inline instead of vanishing behind the closed menu.
  */
 export default function LoginButton() {
-  const { loading, twitch, kick, login, logout, error } = useAuth();
+  const { loading, twitch, kick, youtube, login, logout, error } = useAuth();
   const [open, setOpen] = useState(false);
   const [busyPlatform, setBusyPlatform] = useState(null);
   const containerRef = useRef(null);
@@ -32,14 +32,12 @@ export default function LoginButton() {
     );
   }
 
-  const summary =
-    twitch && kick
-      ? `@${twitch.login} · k:@${kick.login}`
-      : twitch
-      ? `@${twitch.login}`
-      : kick
-      ? `k:@${kick.login}`
-      : 'Log in';
+  const ytSignedIn = Boolean(youtube?.browser || youtube?.has_paste);
+  const summaryParts = [];
+  if (twitch) summaryParts.push(`@${twitch.login}`);
+  if (kick) summaryParts.push(`k:@${kick.login}`);
+  if (ytSignedIn) summaryParts.push('y');
+  const summary = summaryParts.length ? summaryParts.join(' · ') : 'Log in';
 
   const doLogin = async (platform) => {
     setBusyPlatform(platform);
@@ -59,11 +57,17 @@ export default function LoginButton() {
     }
   };
 
+  const ytStatusText = youtube?.browser
+    ? `Cookies from ${youtube.browser}`
+    : youtube?.has_paste
+    ? 'Signed in'
+    : 'Not signed in';
+
   return (
     <div ref={containerRef} style={{ position: 'relative' }}>
       <button
         type="button"
-        className={twitch || kick ? 'rx-btn rx-btn-ghost' : 'rx-btn'}
+        className={twitch || kick || ytSignedIn ? 'rx-btn rx-btn-ghost' : 'rx-btn'}
         onClick={() => setOpen((v) => !v)}
         title={error ?? 'Accounts'}
         style={{ padding: '2px 8px', fontSize: 10 }}
@@ -93,7 +97,8 @@ export default function LoginButton() {
           <AccountRow
             label="Twitch"
             color="var(--twitch)"
-            identity={twitch}
+            statusText={twitch ? `@${twitch.login}` : 'Not logged in'}
+            signedIn={Boolean(twitch)}
             busy={busyPlatform === 'twitch'}
             onLogin={() => doLogin('twitch')}
             onLogout={() => doLogout('twitch')}
@@ -101,10 +106,20 @@ export default function LoginButton() {
           <AccountRow
             label="Kick"
             color="var(--kick)"
-            identity={kick}
+            statusText={kick ? `@${kick.login}` : 'Not logged in'}
+            signedIn={Boolean(kick)}
             busy={busyPlatform === 'kick'}
             onLogin={() => doLogin('kick')}
             onLogout={() => doLogout('kick')}
+          />
+          <AccountRow
+            label="YouTube"
+            color="var(--youtube)"
+            statusText={ytStatusText}
+            signedIn={ytSignedIn}
+            busy={busyPlatform === 'youtube'}
+            onLogin={() => doLogin('youtube')}
+            onLogout={() => doLogout('youtube')}
           />
           {busyPlatform && (
             <div
@@ -115,8 +130,9 @@ export default function LoginButton() {
                 borderTop: 'var(--hair)',
               }}
             >
-              Waiting for the browser — approve the login in the page that just opened,
-              then come back here.
+              {busyPlatform === 'youtube'
+                ? 'Sign in to Google in the window that just opened — it will close when cookies are captured.'
+                : 'Waiting for the browser — approve the login in the page that just opened, then come back here.'}
             </div>
           )}
           {error && (
@@ -138,7 +154,7 @@ export default function LoginButton() {
   );
 }
 
-function AccountRow({ label, color, identity, busy, onLogin, onLogout }) {
+function AccountRow({ label, color, statusText, signedIn, busy, onLogin, onLogout }) {
   return (
     <div
       style={{
@@ -152,16 +168,16 @@ function AccountRow({ label, color, identity, busy, onLogin, onLogout }) {
       <span
         style={{
           fontSize: 'var(--t-11)',
-          color: identity ? 'var(--zinc-200)' : 'var(--zinc-500)',
+          color: signedIn ? 'var(--zinc-200)' : 'var(--zinc-500)',
           flex: 1,
           overflow: 'hidden',
           textOverflow: 'ellipsis',
           whiteSpace: 'nowrap',
         }}
       >
-        {identity ? `@${identity.login}` : 'Not logged in'}
+        {statusText}
       </span>
-      {identity ? (
+      {signedIn ? (
         <button
           type="button"
           className="rx-btn rx-btn-ghost"

@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useAuth } from '../hooks/useAuth.jsx';
 import { usePreferences } from '../hooks/usePreferences.jsx';
-import { importTwitchFollows, listBlockedUsers, setUserMetadata } from '../ipc.js';
+import {
+  importTwitchFollows,
+  listBlockedUsers,
+  setUserMetadata,
+  youtubeDetectBrowsers,
+} from '../ipc.js';
 
 const TABS = [
   { id: 'general', label: 'General' },
@@ -118,8 +123,28 @@ export default function PreferencesDialog({ open, onClose }) {
 }
 
 function AccountsTab() {
-  const { twitch, kick, login, logout } = useAuth();
+  const { twitch, kick, youtube, login, logout, loginYoutubePaste, refresh } = useAuth();
+  const { settings, patch } = usePreferences();
   const [importState, setImportState] = useState(null); // {running, result, error}
+  const [ytLoginRunning, setYtLoginRunning] = useState(false);
+  const [ytPasteOpen, setYtPasteOpen] = useState(false);
+  const [ytError, setYtError] = useState(null);
+  const [ytAdvanced, setYtAdvanced] = useState(false);
+  const [browsers, setBrowsers] = useState(null); // null = loading; [] = nothing detected
+
+  useEffect(() => {
+    let cancelled = false;
+    youtubeDetectBrowsers()
+      .then((b) => {
+        if (!cancelled) setBrowsers(Array.isArray(b) ? b : []);
+      })
+      .catch(() => {
+        if (!cancelled) setBrowsers([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const runImport = async () => {
     setImportState({ running: true });
@@ -130,6 +155,33 @@ function AccountsTab() {
       setImportState({ running: false, error: String(e?.message ?? e) });
     }
   };
+
+  const runYoutubeLogin = async () => {
+    setYtError(null);
+    setYtLoginRunning(true);
+    try {
+      await login('youtube');
+    } catch (e) {
+      setYtError(String(e?.message ?? e));
+    } finally {
+      setYtLoginRunning(false);
+    }
+  };
+
+  const setYtBrowser = (id) => {
+    setYtError(null);
+    patch((prev) => ({
+      ...prev,
+      general: { ...prev.general, youtube_cookies_browser: id ?? null },
+    }));
+    // settings patch debounces 200 ms before hitting the backend; refresh()
+    // will read via auth_status once that lands.
+    setTimeout(() => refresh(), 260);
+  };
+
+  const ytBrowser = settings?.general?.youtube_cookies_browser ?? null;
+  const ytLabelFor = (id) =>
+    browsers?.find((b) => b.id === id)?.label ?? id;
 
   return (
     <>
@@ -158,6 +210,124 @@ function AccountsTab() {
       </Row>
 
       <Row
+        label="YouTube"
+        hint={
+          ytBrowser
+            ? `Using cookies from ${ytLabelFor(ytBrowser)}`
+            : youtube?.has_paste
+            ? 'Signed in via Google'
+            : 'Sign in for subs / age-restricted / member content'
+        }
+      >
+        {ytBrowser || youtube?.has_paste ? (
+          <button type="button" className="rx-btn rx-btn-ghost" onClick={() => logout('youtube')}>
+            Log out
+          </button>
+        ) : (
+          <button
+            type="button"
+            className="rx-btn"
+            onClick={runYoutubeLogin}
+            disabled={ytLoginRunning}
+          >
+            {ytLoginRunning ? 'Waiting on Google…' : 'Log in to YouTube'}
+          </button>
+        )}
+        <div style={{ marginTop: 6 }}>
+          <button
+            type="button"
+            onClick={() => setYtAdvanced((v) => !v)}
+            style={{
+              all: 'unset',
+              cursor: 'pointer',
+              fontSize: 'var(--t-11)',
+              color: 'var(--zinc-500)',
+            }}
+          >
+            {ytAdvanced ? '▾ Other ways to sign in' : '▸ Other ways to sign in'}
+          </button>
+        </div>
+        {ytAdvanced && (
+          <div
+            style={{
+              marginTop: 6,
+              padding: '8px 10px',
+              border: '1px solid var(--zinc-800)',
+              borderRadius: 4,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 8,
+            }}
+          >
+            <div>
+              <div
+                style={{
+                  fontSize: 'var(--t-11)',
+                  color: 'var(--zinc-300)',
+                  marginBottom: 4,
+                  fontWeight: 500,
+                }}
+              >
+                Use cookies from a browser
+              </div>
+              <div style={{ fontSize: 'var(--t-11)', color: 'var(--zinc-500)', marginBottom: 6 }}>
+                Reuses an existing browser session — no extra sign-in needed.
+              </div>
+              {browsers === null ? (
+                <div style={{ fontSize: 'var(--t-11)', color: 'var(--zinc-500)' }}>Detecting…</div>
+              ) : browsers.length === 0 ? (
+                <div style={{ fontSize: 'var(--t-11)', color: 'var(--zinc-500)' }}>
+                  No supported browsers found on this system.
+                </div>
+              ) : (
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  {browsers.map((b) => {
+                    const active = ytBrowser === b.id;
+                    return (
+                      <button
+                        key={b.id}
+                        type="button"
+                        className={active ? 'rx-btn' : 'rx-btn rx-btn-ghost'}
+                        onClick={() => setYtBrowser(active ? null : b.id)}
+                        title={active ? `Stop using ${b.label} cookies` : `Use ${b.label} cookies`}
+                      >
+                        {active ? `✓ ${b.label}` : b.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+            <div style={{ borderTop: 'var(--hair)', paddingTop: 8 }}>
+              <div
+                style={{
+                  fontSize: 'var(--t-11)',
+                  color: 'var(--zinc-300)',
+                  marginBottom: 4,
+                  fontWeight: 500,
+                }}
+              >
+                Paste cookies
+              </div>
+              <div style={{ fontSize: 'var(--t-11)', color: 'var(--zinc-500)', marginBottom: 6 }}>
+                For sandboxed builds (Flatpak) where the app can't reach a browser cookie store.
+              </div>
+              <button
+                type="button"
+                className="rx-btn rx-btn-ghost"
+                onClick={() => setYtPasteOpen(true)}
+              >
+                Paste cookies…
+              </button>
+            </div>
+          </div>
+        )}
+        {ytError && (
+          <div style={{ marginTop: 6, fontSize: 'var(--t-11)', color: '#f87171' }}>{ytError}</div>
+        )}
+      </Row>
+
+      <Row
         label="Import Twitch follows"
         hint="Adds every channel you follow on Twitch to this app. Existing entries are skipped."
       >
@@ -180,7 +350,119 @@ function AccountsTab() {
           </div>
         )}
       </Row>
+
+      <YoutubePasteDialog
+        open={ytPasteOpen}
+        onClose={() => setYtPasteOpen(false)}
+        onSubmit={async (text) => {
+          await loginYoutubePaste(text);
+          setYtPasteOpen(false);
+        }}
+      />
     </>
+  );
+}
+
+function YoutubePasteDialog({ open, onClose, onSubmit }) {
+  const [text, setText] = useState('');
+  const [error, setError] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!open) {
+      setText('');
+      setError(null);
+      setBusy(false);
+    }
+  }, [open]);
+
+  if (!open) return null;
+
+  const submit = async () => {
+    setError(null);
+    setBusy(true);
+    try {
+      await onSubmit(text);
+    } catch (e) {
+      setError(String(e?.message ?? e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: 'fixed',
+        inset: 0,
+        background: 'rgba(0,0,0,.65)',
+        zIndex: 110,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: 40,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: 'min(560px, 100%)',
+          background: 'var(--zinc-925)',
+          border: '1px solid var(--zinc-800)',
+          borderRadius: 8,
+          padding: 18,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 10,
+        }}
+      >
+        <div style={{ fontSize: 'var(--t-13)', color: 'var(--zinc-100)', fontWeight: 600 }}>
+          Paste YouTube cookies
+        </div>
+        <div style={{ fontSize: 'var(--t-11)', color: 'var(--zinc-400)', lineHeight: 1.5 }}>
+          Export the five Google session cookies — <code>SID</code>, <code>HSID</code>,{' '}
+          <code>SSID</code>, <code>APISID</code>, <code>SAPISID</code> — from a logged-in browser
+          and paste them here. Cookie-header (<code>SID=…; HSID=…</code>), one-per-line, or
+          Netscape <code>cookies.txt</code> format all work.
+        </div>
+        <textarea
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          spellCheck={false}
+          autoFocus
+          placeholder="SID=…; HSID=…; SSID=…; APISID=…; SAPISID=…"
+          style={{
+            width: '100%',
+            minHeight: 140,
+            background: 'var(--zinc-950)',
+            border: '1px solid var(--zinc-800)',
+            borderRadius: 4,
+            padding: 8,
+            color: 'var(--zinc-100)',
+            fontFamily: 'var(--font-mono)',
+            fontSize: 'var(--t-11)',
+            resize: 'vertical',
+          }}
+        />
+        {error && (
+          <div style={{ fontSize: 'var(--t-11)', color: '#f87171' }}>{error}</div>
+        )}
+        <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+          <button type="button" className="rx-btn rx-btn-ghost" onClick={onClose} disabled={busy}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="rx-btn"
+            onClick={submit}
+            disabled={busy || !text.trim()}
+          >
+            {busy ? 'Saving…' : 'Save'}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 

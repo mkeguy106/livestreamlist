@@ -416,6 +416,7 @@ function SelectedPane({ channel, onLaunch, onOpenBrowser, onUsernameOpen, onUser
       <ChatView
         channelKey={channel.unique_key}
         variant="irc"
+        isLive={Boolean(channel.is_live)}
         header={
           <>
             <TitleBanner channel={channel} />
