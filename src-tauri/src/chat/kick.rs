@@ -25,7 +25,7 @@ use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
 use super::badges::classify_mod_kick;
 use super::emotes::EmoteCache;
 use super::log_store::ChatLogWriter;
-use super::models::{ChatBadge, ChatMessage, ChatRoomState, ChatStatus, ChatStatusEvent, ChatUser, EmoteRange};
+use super::models::{ChatBadge, ChatMessage, ChatRoomState, ChatRoomStateEvent, ChatStatus, ChatStatusEvent, ChatUser, EmoteRange};
 use super::OutboundMsg;
 use crate::auth;
 use crate::platforms::Platform;
@@ -49,6 +49,7 @@ pub struct KickChatConfig {
 struct KickChannelIds {
     chatroom_id: u64,
     broadcaster_user_id: u64,
+    room_state: ChatRoomState,
 }
 
 pub async fn run(mut cfg: KickChatConfig) {
@@ -95,6 +96,14 @@ async fn connect_and_read(cfg: &mut KickChatConfig) -> Result<()> {
     ws.send(WsMessage::Text(subscribe.to_string())).await?;
 
     emit_status(&cfg.app, &cfg.channel_key, ChatStatus::Connected, None);
+
+    let _ = cfg.app.emit(
+        &format!("chat:roomstate:{}", cfg.channel_key),
+        ChatRoomStateEvent {
+            channel_key: cfg.channel_key.clone(),
+            state: ids.room_state.clone(),
+        },
+    );
 
     let mut log = ChatLogWriter::open(Platform::Kick, &cfg.channel_slug).ok();
     read_loop(cfg, &mut ws, log.as_mut(), &ids).await
@@ -390,9 +399,14 @@ fn parse_channel_ids(data: &Value) -> Result<KickChannelIds> {
         .and_then(value_to_u64)
         .or_else(|| data.pointer("/user/id").and_then(value_to_u64))
         .context("user_id missing in Kick channel response")?;
+    let room_state = data
+        .get("chatroom")
+        .map(parse_chatroom_modes)
+        .unwrap_or_default();
     Ok(KickChannelIds {
         chatroom_id,
         broadcaster_user_id,
+        room_state,
     })
 }
 
