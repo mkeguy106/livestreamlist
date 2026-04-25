@@ -218,6 +218,7 @@ Files:
 | Environment detection: no `window.__TAURI__` in v2 | Check `window.__TAURI_INTERNALS__` instead |
 | `anyhow::Error` is not `Serialize` — can't return directly from `#[tauri::command]` | Map to `String` via `err_string` helper |
 | `#[derive(Default)]` on a Rust enum requires `#[default]` on the chosen variant | Platform enum marks `Twitch` as default (arbitrary but overwritten everywhere it matters) |
+| App launched from a long-running terminal session may not raise on KDE Wayland | KDE's focus-stealing prevention denies activation when no recent `XDG_ACTIVATION_TOKEN` exists. Launch from the app menu / `.desktop` file / tray instead, or set "Focus Stealing Prevention: None" in KWin settings |
 
 ## Git workflow
 
