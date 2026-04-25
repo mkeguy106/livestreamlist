@@ -29,7 +29,7 @@ export default function EmoteText({ text, ranges, size = 20 }) {
   pushText(cursor, bytes.length);
 
   return (
-    <span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+    <span style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
       {segments.map((seg, i) =>
         seg.type === 'text' ? (
           <span key={i}>{seg.text}</span>
