@@ -52,6 +52,7 @@ export default function ChatView({
   const showBadges = c.show_badges !== false;
   const showModBadges = c.show_mod_badges !== false;
   const showTimestamps = c.show_timestamps !== false;
+  const timestamp24h = c.timestamp_24h !== false;
 
   // Recent authors for @mention autocomplete. Last 50 messages is plenty;
   // keeping it tight avoids re-filtering a large list on every keystroke.
@@ -233,6 +234,7 @@ export default function ChatView({
                   showBadges={showBadges}
                   showModBadges={showModBadges}
                   showTimestamps={showTimestamps}
+                  timestamp24h={timestamp24h}
                   onOpenThread={openConversation}
                   onUsernameOpen={handleOpen}
                   onUsernameContext={handleContext}
@@ -314,12 +316,13 @@ function IrcRow({
   showBadges,
   showModBadges,
   showTimestamps,
+  timestamp24h,
   onOpenThread,
   onUsernameOpen,
   onUsernameContext,
   onUsernameHover,
 }) {
-  const time = formatTime(m.timestamp);
+  const time = formatTime(m.timestamp, timestamp24h);
   const mentionsMe = mentionsLogin(m.text, myLogin);
   return (
     <div
@@ -559,13 +562,19 @@ function SystemRow({ m, variant }) {
   );
 }
 
-function formatTime(iso) {
+function formatTime(iso, is24h = true) {
   if (!iso) return '';
   const d = new Date(iso);
-  const h = String(d.getHours()).padStart(2, '0');
   const m = String(d.getMinutes()).padStart(2, '0');
   const s = String(d.getSeconds()).padStart(2, '0');
-  return `${h}:${m}:${s}`;
+  if (is24h) {
+    const h = String(d.getHours()).padStart(2, '0');
+    return `${h}:${m}:${s}`;
+  }
+  const raw = d.getHours();
+  const period = raw >= 12 ? 'PM' : 'AM';
+  const h12 = raw % 12 === 0 ? 12 : raw % 12;
+  return `${h12}:${m}:${s} ${period}`;
 }
 
 function formatCountdown(seconds) {
