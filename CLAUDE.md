@@ -218,7 +218,8 @@ Files:
 | Environment detection: no `window.__TAURI__` in v2 | Check `window.__TAURI_INTERNALS__` instead |
 | `anyhow::Error` is not `Serialize` — can't return directly from `#[tauri::command]` | Map to `String` via `err_string` helper |
 | `#[derive(Default)]` on a Rust enum requires `#[default]` on the chosen variant | Platform enum marks `Twitch` as default (arbitrary but overwritten everywhere it matters) |
-| App launched from a long-running terminal session may not raise on KDE Wayland | KDE's focus-stealing prevention denies activation when no recent `XDG_ACTIVATION_TOKEN` exists. Launch from the app menu / `.desktop` file / tray instead, or set "Focus Stealing Prevention: None" in KWin settings |
+| App launched from a long-running terminal session may not raise on KDE Wayland | `lib.rs::run` stages `set_always_on_top(true)` before `show()` and clears it via a deferred (~150 ms) tokio task in `window_state::raise_to_front_deferred`. Maps the window in the topmost layer, beating focus-stealing prevention. If a launch still loads behind, set "Focus Stealing Prevention: None" in KWin settings |
+| Native Wayland clients cannot read or set absolute window position | The protocol does not expose global coordinates to clients, so `outer_position` returns `(0, 0)` regardless of where the window actually is on screen. `tauri-plugin-window-state` saves what it can read, so the position field in `~/.config/com.mkeguy106.livestreamlist/.window-state.json` will be `0, 0` on Wayland. Size and maximized state persist correctly. To get full position persistence, force Xwayland with `GDK_BACKEND=x11` or use KWin window rules |
 
 ## Git workflow
 

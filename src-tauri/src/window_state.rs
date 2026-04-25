@@ -154,7 +154,7 @@ fn validate_and_fix(window: &tauri::WebviewWindow) -> Result<()> {
     // already requested via restore_state. Off-screen recovery on Wayland
     // would need a deferred validation hooked off the first ResizeEvent.
     if current.w == 0 || current.h == 0 {
-        log::info!(
+        log::debug!(
             "window_state: skipping validation; window not yet mapped (geometry={current:?})"
         );
         return Ok(());
@@ -252,36 +252,19 @@ pub fn register(app: &tauri::App) -> Result<()> {
         .ok_or_else(|| anyhow!("main window missing during window_state::register"))?;
 
     let has_saved = saved_state_exists(app);
-    log::info!(
-        "window_state: pre-restore — has_saved={has_saved}, current_geometry={:?}",
-        current_window_rect(&window).ok()
-    );
 
     if has_saved {
         if let Err(e) = window.restore_state(state_flags()) {
-            log::warn!(
-                "window_state: plugin restore_state failed ({e}); using current geometry"
-            );
+            log::warn!("window_state: plugin restore_state failed ({e}); using current geometry");
         }
-        log::info!(
-            "window_state: post-restore — current_geometry={:?}",
-            current_window_rect(&window).ok()
-        );
         if let Err(e) = validate_and_fix(&window) {
-            log::warn!(
-                "window_state: validate_and_fix failed ({e:#}); leaving geometry as-is"
-            );
+            log::warn!("window_state: validate_and_fix failed ({e:#}); leaving geometry as-is");
         }
     } else if let Err(e) = center_on_primary(&window) {
         log::warn!(
             "window_state: center_on_primary failed ({e:#}); falling back to config defaults"
         );
     }
-
-    log::info!(
-        "window_state: pre-show — final_geometry={:?}",
-        current_window_rect(&window).ok()
-    );
 
     // Pre-show: stage always-on-top so when show() maps the window the
     // compositor places it in the topmost layer. We clear this in the
@@ -292,11 +275,6 @@ pub fn register(app: &tauri::App) -> Result<()> {
 
     window.show().context("window.show")?;
     raise_to_front_deferred(window.clone());
-
-    log::info!(
-        "window_state: post-show — final_geometry={:?}",
-        current_window_rect(&window).ok()
-    );
     Ok(())
 }
 
