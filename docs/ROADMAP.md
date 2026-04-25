@@ -42,36 +42,38 @@ Twitch is the hardest one and it's done; the others are straightforward ports.
 
 ## Phase 2b — Chat sending + Kick chat + moderation
 
-### Twitch auth + sending
+Most of this phase shipped during Phase 2b execution (across multiple PRs). Remaining work is YouTube + Chaturbate cookie auth and YouTube multi-concurrent-stream support — see the unchecked items below.
 
-- [ ] OAuth implicit flow — spawn system browser to `https://id.twitch.tv/oauth2/authorize?response_type=token&client_id=…&redirect_uri=http://localhost:65432&scope=chat:read+chat:edit+user:read:follows`
-- [ ] Local loopback HTTP server on port 65432 captures the `#access_token=…` fragment (Tauri Rust can bind this; use `tiny_http` or raw `hyper`)
-- [ ] Token stored via `keyring` crate (Secret Service / Keychain / Credential Manager)
-- [ ] Twitch IRC connection switches from `justinfan*` + anonymous pass to authed nick/pass once token present
-- [ ] `chat_send(uniqueKey, text)` invoke command; Twitch composer stops being a placeholder
-- [ ] Moderation events: `CLEARCHAT`, `CLEARMSG`, `NOTICE msg-id=…` — `chat:moderation:{key}` event → frontend removes or greys matching messages
-- [ ] Local echo handling (Twitch doesn't echo own PRIVMSG back; we fake it)
+### Twitch auth + sending  ✓ shipped
 
-### Kick chat
+- [x] OAuth implicit flow — spawn system browser to `https://id.twitch.tv/oauth2/authorize?response_type=token&client_id=…&redirect_uri=http://localhost:65432&scope=chat:read+chat:edit+user:read:follows`
+- [x] Local loopback HTTP server on port 65432 captures the `#access_token=…` fragment (Tauri Rust can bind this; use `tiny_http` or raw `hyper`)
+- [x] Token stored via `keyring` crate (Secret Service / Keychain / Credential Manager)
+- [x] Twitch IRC connection switches from `justinfan*` + anonymous pass to authed nick/pass once token present
+- [x] `chat_send(uniqueKey, text)` invoke command; Twitch composer stops being a placeholder
+- [x] Moderation events: `CLEARCHAT`, `CLEARMSG`, `NOTICE msg-id=…` — `chat:moderation:{key}` event → frontend removes or greys matching messages
+- [x] Local echo handling (Twitch doesn't echo own PRIVMSG back; we fake it)
 
-- [ ] OAuth 2.1 + PKCE flow to `https://id.kick.com/oauth/authorize` (callback also on 65432, reuse the server)
-- [ ] Pusher WebSocket: `wss://ws-us2.pusher.com/app/…`, subscribe to `chatrooms.{chatroom_id}.v2`
-- [ ] Parse `App\Events\ChatMessageEvent` → `ChatMessage` with emote parsing (Kick uses `[emote:ID:name]` inline tokens, not tag-based)
-- [ ] Kick does echo own messages via websocket → no local echo, skip-on-id-match
-- [ ] Send via `POST https://api.kick.com/public/v1/chat` with `Authorization: Bearer {token}`, auto-refresh on 401
+### Kick chat  ✓ shipped
 
-### Per-channel 3rd-party emotes
+- [x] OAuth 2.1 + PKCE flow to `https://id.kick.com/oauth/authorize` (callback also on 65432, reuse the server)
+- [x] Pusher WebSocket: `wss://ws-us2.pusher.com/app/…`, subscribe to `chatrooms.{chatroom_id}.v2`
+- [x] Parse `App\Events\ChatMessageEvent` → `ChatMessage` with emote parsing (Kick uses `[emote:ID:name]` inline tokens, not tag-based)
+- [x] Kick does echo own messages via websocket → no local echo, skip-on-id-match
+- [x] Send via `POST https://api.kick.com/public/v1/chat` with `Authorization: Bearer {token}`, auto-refresh on 401
 
-- [ ] Fetch 7TV channel emotes by Twitch user id (`GET /v3/users/twitch/{id}`)
-- [ ] BTTV channel emotes by Twitch user id
-- [ ] FFZ channel emotes by Twitch login
-- [ ] Wire channel emote load into `chat_connect` so `EmoteCache::set_channel` is populated before message flow starts
-- [ ] Twitch channel **sub emotes** — need auth; use Helix `GET /chat/emotes?broadcaster_id=…` once tokens are available
+### Per-channel 3rd-party emotes  ✓ shipped
+
+- [x] Fetch 7TV channel emotes by Twitch user id (`GET /v3/users/twitch/{id}`)
+- [x] BTTV channel emotes by Twitch user id
+- [x] FFZ channel emotes by Twitch login
+- [x] Wire channel emote load into `chat_connect` so `EmoteCache::set_channel` is populated before message flow starts
+- [x] Twitch channel **sub emotes** — need auth; use Helix `GET /chat/emotes?broadcaster_id=…` once tokens are available
 
 ### YouTube + Chaturbate chat (embedded)
 
-- [ ] **YouTube embedded chat** — mount YouTube's own `/live_chat?v={video_id}&is_popout=1` inside a Tauri `WebviewWindow` (or inline iframe if cross-origin allows — evaluate both). Keeping YouTube's own chat widget means we get super-chats, membership badges, memberships-only / subscribers-only slow-mode, polls and pinned moderator messages for free instead of reimplementing. A dedicated `QWebEngineProfile` in Qt becomes a Tauri `WebviewWindow` with a dedicated profile directory under `~/.local/share/livestreamlist/webviews/youtube/`. Inject a small CSS patch on `navigation-completed` to match the embed to our zinc theme (background, scrollbar, font).
-- [ ] **Chaturbate embedded chat** — same pattern for the full room page (`https://chaturbate.com/{slug}/`). Inject the DOM-isolation CSS/JS from `livestream.list.qt`'s `chaturbate_web_chat.py` to hide the video player, sidebar, ads, and header so only the chat column is visible. Persistent cookie profile at `~/.local/share/livestreamlist/webviews/chaturbate/`.
+- [x] **YouTube embedded chat** — mount YouTube's own `/live_chat?v={video_id}&is_popout=1` inside a Tauri `WebviewWindow` (or inline iframe if cross-origin allows — evaluate both). Keeping YouTube's own chat widget means we get super-chats, membership badges, memberships-only / subscribers-only slow-mode, polls and pinned moderator messages for free instead of reimplementing. A dedicated `QWebEngineProfile` in Qt becomes a Tauri `WebviewWindow` with a dedicated profile directory under `~/.local/share/livestreamlist/webviews/youtube/`. Inject a small CSS patch on `navigation-completed` to match the embed to our zinc theme (background, scrollbar, font).
+- [x] **Chaturbate embedded chat** — same pattern for the full room page (`https://chaturbate.com/{slug}/`). Inject the DOM-isolation CSS/JS from `livestream.list.qt`'s `chaturbate_web_chat.py` to hide the video player, sidebar, ads, and header so only the chat column is visible. Persistent cookie profile at `~/.local/share/livestreamlist/webviews/chaturbate/`.
 - [ ] **YouTube cookie login** — YouTube's authenticated endpoints (send chat, read subscriptions) need the five Google session cookies: `SID`, `HSID`, `SSID`, `APISID`, `SAPISID`. Ship two auth paths:
   - (a) **In-app sign-in** — open a small `youtube-login` WebviewWindow at `https://accounts.google.com/signin`. Track `cookieChanged` events on the profile; once all five target cookies are present, close the window and save them to the keyring (entry: `livestreamlist-youtube`). No user manual-paste needed. This is the preferred path.
   - (b) **Manual paste fallback** — Preferences → Accounts → YouTube → "Paste cookies" multiline input. Required for Flatpak sandboxed builds where the in-app webview can't persist cookies. See `livestream.list.qt/docs/youtube-cookies.md` for user-facing docs.
