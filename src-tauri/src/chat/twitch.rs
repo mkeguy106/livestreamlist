@@ -13,8 +13,8 @@ use super::emotes::{self, EmoteCache};
 use super::irc::{self, IrcMessage};
 use super::log_store::ChatLogWriter;
 use super::models::{
-    ChatBadge, ChatMessage, ChatModerationEvent, ChatStatus, ChatStatusEvent, ChatUser, EmoteRange,
-    ReplyInfo, SystemEvent,
+    ChatBadge, ChatMessage, ChatModerationEvent, ChatRoomState, ChatStatus, ChatStatusEvent,
+    ChatUser, EmoteRange, ReplyInfo, SystemEvent,
 };
 use super::OutboundMsg;
 use crate::platforms::Platform;
@@ -559,6 +559,30 @@ fn extract_room_id(msg: &crate::chat::irc::IrcMessage<'_>) -> Option<String> {
     msg.tags.get("room-id").filter(|s| !s.is_empty()).cloned()
 }
 
+/// Apply Twitch ROOMSTATE tags onto a prior state. Tags absent from the map
+/// preserve their prior value (Twitch sends partial ROOMSTATEs on flips).
+pub fn apply_roomstate_tags(
+    tags: &std::collections::HashMap<String, String>,
+    mut prior: ChatRoomState,
+) -> ChatRoomState {
+    if let Some(v) = tags.get("slow").and_then(|s| s.parse::<u32>().ok()) {
+        prior.slow_seconds = v;
+    }
+    if let Some(v) = tags.get("followers-only").and_then(|s| s.parse::<i32>().ok()) {
+        prior.followers_only_minutes = v;
+    }
+    if let Some(v) = tags.get("subs-only") {
+        prior.subs_only = v == "1";
+    }
+    if let Some(v) = tags.get("emote-only") {
+        prior.emote_only = v == "1";
+    }
+    if let Some(v) = tags.get("r9k") {
+        prior.r9k = v == "1";
+    }
+    prior
+}
+
 fn extract_own_badges(msg: &crate::chat::irc::IrcMessage<'_>) -> Vec<ChatBadge> {
     parse_badges(msg.tags.get("badges").map(String::as_str).unwrap_or(""))
 }
@@ -684,5 +708,49 @@ mod tests {
         let line = "@slow=30 :tmi.twitch.tv ROOMSTATE #shroud";
         let m = crate::chat::irc::parse(line).unwrap();
         assert_eq!(extract_room_id(&m), None);
+    }
+
+    #[test]
+    fn parses_full_join_roomstate() {
+        let mut tags = std::collections::HashMap::new();
+        tags.insert("emote-only".to_string(), "0".to_string());
+        tags.insert("followers-only".to_string(), "30".to_string());
+        tags.insert("r9k".to_string(), "0".to_string());
+        tags.insert("slow".to_string(), "10".to_string());
+        tags.insert("subs-only".to_string(), "1".to_string());
+
+        let s = apply_roomstate_tags(&tags, ChatRoomState::default());
+
+        assert_eq!(s.slow_seconds, 10);
+        assert_eq!(s.followers_only_minutes, 30);
+        assert!(s.subs_only);
+        assert!(!s.emote_only);
+        assert!(!s.r9k);
+    }
+
+    #[test]
+    fn partial_roomstate_merges_with_prior() {
+        let prior = ChatRoomState {
+            slow_seconds: 5,
+            subs_only: true,
+            followers_only_minutes: 60,
+            ..ChatRoomState::default()
+        };
+        let mut tags = std::collections::HashMap::new();
+        tags.insert("slow".to_string(), "30".to_string());
+
+        let s = apply_roomstate_tags(&tags, prior);
+
+        assert_eq!(s.slow_seconds, 30);
+        assert!(s.subs_only); // preserved
+        assert_eq!(s.followers_only_minutes, 60); // preserved
+    }
+
+    #[test]
+    fn followers_only_negative_one_means_off() {
+        let mut tags = std::collections::HashMap::new();
+        tags.insert("followers-only".to_string(), "-1".to_string());
+        let s = apply_roomstate_tags(&tags, ChatRoomState::default());
+        assert_eq!(s.followers_only_minutes, -1);
     }
 }
