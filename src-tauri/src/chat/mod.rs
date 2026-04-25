@@ -149,6 +149,7 @@ impl ChatManager {
                     outbound: rx,
                     room_id: Mutex::new(None),
                     own_badges: Mutex::new(Vec::new()),
+                    last_room_state: Mutex::new(None),
                 };
                 let task = async_runtime::spawn(async move {
                     twitch::run(cfg).await;
