@@ -224,3 +224,174 @@ Today the Columns layout auto-populates from every live channel in the store. Th
 - Phase 3 depends on Phase 2b's full chat plumbing
 - Phase 4 depends on nothing phase-specific, but preferences wiring is much more useful after Phase 3 (more things to configure)
 - Phase 5 could ship in any order; the release pipeline is the only item with hard external dependencies
+
+---
+
+## Proposed for roadmap review (2026-04-25)
+
+Gap analysis against the Qt app (`~/livestream.list.qt/`) — docs (`README.md`, `CHANGELOG.md`, `docs/youtube-cookies.md`) and source tree. Items below are **candidates** to triage into the phased plan; none are committed. Each is tagged with a suggested fit (`→ Ph N` for existing phase, `→ new` for candidate follow-up, `→ shipped?` where we may already have it partially and need to verify before re-adding).
+
+### Channels — list management and filtering
+
+- [ ] **Trash bin / soft-delete** — deleted channels move to a `trash.json` rather than being permanently removed; dedicated Trash dialog with restore / permanent-delete / empty-all actions. → new (Ph 4 pref dialog is a natural home)
+- [ ] **Selection mode** — multi-select with shift-click range, Select All / Deselect All / Delete Selected; toolbar toggle or Edit menu. → Ph 3 follow-ups
+- [ ] **Sort modes** — expand beyond the implied default: Name (alpha), Viewers (desc), Playing (currently-launched first), Last Seen (offline-by-recency), Time Live (uptime asc). → new
+- [ ] **Platform filter dropdown** — All / Twitch / YouTube / Kick / Chaturbate in the channel rail header. → Ph 3 follow-ups (lives next to the channel-list search already there)
+- [ ] **Favorites-only filter** — `favorite` field is already on `Channel`; the filter UI is not. → Ph 3 follow-ups
+- [ ] **Hide offline toggle** — one-click filter to show only currently-live channels. → Ph 3 follow-ups
+- [ ] **Last-seen timestamp** — `channels.json` records the last-live UTC timestamp per channel and the row shows "2h ago" / "3d ago" when offline. → new (data model change + row rendering)
+- [ ] **Auto-launch / auto-play channel flag + filter** — per-channel "A" toggle; filter to show only auto-launch channels; toolbar global auto-play master switch. → Ph 5 (pairs with external-player picker)
+- [ ] **Per-channel "don't notify" UI** — the `dont_notify` field exists on `Channel` but has no UI toggle today. → Ph 4 (preferences / per-row)
+- [ ] **Per-row icon visibility toggles** — independent show/hide for platform icon, play, stop, favorite, chat, browser icons in the channel row. → Ph 4 Appearance tab
+- [ ] **Per-row info toggles** — independent show/hide for live-duration and viewer-count on each row. → Ph 4
+- [ ] **Right-click context menu on channel rows** — Play / Close Channel / Open Chat / Open in Browser / Favorite. → Ph 3 follow-ups
+- [ ] **Platform colors toggle** — toggle whether channel names are tinted by platform accent. → Ph 4 Appearance tab (`--twitch` / `--youtube` / `--kick` / `--cb` accents already defined in `tokens.css`)
+- [ ] **Stream list font-size zoom** — `Ctrl+=` / `Ctrl+-` shortcuts that target the channel rail only, independent of the global UI scale. → Ph 3 follow-ups
+
+### Live status refresh
+
+- [ ] **User-configurable refresh interval** — expose the current hard-coded 60 s as a 10–300 s preference. → Ph 4 General tab
+- [ ] **Per-platform concurrency caps** — YouTube and Kick `Semaphore` limits exposed in Preferences → Performance (matches Qt's `PerformanceSettings.youtube_concurrency` / `kick_concurrency`). → Ph 4
+- [ ] **Debounced on-disk writes for channel flag changes** — favorite / auto-launch / dont-notify flips should debounce ~2 s before hitting disk to avoid I/O thrash on bulk operations. → new (minor; sits in `channels.rs`)
+- [ ] **Error state on rows** — when a specific platform client errored, surface `error_message` in the row (small red dot + tooltip) instead of silently showing offline. → Ph 2a follow-ups
+- [ ] **`YOUTUBE_MISS_THRESHOLD` tolerance** — Qt allows a transient scrape miss (count = 2) before declaring a secondary concurrent YT stream offline; avoids flapping in the multi-stream case. → Ph 2b (fold into the multi-stream item)
+
+### Chat — core message handling
+
+- [ ] **ROOMSTATE → chat-mode banners** — parse `slow`, `subs-only`, `emote-only`, `followers-only` (minutes; `-1` = off), `r9k` and surface as a dismissible banner row above the message list. → Ph 3
+- [ ] **`/me` action messages** — detect `\x01ACTION …\x01` payload and render in italic with the username coloured like the body. → Ph 3
+- [ ] **First-message (`first-msg=1`) highlight** — shipped? (check current chat rendering); if not, add a subtle left accent / tinted row. → shipped?
+- [ ] **Sub-anniversary banner** — when the logged-in user's Twitch anniversary is detected via IRC, show a one-shot dismissible banner per billing cycle. → Ph 3
+- [ ] **Custom highlight keywords** — user list of words that trigger the mention highlight style + optional notification. → Ph 3
+- [ ] **Local echo for sent Twitch messages** — Twitch does not echo own PRIVMSGs; synthesise a local echo using `USERSTATE` tags so the user sees their own send immediately. → Ph 2b (sending)
+- [ ] **Prediction badge tooltips** — parse the `predictions` badge version (`blue-1` etc.) and render a descriptive tooltip ("Predicted: Blue"). → Ph 3
+
+### Chat — emotes
+
+- [ ] **Animated emote rendering** — GIF/WebP frame extraction and per-frame-delay animation in both chat and emote picker, driven by a shared timer (don't start one timer per emote). → Ph 3
+- [ ] **Provider toggles** — per-user toggles for 7TV / BTTV / FFZ independently (matches Qt's `emote_providers` setting). → Ph 4 Chat tab
+- [ ] **Emote disk cache budget** — the current memory LRU + 500 MB disk cap from CLAUDE.md is shipped; expose the disk cap as a user-configurable setting (50–5000 MB). → Ph 4 General tab
+- [ ] **Prefetch-on-picker-open** — when the emote picker opens, auto-download any missing channel emotes (prioritised over globals). → Ph 3
+- [ ] **Channel vs Global separation in picker** — subsection header within each provider tab so users can tell sub-emotes from globals. → Ph 3 (fold into emote-picker item)
+- [ ] **Twitch sub emotes via Helix** — `GET /chat/emotes/user?user_id=…` (paginated) lists every emote the logged-in user can use across their subscriptions. → Ph 2b (fold into "Twitch channel sub emotes" bullet)
+- [ ] **7TV EventAPI live emote updates** — subscribe to add/remove events for the connected channel so the picker reflects upstream changes without a manual refresh. → Ph 3
+
+### Chat — UX
+
+- [ ] **In-chat search with predicates** — `Ctrl+F`; predicates: `from:username`, `has:link`, `has:emote`, `is:sub`, `is:mod`, `is:first`, `is:system`, `is:action`, `is:hype`; prev/next navigation with match counter. → Ph 3
+- [ ] **Scroll pause on user scroll-up** — lock auto-scroll when the user scrolls away from the bottom; show a "paused — click to resume" indicator; auto-resume when the user scrolls back to bottom. → Ph 3
+- [ ] **Link tooltip previews** — hover a URL to fetch the page `<title>` (first ~16 KB) in a background task and show it in a tooltip; 200-entry LRU. → Ph 3
+- [ ] **Slow-mode countdown in composer** — when ROOMSTATE has `slow > 0`, render the countdown inside the send button / placeholder text. → Ph 3
+- [ ] **Character counter in composer** — live remaining-characters display; limits: Twitch/Kick/Chaturbate 500, YouTube 200. → Ph 3
+- [ ] **Up/Down message history cycling** — per-channel ring of recently-sent messages; arrow keys in an empty composer pop them back for edit+resend. → Ph 3
+- [ ] **@mention autocomplete** — separate from general tab-completion; triggered by `@`, scoped to users seen in the current session. → Ph 3 (sub-bullet of "Tab completion for emotes + mentions")
+- [ ] **Autocorrect** — the existing spellcheck bullet should also call out distance-1 Damerau-Levenshtein auto-correct with a brief 3 s green-underline display. → Ph 5 (fold into spellcheck item)
+- [ ] **Adult-word dictionary** — bundle a `data/adult.txt` so common chat slang doesn't get false-positive spellcheck hits. → Ph 5 (fold into spellcheck)
+- [ ] **Deleted-message display modes** — strikethrough / truncated / hidden; configurable per user. → Ph 3
+- [ ] **Alternating row colors** — optional even/odd row background tinting in the chat list; separate tokens for dark + light themes; alpha-enabled. → Ph 4 Appearance tab
+- [ ] **Per-channel chat tab colors** — user can assign a custom tint to each chat tab for visual channel recognition. → Ph 4
+- [ ] **Configurable chat font size** — independent of the global UI scale (4–24 pt). → Ph 4 Chat tab
+- [ ] **Configurable line spacing** — 0–20 px between messages. → Ph 4 Chat tab
+- [ ] **Scrollback buffer cap** — max messages held in memory per channel (100–50 000, default 1 000). → Ph 4 Chat tab
+- [ ] **Platform name colors toggle** — use Twitch's assigned user colour from IRC; let users opt out for colour-neutral reading. → Ph 4 Chat tab
+
+### Chat — windows + persistence
+
+- [ ] **Plain-text log format option** — alternate to JSONL; `[YYYY-MM-DD HH:MM:SS] Username: message` per line. → Ph 3 (fold into chat-logs item)
+- [ ] **History-on-open** — when opening a channel's chat, load the last N lines from the disk JSONL log (configurable 10–1000, default 100) before the live stream resumes. → Ph 3 (distinct from third-party preload: local history persists across restarts, third-party only covers the last ~30 s)
+- [ ] **Chat-log export to text file** — one-click export of the current buffer to a plain-text file. → Ph 3
+- [ ] **Split view (two chats side-by-side)** — the Columns redesign in Ph 6 covers N columns; Qt's split view is specifically for two built-in chat tabs in one window. → Ph 6 (could fold in as a 2-column preset)
+- [ ] **Chat window always-on-top** — independent of main window always-on-top; for popout chat windows. → Ph 4 / existing popout code
+- [ ] **Whisper tab + banner** — whisper-specific chat tab list separate from channel tabs; main-window banner that flashes on inbound whisper (1 Hz for 60 s). → Ph 3 (extend the whispers bullet)
+
+### Playback
+
+- [ ] **yt-dlp launch method** — alternative to streamlink for YouTube and Chaturbate (some URLs don't resolve via streamlink). → Ph 5 (sibling to external-player picker)
+- [ ] **Per-platform launch method picker** — Twitch → streamlink, YouTube → yt-dlp, Kick → streamlink, Chaturbate → yt-dlp (each independently configurable). → Ph 5
+- [ ] **Stream quality picker per launch** — Source / 1080p / 720p / 480p / 360p / Audio-only; default configurable; also selectable per-launch via right-click. → Ph 5
+- [ ] **Global + per-channel auto-play toggles** — global toolbar button ("A") + per-channel `auto_launch` flag; channels fire `launch_stream` automatically on offline→live transition. → Ph 5
+- [ ] **"Playing" row indicator + stop control** — stream rows show a prominent playing indicator and a stop button while the `PlayerManager` has an active process for that key. → Ph 5
+- [ ] **Streamlink console window** — optional in-app terminal window showing live stdout/stderr from the streamlink subprocess, with an "auto-close when process exits" option. → Ph 5
+- [ ] **Record-while-watching** — already in Ph 5 as `--record PATH`; add the `record_directory` setting + a filename template (`{channel}_{timestamp}.ts`). → Ph 5 (fold)
+- [ ] **Low-latency defaults per platform** — ship default `additional_args` of `--twitch-low-latency --kick-low-latency`; user can override. → Ph 5
+- [ ] **Shell-metacharacter validation** for streamlink/player args — reject arguments containing `;`, `&&`, backticks, etc. in the Preferences form so the detached subprocess can never execute an attacker-crafted string. → Ph 5
+- [ ] **Video preview on hover** — 320×180 HLS preview that plays when hovering a live row for > 400 ms; optional audio; 60 s preview-URL cache. Needs a lightweight in-app HLS player — possibly the same one we'd use for Ph 6 inline playback. → new (Ph 6-adjacent)
+
+### Notifications
+
+- [ ] **Smart no-flurry on startup** — suppress go-live notifications during the first refresh after launch; channels that were already live at startup are silently noted, only future transitions fire. → Ph 4 (fold into Desktop Notifications bullet)
+- [ ] **Urgency levels** — Low / Normal / Critical (maps to notify-send priority on Linux / criticality level on other OSes). → Ph 4
+- [ ] **Custom notification sound** — file picker for WAV / OGG / MP3 / FLAC / Opus; plays via `paplay`/`aplay`/`ffplay` on Linux, `winsound` on Windows, `NSSound` on macOS. → Ph 4
+- [ ] **Notification timeout (0–60 s)** — configurable dismiss time, 0 = system default. → Ph 4
+- [ ] **Per-platform notification filter** — independent toggles for Twitch / YouTube / Kick / Chaturbate. → Ph 4
+- [ ] **Raid notifications** — desktop notification fires on Twitch USERNOTICE `msg-id=raid` on any connected chat, independent of go-live events. → Ph 3 / Ph 4
+- [ ] **Mention notifications + distinct sound** — fire when `@{our_name}` appears in any connected chat; separate sound from go-live. → Ph 3 / Ph 4
+- [ ] **"Watch" action button on notifications** — click to directly `launch_stream` the target channel without focusing the window. → Ph 4
+- [ ] **Show-game / show-title toggles** — suppress game and/or title in the notification body for users who want the minimal "X is live!" form. → Ph 4
+- [ ] **Notification backend selector** — auto / `desktop-notifier` D-Bus / `notify-send` subprocess (Linux); a manual fallback when the auto-detect picks the wrong one. → Ph 4
+- [ ] **Flatpak-safe backend** — use `flatpak-spawn --host notify-send` when `FLATPAK_ID` is set so the sandbox doesn't swallow notifications. → Ph 4
+- [ ] **Test-notification buttons** in Preferences (test live sound + test mention sound). → Ph 4
+
+### Themes + appearance
+
+- [ ] **Built-in theme presets** — beyond our Linear/Vercel mono default: High Contrast, Nord Dark, Monokai, Solarized Dark, Light. Each is a JSON under `~/.config/livestreamlist/themes/` loaded at startup. → Ph 4
+- [ ] **Theme mode selector** — Auto (follows system `prefers-color-scheme`) / Light / Dark / High Contrast / Custom. → Ph 4
+- [ ] **Theme cycle button** — small button in the titlebar that rotates through all available themes (matches Qt's toolbar button). → Ph 4
+- [ ] **Theme JSON export/import** — separate from the full settings bundle; one-click share a theme file. → Ph 4 (fold into theme-editor item)
+- [ ] **Main window always-on-top toggle** — View menu entry, persists across restarts. → Ph 4
+- [ ] **UI Styles density cycle** — app-wide density modes (not just the sidebar): Default / Compact 1 / Compact 2 / Compact 3 scaling the toolbar, dialogs, and list rows. Separate from the per-sidebar density toggle proposed in Ph 3 follow-ups. → Ph 4
+
+### Accounts + auth
+
+- [ ] **Browser cookie import for YouTube** — primary auth path in the Qt app: read cookies directly from Chrome / Chromium / Brave / Firefox / Opera / Vivaldi / LibreWolf cookie stores. In Rust this is a `rookie`-style crate call. Flatpak builds can't reach browser data; document that manual paste is the only path there. → Ph 2b (fold into YouTube cookie-login bullet as path "(c)")
+- [ ] **Expired-cookie auto-refresh prompt** — detect when YouTube cookies have expired (HTTP response signals); offer an in-app re-sign-in dialog. → Ph 2b (fold)
+- [ ] **Multi-account switcher** — quick account switcher popup for managing multiple Twitch / Kick / YouTube logins per platform; stores multiple keyring entries keyed by account name. → new (Ph 4-adjacent, noted as not-yet-shipped in Qt's own roadmap)
+- [ ] **Keyring graceful fallback** — if no keyring is available (headless machines, CI), store secrets in a 0600-mode JSON file under the config dir and log a clear warning. → Ph 2b
+
+### Accessibility + comfort
+
+- [ ] **Built-in High Contrast theme** — separate from the generic theme editor; ship as a preset with WCAG-AA contrast ratios and pure-black/pure-white backgrounds. → Ph 4 (fold into theme presets)
+- [ ] **Streamer mode** — auto-detect a running OBS / other streaming software (PID / window-title scan) and mask usernames, whispers, and notification content until the user toggles back. Qt calls this out on their own roadmap but hasn't shipped it. → new
+- [ ] **Chat scroll "paused" affordance** — accessibility value is making the pause state visible when the user has lost context on why new messages stopped arriving. → Ph 3 (fold with scroll-pause)
+
+### Keyboard shortcuts
+
+Current: `1`/`2`/`3` layout, `N` add, `R` refresh (Phase 1 shipped). Qt has many more. Proposed additions (Ph 3 follow-ups):
+
+- [ ] `Ctrl+N` add channel (supersede `N` or keep both)
+- [ ] `Ctrl+R` / `F5` refresh
+- [ ] `Ctrl+,` preferences
+- [ ] `Ctrl+Q` quit (with close-to-tray still honored if enabled)
+- [ ] `Ctrl+F` in-chat search
+- [ ] `Ctrl+E` emote picker
+- [ ] `Ctrl+Shift+E` refresh emotes for current channel
+- [ ] `Ctrl+W` new whisper
+- [ ] `Ctrl+=` / `Ctrl+-` zoom channel-list font
+- [ ] `Escape` cancel reply / close popup / exit selection mode
+- [ ] `Delete` delete selected channel(s) in selection mode
+- [ ] `Tab` emote completion in composer (scoped to composer focus)
+- [ ] `@` start mention autocomplete
+- [ ] `Ctrl+C` copy selected chat message
+
+### Other — small polish items
+
+- [ ] **Chaturbate private/hidden/group room detection** — `api/chatvideocontext` returns a room status beyond "online/offline"; dim the row + tooltip when the room is not in a public show. → Ph 2a follow-ups (fold into Chaturbate live-check)
+- [ ] **Clickable category/game chip** in the title banner — opens the platform's category browse page. Watch out for Qt's `linkActivated` bug in rich text (anchor tags outside opacity wrappers). → Ph 3 (fold into title banner bullet)
+- [ ] **Browser chat URL types** — Popout / Embedded / Default for Twitch when using the browser-chat fallback. → Ph 4 (fold into a new browser-chat subsection, lower priority)
+- [ ] **Browser selection for external chat** — System Default / Chrome / Chromium / Edge / Firefox when the user opts for browser chat instead of built-in. → Ph 4
+- [ ] **YouTube `/live` URL suffix** when opening a channel in the browser so it lands on the currently-active stream rather than the channel homepage. → Ph 1 (tiny fix to `open_in_browser`)
+- [ ] **About dialog** — version string, license link, GitHub link, acknowledgements. → Ph 4
+- [ ] **Reset-to-defaults button** in Preferences → General. → Ph 4
+- [ ] **"Open log directory"** button that spawns `xdg-open`/`open`/`explorer` on the logs folder. → Ph 4 (fold into existing item)
+- [ ] **App-level file logging** — rotating log file at `~/.local/share/livestreamlist/logs/` separate from chat logs; configurable level (INFO / DEBUG); toggleable; openable from Preferences. → Ph 4 (fold into the Developer tab item)
+
+### To verify (may already be shipped — check before re-adding)
+
+- [ ] **User cards: hover + click + pronouns + bio + follow age + badges + history** — per git log, `feat(ui): UserCard portal popover`, `feat(ui): hover-to-open with configurable delay and card grace zone`, `feat(ui): UserHistoryDialog`, `feat(ui): right-click context menu for chat usernames`, `feat(ui): nickname and note edit dialogs`. Compare against Qt's user card feature list for any gaps.
+- [ ] **Blocked users list + unblock action** — `feat(settings): Blocked Users list in Chat tab with unblock action`, `feat(chat): purge blocked-user messages on user_blocked moderation event`. Confirm feature parity.
+- [ ] **Badge cache + mod classification** — `feat(chat): add BadgeCache with mod-classification helpers`. Check whether hover tooltips (descriptive "6-Month Subscriber" text) are wired up, since Qt has them.
+- [ ] **Chat visibility toggles** (badges, mod badges, timestamps) — `feat(settings): add chat visibility toggles (badges, mod badges, timestamps)`. Check whether the UI is in the Settings dialog or just the fields on the struct.
+- [ ] **Timestamp 12h / 24h format** — `Settings::chat::timestamp_24h` field exists; confirm the UI exposes the toggle.
+- [ ] **Favorites star in channel rail** — `Channel::favorite` + `set_favorite` invoke command exist; confirm the star UI is wired.
+- [ ] **First-message (`first-msg=1`) highlight** — unclear from recent commits whether the IRC tag triggers a visual treatment.
+- [ ] **Emote size / srcset 1x/2x/4x** — `EmoteText.jsx` per CLAUDE.md uses srcset; confirm 2x/4x sources are actually being selected at high-DPI.
