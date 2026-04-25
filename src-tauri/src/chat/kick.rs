@@ -136,13 +136,14 @@ async fn read_loop(
     mut log: Option<&mut ChatLogWriter>,
     ids: &KickChannelIds,
 ) -> Result<()> {
+    let mut last_room_state: ChatRoomState = ids.room_state.clone();
     loop {
         tokio::select! {
             frame = ws.next() => {
                 let Some(frame) = frame else { break };
                 match frame? {
                     WsMessage::Text(text) => {
-                        handle_pusher_line(cfg, ws, log.as_deref_mut(), &text).await?;
+                        handle_pusher_line(cfg, ws, log.as_deref_mut(), &text, &mut last_room_state).await?;
                     }
                     WsMessage::Binary(_) => {}
                     WsMessage::Ping(p) => ws.send(WsMessage::Pong(p)).await?,
@@ -178,6 +179,7 @@ async fn handle_pusher_line(
     ws: &mut WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>,
     log: Option<&mut ChatLogWriter>,
     line: &str,
+    last_room_state: &mut ChatRoomState,
 ) -> Result<()> {
     let parsed: Value = match serde_json::from_str(line) {
         Ok(v) => v,
@@ -203,6 +205,24 @@ async fn handle_pusher_line(
                 let _ = cfg
                     .app
                     .emit(&format!("chat:message:{}", cfg.channel_key), chat_msg);
+            }
+        }
+        "App\\Events\\ChatroomUpdatedEvent" => {
+            let data_str = parsed.get("data").and_then(|v| v.as_str());
+            if let Some(data_str) = data_str {
+                if let Ok(data) = serde_json::from_str::<Value>(data_str) {
+                    let next = parse_chatroom_modes(&data);
+                    if next != *last_room_state {
+                        *last_room_state = next.clone();
+                        let _ = cfg.app.emit(
+                            &format!("chat:roomstate:{}", cfg.channel_key),
+                            ChatRoomStateEvent {
+                                channel_key: cfg.channel_key.clone(),
+                                state: next,
+                            },
+                        );
+                    }
+                }
             }
         }
         _ => {
