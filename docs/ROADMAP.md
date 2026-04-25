@@ -29,14 +29,14 @@ Phased plan to reach feature parity with `livestream.list.qt`, with each phase s
 
 ---
 
-## Phase 2a follow-ups — live-status parity across platforms
+## Phase 2a follow-ups — live-status parity across platforms  ✓ shipped
 
 Twitch is the hardest one and it's done; the others are straightforward ports.
 
-- [ ] **YouTube live check** — subprocess `yt-dlp --dump-json --no-download https://youtube.com/@{handle}/live` (matches Qt app). Parse `is_live`, `title`, `concurrent_view_count`, `release_timestamp`, thumbnail. Batch size 5 to stay under yt-dlp throttling.
-- [ ] **Kick live check** — `GET https://kick.com/api/v2/channels/{slug}`; map `livestream` object to `Livestream` struct. Use `start_time` for duration (UTC timezone required).
-- [ ] **Chaturbate live check** — two-step: bulk `/api/ts/roomlist/room-list/?follow=true` (needs session cookie; Phase 2b) + individual `/api/chatvideocontext/{user}/` (public) to detect private/hidden/group rooms. For now support only individual.
-- [ ] Wire each into `refresh.rs` alongside the existing Twitch branch; platform-specific concurrency caps
+- [x] **YouTube live check** — subprocess `yt-dlp --dump-single-json --no-download` (matches Qt app). Parses `is_live`/`live_status`, `title`, `concurrent_view_count`, `release_timestamp`, thumbnail.
+- [x] **Kick live check** — `GET https://kick.com/api/v2/channels/{slug}`; maps `livestream` object to `Livestream` struct. `start_time` parsed as UTC (handles both naive `YYYY-MM-DD HH:MM:SS` and RFC3339).
+- [x] **Chaturbate live check** — individual `/api/chatvideocontext/{user}/` (public). Surfaces private/hidden/group as a non-error status so the UI can dim. Bulk follow endpoint deferred to Phase 2b (needs cookies).
+- [x] Wired into `refresh.rs` alongside Twitch with `YT_CONCURRENCY = 5` cap; Kick/Chaturbate are cheap REST and run unbounded `join_all`.
 
 ---
 
@@ -385,13 +385,13 @@ Current: `1`/`2`/`3` layout, `N` add, `R` refresh (Phase 1 shipped). Qt has many
 - [ ] **"Open log directory"** button that spawns `xdg-open`/`open`/`explorer` on the logs folder. → Ph 4 (fold into existing item)
 - [ ] **App-level file logging** — rotating log file at `~/.local/share/livestreamlist/logs/` separate from chat logs; configurable level (INFO / DEBUG); toggleable; openable from Preferences. → Ph 4 (fold into the Developer tab item)
 
-### To verify (may already be shipped — check before re-adding)
+### Confirmed shipped (audited 2026-04-25)
 
-- [ ] **User cards: hover + click + pronouns + bio + follow age + badges + history** — per git log, `feat(ui): UserCard portal popover`, `feat(ui): hover-to-open with configurable delay and card grace zone`, `feat(ui): UserHistoryDialog`, `feat(ui): right-click context menu for chat usernames`, `feat(ui): nickname and note edit dialogs`. Compare against Qt's user card feature list for any gaps.
-- [ ] **Blocked users list + unblock action** — `feat(settings): Blocked Users list in Chat tab with unblock action`, `feat(chat): purge blocked-user messages on user_blocked moderation event`. Confirm feature parity.
-- [ ] **Badge cache + mod classification** — `feat(chat): add BadgeCache with mod-classification helpers`. Check whether hover tooltips (descriptive "6-Month Subscriber" text) are wired up, since Qt has them.
-- [ ] **Chat visibility toggles** (badges, mod badges, timestamps) — `feat(settings): add chat visibility toggles (badges, mod badges, timestamps)`. Check whether the UI is in the Settings dialog or just the fields on the struct.
-- [ ] **Timestamp 12h / 24h format** — `Settings::chat::timestamp_24h` field exists; confirm the UI exposes the toggle.
-- [ ] **Favorites star in channel rail** — `Channel::favorite` + `set_favorite` invoke command exist; confirm the star UI is wired.
-- [ ] **First-message (`first-msg=1`) highlight** — unclear from recent commits whether the IRC tag triggers a visual treatment.
-- [ ] **Emote size / srcset 1x/2x/4x** — `EmoteText.jsx` per CLAUDE.md uses srcset; confirm 2x/4x sources are actually being selected at high-DPI.
+- [x] **User cards** — `src/components/UserCard.jsx`: hover + click popover with pronouns, bio, follow age, badges, plus separate `UserHistoryDialog`, right-click context menu, nickname + note edit dialogs.
+- [x] **Blocked users list + unblock action** — `src/components/PreferencesDialog.jsx` Chat tab; `src/ipc.js::list_blocked_users`. Purge-on-block-event hooked up in chat handlers.
+- [x] **Badge cache + mod classification** — `src-tauri/src/chat/badges.rs::BadgeCache` with `classify_mod_*` helpers. Hover tooltip text (e.g. "6-Month Subscriber") still to verify against the Qt app's coverage.
+- [x] **Chat visibility toggles** (badges, mod badges, timestamps) — exposed in `PreferencesDialog.jsx` Chat tab. (Per-mod-badge-subtype toggles not in scope today; punt to Ph 4 if wanted.)
+- [x] **Timestamp 12h / 24h format** — `timestamp_24h` UI toggle wired in `PreferencesDialog.jsx`; rendering branches in `ChatView.jsx`.
+- [x] **Favorites star in channel rail** — `Command.jsx` "Pin as favorite" context-menu entry, calls `set_favorite`.
+- [x] **First-message (`first-msg=1`) highlight** — `chat/twitch.rs` parses `first-msg=1` into `is_first_message`; rendered with a visual treatment in `ChatView.jsx`.
+- [x] **Emote 2x/4x srcset** — `EmoteText.jsx` builds 1x/2x/4x srcset; browser picks per device-pixel-ratio.
