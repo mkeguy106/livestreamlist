@@ -146,6 +146,20 @@ fn apply_rect(window: &tauri::WebviewWindow, rect: Rect) -> Result<()> {
 /// rect if the saved state is unreachable or corrupt.
 fn validate_and_fix(window: &tauri::WebviewWindow) -> Result<()> {
     let current = current_window_rect(window)?;
+
+    // On Wayland, an unmapped window reports (0, 0, 0, 0) — the surface has
+    // no committed configuration until the compositor has mapped it. We can't
+    // sensibly validate geometry against monitors in that state, and treating
+    // zeros as "corrupt" would override whatever set_position/set_size we
+    // already requested via restore_state. Off-screen recovery on Wayland
+    // would need a deferred validation hooked off the first ResizeEvent.
+    if current.w == 0 || current.h == 0 {
+        log::info!(
+            "window_state: skipping validation; window not yet mapped (geometry={current:?})"
+        );
+        return Ok(());
+    }
+
     let monitors = all_monitor_rects(window)?;
 
     let size_ok = is_size_sane(current.w, current.h);
