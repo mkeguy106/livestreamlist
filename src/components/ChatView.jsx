@@ -151,15 +151,19 @@ export default function ChatView({
 
   // Emote images start at 0px and grow when they load — that grows the
   // scrollHeight AFTER our scrollToBottom ran, leaving the latest row
-  // just below the visible area. Observe the content and re-pin on any
-  // size change while we're auto-following.
+  // just below the visible area. Also re-pin when the scroll container
+  // itself resizes (e.g. the chat-mode banner appearing or being dismissed
+  // shrinks/grows the available message area). Observe both and re-pin on
+  // any size change while we're auto-following.
   useEffect(() => {
-    const el = contentRef.current;
-    if (!el || typeof ResizeObserver === 'undefined') return;
+    const content = contentRef.current;
+    const list = listRef.current;
+    if ((!content && !list) || typeof ResizeObserver === 'undefined') return;
     const observer = new ResizeObserver(() => {
       if (autoScrollRef.current) scrollToBottom();
     });
-    observer.observe(el);
+    if (content) observer.observe(content);
+    if (list) observer.observe(list);
     return () => observer.disconnect();
   }, [scrollToBottom]);
 
@@ -194,7 +198,6 @@ export default function ChatView({
       }}
     >
       {header}
-      <ChatModeBanner channelKey={channelKey} variant={variant} />
       <div style={{ flex: 1, position: 'relative', minHeight: 0, overflow: 'hidden' }}>
         <div
           ref={listRef}
@@ -282,6 +285,7 @@ export default function ChatView({
           </div>
         )}
       </div>
+      <ChatModeBanner channelKey={channelKey} variant={variant} />
       {footer ?? (
         <Composer
           channelKey={channelKey}
