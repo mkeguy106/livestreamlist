@@ -339,7 +339,7 @@ fn chat_open_popout(
         return Ok(());
     }
 
-    tauri::WebviewWindowBuilder::new(
+    let popout = tauri::WebviewWindowBuilder::new(
         &app,
         label,
         tauri::WebviewUrl::External(url.parse().map_err(err_string)?),
@@ -350,6 +350,7 @@ fn chat_open_popout(
     .build()
     .map_err(err_string)?;
 
+    let _ = popout.set_focus();
     Ok(())
 }
 
