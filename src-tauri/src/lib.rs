@@ -721,6 +721,15 @@ pub fn run() {
     let http_for_chat = state.http.clone();
     let users_for_chat = Arc::clone(&state.users);
     tauri::Builder::default()
+        .plugin(
+            tauri_plugin_window_state::Builder::new()
+                .with_state_flags(
+                    tauri_plugin_window_state::StateFlags::POSITION
+                        | tauri_plugin_window_state::StateFlags::SIZE
+                        | tauri_plugin_window_state::StateFlags::MAXIMIZED,
+                )
+                .build(),
+        )
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_single_instance::init(
             |app: &tauri::AppHandle, _argv: Vec<String>, _cwd: String| {
@@ -749,6 +758,7 @@ pub fn run() {
             let player_mgr = Arc::new(PlayerManager::new(app.handle().clone()));
             app.manage(player_mgr);
             tray::build(&app.handle())?;
+            window_state::register(app)?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
