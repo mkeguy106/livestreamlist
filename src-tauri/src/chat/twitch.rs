@@ -13,8 +13,8 @@ use super::emotes::{self, EmoteCache};
 use super::irc::{self, IrcMessage};
 use super::log_store::ChatLogWriter;
 use super::models::{
-    ChatBadge, ChatMessage, ChatModerationEvent, ChatRoomState, ChatStatus, ChatStatusEvent,
-    ChatUser, EmoteRange, ReplyInfo, SystemEvent,
+    ChatBadge, ChatMessage, ChatModerationEvent, ChatRoomState, ChatRoomStateEvent, ChatStatus,
+    ChatStatusEvent, ChatUser, EmoteRange, ReplyInfo, SystemEvent,
 };
 use super::OutboundMsg;
 use crate::platforms::Platform;
@@ -48,6 +48,8 @@ pub struct TwitchChatConfig {
     /// Per-channel own-user badges captured from USERSTATE; used for
     /// local echo of own outgoing messages.
     pub own_badges: parking_lot::Mutex<Vec<crate::chat::models::ChatBadge>>,
+    /// Latest parsed ROOMSTATE from IRC; used for emit-on-change logic.
+    pub last_room_state: parking_lot::Mutex<Option<ChatRoomState>>,
 }
 
 /// Run the Twitch IRC connection until dropped/aborted. Emits
@@ -228,6 +230,18 @@ async fn handle_line(
                         cache.ensure_twitch_channel(&http, &rid).await;
                     });
                 }
+            }
+            let prior = cfg.last_room_state.lock().clone().unwrap_or_default();
+            let next = apply_roomstate_tags(&msg.tags, prior);
+            if cfg.last_room_state.lock().as_ref() != Some(&next) {
+                *cfg.last_room_state.lock() = Some(next.clone());
+                let _ = cfg.app.emit(
+                    &format!("chat:roomstate:{}", cfg.channel_key),
+                    ChatRoomStateEvent {
+                        channel_key: cfg.channel_key.clone(),
+                        state: next,
+                    },
+                );
             }
         }
         "USERSTATE" | "GLOBALUSERSTATE" => {
