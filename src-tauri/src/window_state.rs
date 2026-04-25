@@ -35,6 +35,19 @@ impl Rect {
 const TITLEBAR_HEIGHT_PX: u32 = 40;
 const CENTERING_PADDING_PX: u32 = 64;
 
+/// Minimum sane window size, matching `minWidth`/`minHeight` in `tauri.conf.json`.
+/// Must stay in sync — if the config minimums change, update these.
+pub(crate) const MIN_SANE_W: u32 = 900;
+pub(crate) const MIN_SANE_H: u32 = 600;
+
+/// Default window size when no saved state exists or saved state is corrupt.
+/// Must match `width`/`height` in `tauri.conf.json`.
+pub(crate) const DEFAULT_SIZE: (u32, u32) = (1280, 800);
+
+pub(crate) fn is_size_sane(w: u32, h: u32) -> bool {
+    w >= MIN_SANE_W && h >= MIN_SANE_H
+}
+
 /// Compute a centered rect inside `monitor` for the given desired window size.
 /// If the desired size doesn't fit, shrink to the monitor minus a per-side
 /// padding (accounts for panels/docks/decorations we cannot enumerate).
@@ -156,5 +169,25 @@ mod tests {
         assert_eq!(r.h, 704);
         assert_eq!(r.x, (1024 - 960) / 2);
         assert_eq!(r.y, (768 - 704) / 2);
+    }
+
+    #[test]
+    fn size_at_minimum_is_sane() {
+        assert!(is_size_sane(900, 600));
+    }
+
+    #[test]
+    fn size_below_minimum_width_is_insane() {
+        assert!(!is_size_sane(800, 600));
+    }
+
+    #[test]
+    fn size_below_minimum_height_is_insane() {
+        assert!(!is_size_sane(900, 500));
+    }
+
+    #[test]
+    fn zero_size_is_insane() {
+        assert!(!is_size_sane(0, 0));
     }
 }
