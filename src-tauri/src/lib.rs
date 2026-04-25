@@ -695,11 +695,25 @@ fn open_in_browser(unique_key: String, state: State<'_, AppState>) -> Result<(),
     streamlink::open_browser(&url).map_err(err_string)
 }
 
-/// WebKitGTK on NVIDIA + Wayland (KDE Plasma) crashes with "Error 71 (Protocol
-/// error) dispatching to Wayland display" when the DMABUF renderer is enabled.
-/// Disabling it falls back to a software path that renders correctly.
+/// Linux-specific runtime workarounds, applied before Tauri boots.
 ///
-/// Also opt out of the compositing crash seen on some Mesa/Nvidia stacks.
+/// 1. `WEBKIT_DISABLE_DMABUF_RENDERER=1` — WebKitGTK on NVIDIA + Wayland (KDE
+///    Plasma) crashes with "Error 71 (Protocol error) dispatching to Wayland
+///    display" when the DMABUF renderer is enabled. Disabling it falls back
+///    to a software path that renders correctly.
+/// 2. `GDK_BACKEND=x11` — Wayland's protocol does not expose absolute window
+///    position to clients (`outer_position` always returns `(0, 0)`), so
+///    `tauri-plugin-window-state` cannot persist or restore position on a
+///    native Wayland session. Forcing GTK onto Xwayland restores standard
+///    X11 semantics: real coordinates in/out, `set_position` honored, full
+///    window-state persistence. Revisit once either the Wayland protocol
+///    grows an opt-in way for clients to request/report absolute positions
+///    (see xdg-shell discussions) or the ecosystem migrates away from
+///    position-persistence UX.
+///
+/// Both use `set_if_unset` so a user can opt out via environment override
+/// (e.g. `GDK_BACKEND=wayland` for a native-Wayland session).
+///
 /// No-op everywhere else.
 #[cfg(target_os = "linux")]
 fn apply_linux_webkit_workarounds() {
@@ -709,6 +723,7 @@ fn apply_linux_webkit_workarounds() {
         }
     }
     set_if_unset("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+    set_if_unset("GDK_BACKEND", "x11");
 }
 
 #[cfg(not(target_os = "linux"))]
