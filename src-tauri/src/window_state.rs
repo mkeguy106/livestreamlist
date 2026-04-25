@@ -33,6 +33,20 @@ impl Rect {
 }
 
 const TITLEBAR_HEIGHT_PX: u32 = 40;
+const CENTERING_PADDING_PX: u32 = 64;
+
+/// Compute a centered rect inside `monitor` for the given desired window size.
+/// If the desired size doesn't fit, shrink to the monitor minus a per-side
+/// padding (accounts for panels/docks/decorations we cannot enumerate).
+pub(crate) fn centered_rect_in_monitor(monitor: Rect, desired: (u32, u32)) -> Rect {
+    let max_w = monitor.w.saturating_sub(CENTERING_PADDING_PX);
+    let max_h = monitor.h.saturating_sub(CENTERING_PADDING_PX);
+    let w = desired.0.min(max_w);
+    let h = desired.1.min(max_h);
+    let x = monitor.x + ((monitor.w - w) / 2) as i32;
+    let y = monitor.y + ((monitor.h - h) / 2) as i32;
+    Rect { x, y, w, h }
+}
 
 /// True if any pixel of the window's top `TITLEBAR_HEIGHT_PX` strip overlaps
 /// any monitor's bounds. False means the user cannot grab the titlebar to move
@@ -110,5 +124,37 @@ mod tests {
     fn empty_monitor_list_is_unreachable() {
         let win = Rect { x: 0, y: 0, w: 1280, h: 800 };
         assert!(!is_titlebar_reachable(win, &[]));
+    }
+
+    #[test]
+    fn centered_rect_fits_when_default_size_is_smaller_than_monitor() {
+        let primary = mon(0, 0, 1920, 1080);
+        let r = centered_rect_in_monitor(primary, (1280, 800));
+        assert_eq!(r.w, 1280);
+        assert_eq!(r.h, 800);
+        // centered: (1920-1280)/2 = 320, (1080-800)/2 = 140
+        assert_eq!(r.x, 320);
+        assert_eq!(r.y, 140);
+    }
+
+    #[test]
+    fn centered_rect_offsets_with_monitor_origin() {
+        // Primary at non-zero origin (e.g. it's the right monitor in a dual setup).
+        let primary = mon(1920, 0, 1920, 1080);
+        let r = centered_rect_in_monitor(primary, (1280, 800));
+        assert_eq!(r.x, 1920 + 320);
+        assert_eq!(r.y, 140);
+    }
+
+    #[test]
+    fn centered_rect_shrinks_when_default_exceeds_monitor() {
+        // Tiny monitor — default 1280x800 won't fit; shrink to monitor minus padding.
+        let primary = mon(0, 0, 1024, 768);
+        let r = centered_rect_in_monitor(primary, (1280, 800));
+        // 1024 - 64 = 960, 768 - 64 = 704
+        assert_eq!(r.w, 960);
+        assert_eq!(r.h, 704);
+        assert_eq!(r.x, (1024 - 960) / 2);
+        assert_eq!(r.y, (768 - 704) / 2);
     }
 }
