@@ -118,3 +118,36 @@ pub struct ChatModerationEvent {
     #[serde(default)]
     pub duration_seconds: Option<i64>,
 }
+
+/// Restricted-mode state for a chat room. Unified across Twitch and Kick so
+/// the frontend has one render path.
+///
+/// - `slow_seconds = 0` ⇒ off
+/// - `followers_only_minutes = -1` ⇒ off; `0` ⇒ "any duration"; `N` ⇒ N min
+/// - `r9k` is Twitch-only; always `false` on Kick.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChatRoomState {
+    pub slow_seconds: u32,
+    pub followers_only_minutes: i32,
+    pub subs_only: bool,
+    pub emote_only: bool,
+    pub r9k: bool,
+}
+
+impl Default for ChatRoomState {
+    fn default() -> Self {
+        Self {
+            slow_seconds: 0,
+            followers_only_minutes: -1,
+            subs_only: false,
+            emote_only: false,
+            r9k: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatRoomStateEvent {
+    pub channel_key: String,
+    pub state: ChatRoomState,
+}
