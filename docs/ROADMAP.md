@@ -88,6 +88,18 @@ Twitch is the hardest one and it's done; the others are straightforward ports.
 - [ ] Mention highlight row background + orange left accent bar
 - [ ] Emote picker popup (search, category tabs, viewport culling)
 - [ ] Tab completion for emotes (`:`) and mentions (`@`)
+- [ ] **Third-party Twitch chat preload** — on chat connect, fetch the last N messages from a public history service (e.g. `recent-messages.robotty.de/api/v2/recent-messages/{login}`) and replay them before the live IRC stream starts. Matches the Qt app's pre-load behavior so a freshly opened channel isn't an empty box for the first 30 seconds. Configurable message cap (default 100) and respect the service's TTL / rate limits; gracefully skip when the service is unreachable.
+
+---
+
+## Phase 3 follow-ups — UX consistency + first-paint polish
+
+These are small-scoped UX fixes that don't belong under a "phase" but should land together for a consistent polish pass.
+
+- [ ] **Dark-mode first-paint** — the window currently flashes white on launch before the React bundle parses and paints. Set the Tauri window / `index.html` / `<body>` background to `--zinc-950` (our dark base) via a tiny inline `<style>` in the shell HTML and `"background_color"` in `tauri.conf.json` so the compositor maps the window on a dark surface from frame zero. No flash-bang at launch, especially on HDR / high-brightness monitors.
+- [ ] **Global hover + focus audit** — sweep every interactive element and normalize hover / focus-visible styling against `tokens.css`. Known offenders: chat emotes, the account chip in the titlebar, the preferences icon, add-channel and refresh buttons, layout-switcher dots, column header controls. Currently several of them fall through to WebKit's native cursor / outline, breaking the visual identity.
+- [ ] **Channel-list search** — a slim search input pinned at the top of the channel rail (Command layout) that filters the visible list live as the user types. Match by `display_name` and `channel_id`, case-insensitive. Use the existing `.rx-input` class so it lands without new design decisions.
+- [ ] **Last-selected-channel memory** — persist `last_selected_channel_key` across runs. On launch: if that channel is live, select it and open its chat in the main pane. If it's offline, fall back to selecting the top entry of the (live-first, then favorites, then alpha) channel list.
 
 ---
 
@@ -103,6 +115,7 @@ Twitch is the hardest one and it's done; the others are straightforward ports.
 - [ ] **Background mode** — close → hide to tray, don't quit
 - [ ] Log viewer / "Open log directory"
 - [ ] Import/export settings+channels to JSON (NOT tokens/cookies)
+- [ ] **Developer tab + context-menu hardening** — the default WebKit right-click menu (back / forward / reload / Inspect Element) leaks development tooling to normal users. Disable it by default via `tauri.conf.json` + a `contextmenu` listener in the shell HTML. Add a new "Developer" tab in Preferences with two toggles (both default off): "Show developer context menu" (re-enables the native menu including Inspect Element) and "Verbose logging" (promotes `log::debug!` calls to stdout + writes a detailed trace log to `~/.local/share/livestreamlist/logs/debug.log` for issue reports).
 
 ---
 
@@ -113,11 +126,40 @@ Twitch is the hardest one and it's done; the others are straightforward ports.
 - [ ] **Import follows from Chaturbate** — bulk room-list endpoint with session cookies
 - [ ] **Spellcheck / autocorrect** — ship `hunspell` on Linux via the `hunspell` crate or subprocess; fall back to a pure-Rust `symspell` on Windows/macOS. Skip rules for emotes, URLs, mentions, all-caps. Red wavy underlines in composer; green underline on auto-correction for 3 s. Distance-1 Damerau-Levenshtein for auto; distance-≤ 2 for manual suggestions
 - [ ] Adult word list (`data/adult.txt`) bundled to suppress false positives on chat slang
-- [ ] **Twitch Turbo auth** — must use browser `auth-token` cookie (not the OAuth token — it's client-ID-bound). `Authorization: OAuth {cookie}` when passed to streamlink. Offer a login button that scrapes the cookie from a local WebView session
+- [ ] **Twitch Turbo auth** — must use browser `auth-token` cookie (not the OAuth token — it's client-ID-bound). `Authorization: OAuth {cookie}` when passed to streamlink. Offer a login button that scrapes the cookie from a local WebView session. Once wired, subscribers get their subscribed quality tiers and Turbo users get ad-free playback automatically — same behavior as the Qt app
+- [ ] **External-player picker + args** — Preferences → Playback tab lets the user pick their player (mpv / vlc / iina / custom path), set extra streamlink flags, and set extra player flags (passed via `-a '…'`). Match the Qt app's "Streamlink + additional arguments" form: validate the binary is on PATH or at the given absolute path, validate args don't contain shell metacharacters, and persist per-field
 - [ ] Streamlink additional-args validator (must allow non-flag values like `debug` after `--loglevel`)
 - [ ] Record-and-play support via `--record PATH`
 - [ ] **Release pipeline** — GitHub Actions: build AppImage + `.deb` on Ubuntu, `.dmg` on macOS, Inno Setup `.exe` on Windows. Tag-driven (`v*`). One release at a time (GitHub Actions storage quota)
 - [ ] Autoupdater — `tauri-plugin-updater` checking a manifest
+
+---
+
+## Phase 6 — Columns layout redesign + in-app playback
+
+Today the Columns layout auto-populates from every live channel in the store. The target is a user-curated workspace: the user builds a column set, saves it as a named group, switches between groups, and actually watches the streams inline instead of shelling out to an external player.
+
+### Group management
+
+- [ ] **Empty by default** — Columns layout starts empty on first load; no auto-populate from live channels. A prominent empty state invites the user to add columns from their channel list.
+- [ ] **Add-column picker** — next to the existing Add / Refresh buttons, an "Add column" button opens a picker of every channel in the store (live first, then offline alpha) with a checkbox selection model. User picks any subset — offline channels included — and they become columns in the current group.
+- [ ] **Named groups + switcher dropdown** — groups persist to `settings.json`. A dropdown next to Add / Refresh lists saved groups and lets the user switch between them. Groups auto-save on any change (add / remove / reorder). The user can rename any group inline (double-click name, or a small edit-pencil in the dropdown).
+- [ ] **Clear all columns** — a button next to Refresh that wipes the current group to empty. Confirmation dialog if the group has ≥ 3 columns to guard against accidents.
+- [ ] **Per-column remove** — a minus (×) button on each column header removes it from the current group (auto-saved).
+- [ ] **Drag-to-reorder columns** — HTML5 drag-and-drop (or a lightweight dnd-kit if needed) between columns; new order auto-saves to the group. Drop target is the column header region, not the chat body, to avoid drag-hijacking during chat selection.
+
+### In-column video playback
+
+- [ ] **Inline video** — render the live stream *inside* each column instead of launching streamlink to an external player. Use the HLS stream URL from Twitch / Kick / YouTube and play it in a `<video>` element via `hls.js` or Tauri's native video widget (prototype both; pick the lower-resource option on the target hardware).
+- [ ] **Per-channel volume** — a slider on each column's video control bar; value persists to `settings.json` per `unique_key` so muting a specific channel survives restart.
+- [ ] **Popout to external player** — a popout button on each column's video control bar that hands off to the user's configured external player (see Phase 5's player-picker). The inline video pauses while the external player is active.
+- [ ] **Resume on external-player close** — track the external player PID; when it exits (detected by `Child::try_wait` polling or `wait_with_output` on a background task), automatically resume the inline video in the column. Audio setting is preserved through the handoff. If the user wants the popout to become "sticky," a settings toggle disables the auto-resume behavior.
+
+### Not in scope for this phase
+
+- DVR / scrubbing controls — inline video is live-only.
+- Picture-in-picture across columns (would require a separate always-on-top child window per column; reassess after the basic inline-play ships).
+- Recording while playing inline — use the popout external player for that; see Phase 5's `--record PATH` item.
 
 ---
 
