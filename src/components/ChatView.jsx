@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '../hooks/useAuth.jsx';
 import { useChat } from '../hooks/useChat.js';
 import { usePreferences } from '../hooks/usePreferences.jsx';
+import ChatModeBanner from './ChatModeBanner.jsx';
 import Composer from './Composer.jsx';
 import ConversationDialog from './ConversationDialog.jsx';
 import EmoteText from './EmoteText.jsx';
@@ -193,6 +194,7 @@ export default function ChatView({
       }}
     >
       {header}
+      <ChatModeBanner channelKey={channelKey} variant={variant} />
       <div style={{ flex: 1, position: 'relative', minHeight: 0, overflow: 'hidden' }}>
         <div
           ref={listRef}
