@@ -1,12 +1,14 @@
 use anyhow::{Context, Result};
 use chrono::Utc;
 use futures_util::{SinkExt, StreamExt};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message as WsMessage;
 use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
 
+use super::badges::classify_mod_twitch;
 use super::emotes::{self, EmoteCache};
 use super::irc::{self, IrcMessage};
 use super::log_store::ChatLogWriter;
@@ -19,6 +21,8 @@ use crate::platforms::Platform;
 
 const IRC_URL: &str = "wss://irc-ws.chat.twitch.tv";
 
+static SELF_ECHO_SEQ: AtomicU64 = AtomicU64::new(0);
+
 /// Auth context passed into a chat connection. When `None` the task falls
 /// back to an anonymous `justinfan*` read-only session (no sending).
 #[derive(Debug, Clone)]
@@ -29,12 +33,21 @@ pub struct TwitchAuth {
 
 pub struct TwitchChatConfig {
     pub app: AppHandle,
+    pub http: reqwest::Client,
     pub channel_key: String,
     pub channel_login: String,
     pub emotes: Arc<EmoteCache>,
+    pub badges: Arc<crate::chat::badges::BadgeCache>,
     pub users: Arc<crate::users::UserStore>,
     pub auth: Option<TwitchAuth>,
     pub outbound: mpsc::UnboundedReceiver<OutboundMsg>,
+    /// Updated when ROOMSTATE arrives so build_privmsg / build_usernotice
+    /// can scope their badge lookups. Interior-mutable since cfg is shared
+    /// as `&TwitchChatConfig` through handle_line.
+    pub room_id: parking_lot::Mutex<Option<String>>,
+    /// Per-channel own-user badges captured from USERSTATE; used for
+    /// local echo of own outgoing messages.
+    pub own_badges: parking_lot::Mutex<Vec<crate::chat::models::ChatBadge>>,
 }
 
 /// Run the Twitch IRC connection until dropped/aborted. Emits
@@ -90,6 +103,17 @@ async fn connect_and_read(cfg: &mut TwitchChatConfig) -> Result<()> {
 
     emit_status(&cfg.app, &cfg.channel_key, ChatStatus::Connected, None);
 
+    // Prefetch global Twitch badges in the background. Idempotent — the
+    // cache skips the HTTP call if globals were already loaded by an earlier
+    // connection in this process.
+    {
+        let cache = Arc::clone(&cfg.badges);
+        let http = cfg.http.clone();
+        tauri::async_runtime::spawn(async move {
+            cache.ensure_twitch_global(&http).await;
+        });
+    }
+
     let mut log = ChatLogWriter::open(Platform::Twitch, &cfg.channel_login).ok();
     read_loop(cfg, &mut ws, log.as_mut()).await
 }
@@ -132,7 +156,14 @@ async fn read_loop(
                 // still silently drop for ratelimit/slow-mode/ban.
                 let line = format!("PRIVMSG #{} :{}", cfg.channel_login.to_ascii_lowercase(), text);
                 let result = match ws.send(WsMessage::Text(line)).await {
-                    Ok(()) => Ok(()),
+                    Ok(()) => {
+                        // Local echo: IRC doesn't echo own PRIVMSG. Synthesize so
+                        // the user sees their own message and badges.
+                        if let Some(echo) = build_self_echo(cfg, &text) {
+                            persist_and_emit(cfg, log.as_deref_mut(), echo);
+                        }
+                        Ok(())
+                    }
                     Err(e) => {
                         log::warn!("twitch outbound send failed: {e:#}");
                         Err(format!("{e:#}"))
@@ -186,9 +217,25 @@ async fn handle_line(
                 .app
                 .emit(&format!("chat:moderation:{}", cfg.channel_key), ev);
         }
-        "NOTICE" | "ROOMSTATE" | "USERSTATE" | "GLOBALUSERSTATE" => {
-            // Not surfaced yet — state events for room mode / user state live
-            // behind their own UI that lands in Phase 4b with preferences.
+        "ROOMSTATE" => {
+            if let Some(rid) = extract_room_id(&msg) {
+                let prev = cfg.room_id.lock().clone();
+                if prev.as_deref() != Some(rid.as_str()) {
+                    *cfg.room_id.lock() = Some(rid.clone());
+                    let cache = Arc::clone(&cfg.badges);
+                    let http = cfg.http.clone();
+                    tauri::async_runtime::spawn(async move {
+                        cache.ensure_twitch_channel(&http, &rid).await;
+                    });
+                }
+            }
+        }
+        "USERSTATE" | "GLOBALUSERSTATE" => {
+            let badges = extract_own_badges(&msg);
+            *cfg.own_badges.lock() = badges;
+        }
+        "NOTICE" => {
+            // Surface lands in Phase 4b with preferences.
         }
         _ => {}
     }
@@ -266,10 +313,15 @@ fn build_privmsg(cfg: &TwitchChatConfig, msg: &IrcMessage<'_>) -> Option<ChatMes
         .tags
         .get("tmi-sent-ts")
         .and_then(|s| s.parse::<i64>().ok())
-        .and_then(|ms| chrono::DateTime::from_timestamp_millis(ms))
+        .and_then(chrono::DateTime::from_timestamp_millis)
         .unwrap_or_else(Utc::now);
 
     let color = msg.tags.get("color").filter(|s| !s.is_empty()).cloned();
+
+    let mut badges = parse_badges(msg.tags.get("badges").map(String::as_str).unwrap_or(""));
+    let room_snapshot = cfg.room_id.lock().clone();
+    cfg.badges
+        .resolve(Platform::Twitch, room_snapshot.as_deref(), &mut badges);
 
     Some(ChatMessage {
         id,
@@ -300,7 +352,7 @@ fn build_privmsg(cfg: &TwitchChatConfig, msg: &IrcMessage<'_>) -> Option<ChatMes
         },
         text,
         emote_ranges,
-        badges: parse_badges(msg.tags.get("badges").map(String::as_str).unwrap_or("")),
+        badges,
         is_action,
         is_first_message: msg.tags.get("first-msg").map(|v| v == "1").unwrap_or(false),
         reply_to,
@@ -332,6 +384,48 @@ fn extract_reply_info(tags: &std::collections::HashMap<String, String>) -> Optio
         parent_login,
         parent_display_name,
         parent_text,
+    })
+}
+
+fn build_self_echo(cfg: &TwitchChatConfig, text: &str) -> Option<ChatMessage> {
+    // Anonymous (justinfan…) connections shouldn't echo — they can't even
+    // send. Require auth to be present.
+    let auth = cfg.auth.as_ref()?;
+    let login = auth.login.clone();
+    if login.is_empty() {
+        return None;
+    }
+
+    let mut badges = cfg.own_badges.lock().clone();
+    let room_snapshot = cfg.room_id.lock().clone();
+    cfg.badges
+        .resolve(Platform::Twitch, room_snapshot.as_deref(), &mut badges);
+
+    // Strip /me ACTION wrapping mirroring inbound behavior.
+    let (clean_text, is_action) = strip_action(text);
+
+    Some(ChatMessage {
+        id: format!("self-{}", SELF_ECHO_SEQ.fetch_add(1, Ordering::Relaxed)),
+        channel_key: cfg.channel_key.clone(),
+        platform: Platform::Twitch,
+        timestamp: chrono::Utc::now(),
+        user: ChatUser {
+            id: None,
+            login: login.clone(),
+            display_name: login,
+            color: None,
+            is_mod: badges.iter().any(|b| b.id.starts_with("moderator/")),
+            is_subscriber: badges.iter().any(|b| b.id.starts_with("subscriber/")),
+            is_broadcaster: badges.iter().any(|b| b.id.starts_with("broadcaster/")),
+            is_turbo: badges.iter().any(|b| b.id.starts_with("turbo/")),
+        },
+        text: clean_text,
+        emote_ranges: Vec::new(),
+        badges,
+        is_action,
+        is_first_message: false,
+        reply_to: None,
+        system: None,
     })
 }
 
@@ -388,8 +482,13 @@ fn build_usernotice(cfg: &TwitchChatConfig, msg: &IrcMessage<'_>) -> Option<Chat
         .tags
         .get("tmi-sent-ts")
         .and_then(|s| s.parse::<i64>().ok())
-        .and_then(|ms| chrono::DateTime::from_timestamp_millis(ms))
+        .and_then(chrono::DateTime::from_timestamp_millis)
         .unwrap_or_else(Utc::now);
+
+    let mut badges = parse_badges(msg.tags.get("badges").map(String::as_str).unwrap_or(""));
+    let room_snapshot = cfg.room_id.lock().clone();
+    cfg.badges
+        .resolve(Platform::Twitch, room_snapshot.as_deref(), &mut badges);
 
     Some(ChatMessage {
         id,
@@ -412,7 +511,7 @@ fn build_usernotice(cfg: &TwitchChatConfig, msg: &IrcMessage<'_>) -> Option<Chat
         },
         text,
         emote_ranges,
-        badges: parse_badges(msg.tags.get("badges").map(String::as_str).unwrap_or("")),
+        badges,
         is_action: false,
         is_first_message: false,
         reply_to: None,
@@ -442,7 +541,7 @@ fn char_range_to_bytes(text: &str, char_start: usize, char_end: usize) -> (usize
     let mut bs = text.len();
     let mut be = text.len();
     let mut done_s = false;
-    let mut done_e = false;
+    let done_e = false;
     for (char_idx, (byte_idx, _ch)) in text.char_indices().enumerate() {
         if !done_s && char_idx == char_start {
             bs = byte_idx;
@@ -450,25 +549,32 @@ fn char_range_to_bytes(text: &str, char_start: usize, char_end: usize) -> (usize
         }
         if !done_e && char_idx == char_end {
             be = byte_idx;
-            done_e = true;
             break;
         }
     }
     (bs, be)
 }
 
+fn extract_room_id(msg: &crate::chat::irc::IrcMessage<'_>) -> Option<String> {
+    msg.tags.get("room-id").filter(|s| !s.is_empty()).cloned()
+}
+
+fn extract_own_badges(msg: &crate::chat::irc::IrcMessage<'_>) -> Vec<ChatBadge> {
+    parse_badges(msg.tags.get("badges").map(String::as_str).unwrap_or(""))
+}
+
 fn parse_badges(tag: &str) -> Vec<ChatBadge> {
-    // Without channel badge URLs we just note the ids; frontend can style by id.
     if tag.is_empty() {
         return Vec::new();
     }
     tag.split(',')
         .filter_map(|pair| {
-            let (id, version) = pair.split_once('/')?;
+            let (set_name, version) = pair.split_once('/')?;
             Some(ChatBadge {
-                id: format!("{id}/{version}"),
+                id: format!("{set_name}/{version}"),
                 url: String::new(),
-                title: id.to_string(),
+                title: set_name.to_string(),
+                is_mod: classify_mod_twitch(set_name),
             })
         })
         .collect()
@@ -518,4 +624,65 @@ fn emit_status(app: &AppHandle, channel_key: &str, status: ChatStatus, message: 
             message,
         },
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_badges_classifies_mod_vs_cosmetic() {
+        let badges = parse_badges("broadcaster/1,subscriber/6,vip/1,turbo/1");
+        let map: std::collections::HashMap<&str, bool> =
+            badges.iter().map(|b| (b.id.as_str(), b.is_mod)).collect();
+        assert_eq!(map.get("broadcaster/1").copied(), Some(true));
+        assert_eq!(map.get("vip/1").copied(), Some(true));
+        assert_eq!(map.get("subscriber/6").copied(), Some(false));
+        assert_eq!(map.get("turbo/1").copied(), Some(false));
+    }
+
+    #[test]
+    fn parse_badges_empty_returns_empty() {
+        assert!(parse_badges("").is_empty());
+    }
+
+    #[test]
+    fn extract_room_id_from_roomstate() {
+        let line = "@emote-only=0;followers-only=-1;r9k=0;room-id=12345;slow=0;subs-only=0 :tmi.twitch.tv ROOMSTATE #shroud";
+        let m = crate::chat::irc::parse(line).unwrap();
+        assert_eq!(extract_room_id(&m), Some("12345".to_string()));
+    }
+
+    #[test]
+    fn extract_own_badges_from_userstate() {
+        let line = "@badge-info=subscriber/12;badges=broadcaster/1,subscriber/12;color=#FF0000;display-name=Me;mod=0;subscriber=1;user-type= :tmi.twitch.tv USERSTATE #shroud";
+        let m = crate::chat::irc::parse(line).unwrap();
+        let badges = extract_own_badges(&m);
+        let ids: Vec<&str> = badges.iter().map(|b| b.id.as_str()).collect();
+        assert!(ids.contains(&"broadcaster/1"));
+        assert!(ids.contains(&"subscriber/12"));
+        assert!(
+            badges
+                .iter()
+                .find(|b| b.id == "broadcaster/1")
+                .unwrap()
+                .is_mod
+        );
+        assert!(
+            !badges
+                .iter()
+                .find(|b| b.id == "subscriber/12")
+                .unwrap()
+                .is_mod
+        );
+    }
+
+    #[test]
+    fn extract_room_id_absent_returns_none() {
+        // Twitch sends ROOMSTATE without room-id on mode-change updates
+        // (slow-mode toggle, etc.). The handler must short-circuit cleanly.
+        let line = "@slow=30 :tmi.twitch.tv ROOMSTATE #shroud";
+        let m = crate::chat::irc::parse(line).unwrap();
+        assert_eq!(extract_room_id(&m), None);
+    }
 }

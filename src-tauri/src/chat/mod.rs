@@ -1,3 +1,4 @@
+pub mod badges;
 mod emote_loader;
 pub mod emotes;
 mod irc;
@@ -31,6 +32,7 @@ pub struct ChatManager {
     app: AppHandle,
     pub(crate) http: reqwest::Client,
     emotes: Arc<EmoteCache>,
+    badges: Arc<crate::chat::badges::BadgeCache>,
     users: Arc<crate::users::UserStore>,
     connections: Mutex<HashMap<String, ConnectionHandle>>,
 }
@@ -47,10 +49,12 @@ impl ChatManager {
         users: Arc<crate::users::UserStore>,
     ) -> Arc<Self> {
         let cache = EmoteCache::new();
+        let badges = crate::chat::badges::BadgeCache::new();
         let mgr = Arc::new(Self {
             app,
             http,
             emotes: cache,
+            badges,
             users,
             connections: Mutex::new(HashMap::new()),
         });
@@ -135,12 +139,16 @@ impl ChatManager {
 
                 let cfg = twitch::TwitchChatConfig {
                     app: self.app.clone(),
+                    http: self.http.clone(),
                     channel_key: unique_key.clone(),
                     channel_login: channel_id,
                     emotes: Arc::clone(&self.emotes),
+                    badges: Arc::clone(&self.badges),
                     users: Arc::clone(&self.users),
                     auth,
                     outbound: rx,
+                    room_id: Mutex::new(None),
+                    own_badges: Mutex::new(Vec::new()),
                 };
                 let task = async_runtime::spawn(async move {
                     twitch::run(cfg).await;
@@ -157,6 +165,7 @@ impl ChatManager {
                     channel_key: unique_key.clone(),
                     channel_slug: channel_id,
                     emotes: Arc::clone(&self.emotes),
+                    badges: Arc::clone(&self.badges),
                     outbound: rx,
                 };
                 let task = async_runtime::spawn(async move {

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useAuth } from '../hooks/useAuth.jsx';
-import { usePreferences } from '../hooks/usePreferences.js';
+import { usePreferences } from '../hooks/usePreferences.jsx';
 import { importTwitchFollows, listBlockedUsers, setUserMetadata } from '../ipc.js';
 
 const TABS = [
@@ -323,6 +323,27 @@ function ChatTab({ settings, patch }) {
         <Toggle
           checked={c.timestamp_24h !== false}
           onChange={(v) => patch((prev) => ({ ...prev, chat: { ...c, timestamp_24h: v } }))}
+        />
+      </Row>
+
+      <Row label="Show user badges" hint="Subscriber, premium, partner, founder, bits, …">
+        <Toggle
+          checked={c.show_badges !== false}
+          onChange={(v) => patch((prev) => ({ ...prev, chat: { ...c, show_badges: v } }))}
+        />
+      </Row>
+
+      <Row label="Show mod badges" hint="Broadcaster, moderator, VIP, staff, admin.">
+        <Toggle
+          checked={c.show_mod_badges !== false}
+          onChange={(v) => patch((prev) => ({ ...prev, chat: { ...c, show_mod_badges: v } }))}
+        />
+      </Row>
+
+      <Row label="Show timestamps">
+        <Toggle
+          checked={c.show_timestamps !== false}
+          onChange={(v) => patch((prev) => ({ ...prev, chat: { ...c, show_timestamps: v } }))}
         />
       </Row>
 

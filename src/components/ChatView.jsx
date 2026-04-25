@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '../hooks/useAuth.jsx';
 import { useChat } from '../hooks/useChat.js';
+import { usePreferences } from '../hooks/usePreferences.jsx';
 import Composer from './Composer.jsx';
 import ConversationDialog from './ConversationDialog.jsx';
 import EmoteText from './EmoteText.jsx';
+import UserBadges from './UserBadges.jsx';
 
 // Qt-style auto-scroll: when the user scrolls up, pause auto-follow for 5
 // minutes and show a "New messages (M:SS)" button. Click (or scroll back to
@@ -44,6 +46,13 @@ export default function ChatView({
   const platform = channelKey?.split(':')[0];
   const myLogin =
     (platform === 'kick' ? auth.kick?.login : auth.twitch?.login)?.toLowerCase() ?? null;
+
+  const { settings } = usePreferences();
+  const c = settings?.chat || {};
+  const showBadges = c.show_badges !== false;
+  const showModBadges = c.show_mod_badges !== false;
+  const showTimestamps = c.show_timestamps !== false;
+  const timestamp24h = c.timestamp_24h !== false;
 
   // Recent authors for @mention autocomplete. Last 50 messages is plenty;
   // keeping it tight avoids re-filtering a large list on every keystroke.
@@ -210,6 +219,8 @@ export default function ChatView({
                   key={m.id}
                   m={m}
                   myLogin={myLogin}
+                  showBadges={showBadges}
+                  showModBadges={showModBadges}
                   onOpenThread={openConversation}
                   onUsernameOpen={handleOpen}
                   onUsernameContext={handleContext}
@@ -220,6 +231,10 @@ export default function ChatView({
                   key={m.id}
                   m={m}
                   myLogin={myLogin}
+                  showBadges={showBadges}
+                  showModBadges={showModBadges}
+                  showTimestamps={showTimestamps}
+                  timestamp24h={timestamp24h}
                   onOpenThread={openConversation}
                   onUsernameOpen={handleOpen}
                   onUsernameContext={handleContext}
@@ -295,8 +310,19 @@ function EmptyHint({ status }) {
   );
 }
 
-function IrcRow({ m, myLogin, onOpenThread, onUsernameOpen, onUsernameContext, onUsernameHover }) {
-  const time = formatTime(m.timestamp);
+function IrcRow({
+  m,
+  myLogin,
+  showBadges,
+  showModBadges,
+  showTimestamps,
+  timestamp24h,
+  onOpenThread,
+  onUsernameOpen,
+  onUsernameContext,
+  onUsernameHover,
+}) {
+  const time = formatTime(m.timestamp, timestamp24h);
   const mentionsMe = mentionsLogin(m.text, myLogin);
   return (
     <div
@@ -317,14 +343,27 @@ function IrcRow({ m, myLogin, onOpenThread, onUsernameOpen, onUsernameContext, o
       <div
         style={{
           display: 'grid',
-          gridTemplateColumns: '58px minmax(0, 1fr)',
+          gridTemplateColumns: showTimestamps
+            ? `${timestamp24h ? 58 : 78}px minmax(0, 1fr)`
+            : 'minmax(0, 1fr)',
           columnGap: 10,
         }}
       >
-        <span className="rx-mono" style={{ fontSize: 10, color: 'var(--zinc-600)' }}>
-          {time}
-        </span>
+        {showTimestamps && (
+          <span
+            className="rx-mono"
+            style={{ fontSize: 10, color: 'var(--zinc-600)', whiteSpace: 'nowrap' }}
+          >
+            {time}
+          </span>
+        )}
         <span style={{ minWidth: 0 }}>
+          <UserBadges
+            badges={m.badges}
+            showCosmetic={showBadges}
+            showMod={showModBadges}
+            size={14}
+          />
           <span
             data-user-card-anchor
             style={{
@@ -364,7 +403,16 @@ function IrcRow({ m, myLogin, onOpenThread, onUsernameOpen, onUsernameContext, o
   );
 }
 
-function CompactRow({ m, myLogin, onOpenThread, onUsernameOpen, onUsernameContext, onUsernameHover }) {
+function CompactRow({
+  m,
+  myLogin,
+  showBadges,
+  showModBadges,
+  onOpenThread,
+  onUsernameOpen,
+  onUsernameContext,
+  onUsernameHover,
+}) {
   const mentionsMe = mentionsLogin(m.text, myLogin);
   return (
     <div
@@ -384,6 +432,12 @@ function CompactRow({ m, myLogin, onOpenThread, onUsernameOpen, onUsernameContex
         />
       )}
       <div style={{ display: 'flex', gap: 6, alignItems: 'baseline' }}>
+        <UserBadges
+          badges={m.badges}
+          showCosmetic={showBadges}
+          showMod={showModBadges}
+          size={12}
+        />
         <span
           data-user-card-anchor
           style={{
@@ -513,13 +567,19 @@ function SystemRow({ m, variant }) {
   );
 }
 
-function formatTime(iso) {
+function formatTime(iso, is24h = true) {
   if (!iso) return '';
   const d = new Date(iso);
-  const h = String(d.getHours()).padStart(2, '0');
   const m = String(d.getMinutes()).padStart(2, '0');
   const s = String(d.getSeconds()).padStart(2, '0');
-  return `${h}:${m}:${s}`;
+  if (is24h) {
+    const h = String(d.getHours()).padStart(2, '0');
+    return `${h}:${m}:${s}`;
+  }
+  const raw = d.getHours();
+  const period = raw >= 12 ? 'PM' : 'AM';
+  const h12 = raw % 12 === 0 ? 12 : raw % 12;
+  return `${h12}:${m}:${s} ${period}`;
 }
 
 function formatCountdown(seconds) {

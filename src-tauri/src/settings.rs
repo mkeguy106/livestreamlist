@@ -79,6 +79,12 @@ pub struct ChatSettings {
     pub user_card_hover: bool,
     #[serde(default = "default_user_card_hover_delay_ms")]
     pub user_card_hover_delay_ms: u32,
+    #[serde(default = "default_true")]
+    pub show_badges: bool,
+    #[serde(default = "default_true")]
+    pub show_mod_badges: bool,
+    #[serde(default = "default_true")]
+    pub show_timestamps: bool,
 }
 
 fn default_timestamp_24h() -> bool {
@@ -93,6 +99,9 @@ fn default_user_card_hover() -> bool {
 fn default_user_card_hover_delay_ms() -> u32 {
     400
 }
+fn default_true() -> bool {
+    true
+}
 
 impl Default for ChatSettings {
     fn default() -> Self {
@@ -101,6 +110,9 @@ impl Default for ChatSettings {
             history_replay_count: default_history_replay_count(),
             user_card_hover: default_user_card_hover(),
             user_card_hover_delay_ms: default_user_card_hover_delay_ms(),
+            show_badges: default_true(),
+            show_mod_badges: default_true(),
+            show_timestamps: default_true(),
         }
     }
 }
@@ -126,4 +138,42 @@ pub fn save(settings: &Settings) -> Result<()> {
     let path = config::settings_path()?;
     let json = serde_json::to_vec_pretty(settings)?;
     config::atomic_write(&path, &json)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chat_settings_defaults_visibility_toggles_true() {
+        let json = b"{}";
+        let s: Settings = serde_json::from_slice(json).expect("parse empty");
+        assert!(s.chat.show_badges, "show_badges default should be true");
+        assert!(
+            s.chat.show_mod_badges,
+            "show_mod_badges default should be true"
+        );
+        assert!(
+            s.chat.show_timestamps,
+            "show_timestamps default should be true"
+        );
+    }
+
+    #[test]
+    fn chat_settings_round_trip_visibility_toggles() {
+        let chat = ChatSettings {
+            timestamp_24h: true,
+            history_replay_count: 100,
+            user_card_hover: true,
+            user_card_hover_delay_ms: 400,
+            show_badges: false,
+            show_mod_badges: false,
+            show_timestamps: false,
+        };
+        let json = serde_json::to_string(&chat).unwrap();
+        let back: ChatSettings = serde_json::from_str(&json).unwrap();
+        assert!(!back.show_badges);
+        assert!(!back.show_mod_badges);
+        assert!(!back.show_timestamps);
+    }
 }
