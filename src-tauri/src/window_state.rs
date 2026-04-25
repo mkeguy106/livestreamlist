@@ -284,15 +284,36 @@ pub fn register(app: &tauri::App) -> Result<()> {
     );
 
     window.show().context("window.show")?;
-    if let Err(e) = window.set_focus() {
-        log::warn!("window_state: set_focus failed ({e}); compositor may not raise the window");
-    }
+    raise_to_front(&window);
 
     log::info!(
         "window_state: post-show — final_geometry={:?}",
         current_window_rect(&window).ok()
     );
     Ok(())
+}
+
+/// Force the window to the front on launch.
+///
+/// `set_focus()` alone is best-effort and is routinely denied by KDE's
+/// focus-stealing prevention when the launcher's activation token is stale
+/// (e.g. the user ran `npm run tauri:dev` from a terminal session that
+/// hasn't received recent input). The well-known workaround on X11 is to
+/// briefly request always-on-top — the compositor honors that as a raise
+/// request — then immediately clear it so normal stacking behavior resumes.
+///
+/// Errors from any individual call are logged and otherwise ignored; this
+/// is opportunistic UX, not a correctness path.
+fn raise_to_front(window: &tauri::WebviewWindow) {
+    if let Err(e) = window.set_always_on_top(true) {
+        log::warn!("window_state: set_always_on_top(true) failed ({e})");
+    }
+    if let Err(e) = window.set_focus() {
+        log::warn!("window_state: set_focus failed ({e})");
+    }
+    if let Err(e) = window.set_always_on_top(false) {
+        log::warn!("window_state: set_always_on_top(false) failed ({e})");
+    }
 }
 
 #[cfg(test)]
