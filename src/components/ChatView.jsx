@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '../hooks/useAuth.jsx';
 import { useChat } from '../hooks/useChat.js';
-import { usePreferences } from '../hooks/usePreferences.js';
+import { usePreferences } from '../hooks/usePreferences.jsx';
 import Composer from './Composer.jsx';
 import ConversationDialog from './ConversationDialog.jsx';
 import EmoteText from './EmoteText.jsx';

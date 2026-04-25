@@ -13,7 +13,7 @@ import WindowControls from './components/WindowControls.jsx';
 import PreferencesDialog from './components/PreferencesDialog.jsx';
 import { useDragHandler } from './hooks/useDragRegion.js';
 import { useLivestreams } from './hooks/useLivestreams.js';
-import { usePreferences } from './hooks/usePreferences.js';
+import { usePreferences } from './hooks/usePreferences.jsx';
 import { useUserCard } from './hooks/useUserCard.js';
 import { getUserMetadata, launchStream, listenEvent, openInBrowser, removeChannel, setFavorite, setUserMetadata } from './ipc.js';
 

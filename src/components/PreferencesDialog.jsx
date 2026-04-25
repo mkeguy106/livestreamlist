@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useAuth } from '../hooks/useAuth.jsx';
-import { usePreferences } from '../hooks/usePreferences.js';
+import { usePreferences } from '../hooks/usePreferences.jsx';
 import { importTwitchFollows, listBlockedUsers, setUserMetadata } from '../ipc.js';
 
 const TABS = [
