@@ -283,8 +283,15 @@ pub fn register(app: &tauri::App) -> Result<()> {
         current_window_rect(&window).ok()
     );
 
+    // Pre-show: stage always-on-top so when show() maps the window the
+    // compositor places it in the topmost layer. We clear this in the
+    // deferred task below, after the window has actually mapped.
+    if let Err(e) = window.set_always_on_top(true) {
+        log::warn!("window_state: set_always_on_top(true) failed ({e})");
+    }
+
     window.show().context("window.show")?;
-    raise_to_front(&window);
+    raise_to_front_deferred(window.clone());
 
     log::info!(
         "window_state: post-show — final_geometry={:?}",
@@ -293,27 +300,31 @@ pub fn register(app: &tauri::App) -> Result<()> {
     Ok(())
 }
 
-/// Force the window to the front on launch.
+/// Complete the focus dance after the window has actually mapped.
 ///
 /// `set_focus()` alone is best-effort and is routinely denied by KDE's
 /// focus-stealing prevention when the launcher's activation token is stale
-/// (e.g. the user ran `npm run tauri:dev` from a terminal session that
-/// hasn't received recent input). The well-known workaround on X11 is to
-/// briefly request always-on-top — the compositor honors that as a raise
-/// request — then immediately clear it so normal stacking behavior resumes.
+/// (e.g. user ran `npm run tauri:dev` from a long-running terminal). The
+/// classic X11 workaround is to map the window in the always-on-top layer
+/// so the compositor raises it past existing windows, then drop it back to
+/// the normal layer once it has focus.
 ///
-/// Errors from any individual call are logged and otherwise ignored; this
-/// is opportunistic UX, not a correctness path.
-fn raise_to_front(window: &tauri::WebviewWindow) {
-    if let Err(e) = window.set_always_on_top(true) {
-        log::warn!("window_state: set_always_on_top(true) failed ({e})");
-    }
-    if let Err(e) = window.set_focus() {
-        log::warn!("window_state: set_focus failed ({e})");
-    }
-    if let Err(e) = window.set_always_on_top(false) {
-        log::warn!("window_state: set_always_on_top(false) failed ({e})");
-    }
+/// `show()` is asynchronous — the surface is mapped on a later iteration of
+/// the compositor's event loop. Issuing `set_always_on_top(false)` from the
+/// same call stack runs before the map happens and silently undoes the
+/// raise. We defer to a tokio task that sleeps long enough for the
+/// compositor to process the map (~150 ms is generous on modern hardware
+/// without being humanly noticeable).
+fn raise_to_front_deferred(window: tauri::WebviewWindow) {
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        if let Err(e) = window.set_focus() {
+            log::warn!("window_state: set_focus failed ({e})");
+        }
+        if let Err(e) = window.set_always_on_top(false) {
+            log::warn!("window_state: set_always_on_top(false) failed ({e})");
+        }
+    });
 }
 
 #[cfg(test)]
