@@ -199,59 +199,85 @@ pub(crate) fn state_flags() -> StateFlags {
     StateFlags::POSITION | StateFlags::SIZE | StateFlags::MAXIMIZED
 }
 
-/// Restore saved geometry and validate it. If no saved state exists (detected
-/// by comparing before/after), center on the primary monitor instead.
-fn restore_and_validate(window: &tauri::WebviewWindow) -> Result<()> {
-    let flags = state_flags();
+/// File the plugin writes its persisted geometry into. Path is relative to
+/// `app.path().app_config_dir()`. Used to detect whether saved state exists
+/// without relying on a before/after geometry comparison (which is unreliable
+/// on Wayland — `outer_position`/`outer_size` may not reflect `set_position`/
+/// `set_size` calls made on an unmapped window).
+const PLUGIN_STATE_FILE: &str = ".window-state.json";
 
-    let before = current_window_rect(window)?;
-    window
-        .restore_state(flags)
-        .context("plugin restore_state")?;
-    let after = current_window_rect(window)?;
-
-    let restored_something = before != after;
-
-    if restored_something {
-        validate_and_fix(window)?;
-    } else {
-        center_on_primary(window)?;
-    }
-    Ok(())
+fn saved_state_exists(app: &tauri::App) -> bool {
+    app.path()
+        .app_config_dir()
+        .ok()
+        .map(|dir| dir.join(PLUGIN_STATE_FILE).exists())
+        .unwrap_or(false)
 }
 
 /// Wire up startup window-state behavior for the main window.
 ///
 /// Sequence:
-///   1. Ask the plugin to restore saved position/size/maximized (no-op if
-///      the JSON file is missing — first launch).
-///   2. If geometry is unreachable or corrupt, override with a centered rect
-///      on the primary monitor.
-///   3. If no saved state existed, center on the primary monitor at the
-///      default size.
-///   4. Show the window. This is the moment the compositor first sees it,
-///      so the geometry we set above is what gets mapped — no smart-placement.
+///   1. Detect whether saved state exists by checking the plugin's JSON file
+///      directly (a before/after geometry diff is unreliable on Wayland).
+///   2. If saved state exists: ask the plugin to restore it, then validate
+///      against currently-connected monitors. If unreachable, recenter on
+///      primary.
+///   3. If no saved state: center on the primary monitor at default size.
+///   4. Show the window. On X11/Windows/macOS, this is the moment the
+///      compositor first sees the window — geometry we set above is what
+///      gets mapped. On Wayland, the compositor may still apply its own
+///      placement policy; that's a Wayland limitation we cannot bypass.
 ///   5. Bring it to the front via xdg-activation / SetForegroundWindow /
 ///      makeKeyAndOrderFront.
 ///
-/// The window must have `"visible": false` in `tauri.conf.json` for this to
-/// have its intended effect on Wayland — without that, the compositor maps
-/// the window before we can position it.
+/// The window must have `"visible": false` in `tauri.conf.json` for the
+/// pre-show geometry to have any effect on the initial mapping.
 pub fn register(app: &tauri::App) -> Result<()> {
     let window = app
         .get_webview_window("main")
         .ok_or_else(|| anyhow!("main window missing during window_state::register"))?;
 
-    if let Err(e) = restore_and_validate(&window) {
+    let has_saved = saved_state_exists(app);
+    log::info!(
+        "window_state: pre-restore — has_saved={has_saved}, current_geometry={:?}",
+        current_window_rect(&window).ok()
+    );
+
+    if has_saved {
+        if let Err(e) = window.restore_state(state_flags()) {
+            log::warn!(
+                "window_state: plugin restore_state failed ({e}); using current geometry"
+            );
+        }
+        log::info!(
+            "window_state: post-restore — current_geometry={:?}",
+            current_window_rect(&window).ok()
+        );
+        if let Err(e) = validate_and_fix(&window) {
+            log::warn!(
+                "window_state: validate_and_fix failed ({e:#}); leaving geometry as-is"
+            );
+        }
+    } else if let Err(e) = center_on_primary(&window) {
         log::warn!(
-            "window_state: startup geometry restore failed ({e:#}); falling back to config defaults"
+            "window_state: center_on_primary failed ({e:#}); falling back to config defaults"
         );
     }
+
+    log::info!(
+        "window_state: pre-show — final_geometry={:?}",
+        current_window_rect(&window).ok()
+    );
 
     window.show().context("window.show")?;
     if let Err(e) = window.set_focus() {
         log::warn!("window_state: set_focus failed ({e}); compositor may not raise the window");
     }
+
+    log::info!(
+        "window_state: post-show — final_geometry={:?}",
+        current_window_rect(&window).ok()
+    );
     Ok(())
 }
 
