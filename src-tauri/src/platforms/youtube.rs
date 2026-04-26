@@ -16,6 +16,21 @@ use tokio::time::timeout;
 
 const TIMEOUT: Duration = Duration::from_secs(20);
 
+const HTTP_TIMEOUT: Duration = Duration::from_secs(15);
+
+const SCRAPE_HEADERS: &[(&str, &str)] = &[
+    (
+        "User-Agent",
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 \
+         (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+    ),
+    (
+        "Accept",
+        "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    ),
+    ("Accept-Language", "en-US,en;q=0.9"),
+];
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct YouTubeLive {
     pub channel_id: String,
@@ -155,6 +170,97 @@ fn parse_stream(root: &Value) -> YouTubeStream {
             .and_then(|v| v.as_str())
             .map(String::from),
     }
+}
+
+/// Pull a `var Name = {...};` or `window["Name"] = {...};` JSON blob out
+/// of an HTML page. The two patterns YouTube uses are accepted. Returns
+/// None if the assignment isn't present or the JSON is malformed.
+///
+/// Manual scanning instead of a full regex because the embedded JSON
+/// contains arbitrary `;` and `}` characters — we have to brace-balance
+/// to find the end. Same approach Qt's `_parse_initial_data` and
+/// `_parse_player_response` take.
+fn extract_initial_data(html: &str, var_name: &str) -> Option<Value> {
+    let start_marker_var = format!("var {var_name} = ");
+    let start_marker_window = format!("window[\"{var_name}\"] = ");
+    let candidates = [
+        html.find(&start_marker_var).map(|i| i + start_marker_var.len()),
+        html.find(&start_marker_window).map(|i| i + start_marker_window.len()),
+    ];
+    let json_start = candidates.iter().filter_map(|x| *x).next()?;
+    let bytes = html[json_start..].as_bytes();
+    if bytes.first() != Some(&b'{') {
+        return None;
+    }
+    let mut depth: i32 = 0;
+    let mut in_str = false;
+    let mut escape = false;
+    let mut end = None;
+    for (i, &b) in bytes.iter().enumerate() {
+        if in_str {
+            if escape {
+                escape = false;
+            } else if b == b'\\' {
+                escape = true;
+            } else if b == b'"' {
+                in_str = false;
+            }
+            continue;
+        }
+        match b {
+            b'"' => in_str = true,
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    end = Some(i + 1);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let end = end?;
+    let json_slice = &html[json_start..json_start + end];
+    serde_json::from_str(json_slice).ok()
+}
+
+/// HTTP GET the channel's `/streams` page and extract `ytInitialData`.
+async fn fetch_streams_html(http: &reqwest::Client, channel_id: &str) -> Result<Option<Value>> {
+    let url = if channel_id.starts_with("UC") && channel_id.len() == 24 {
+        format!("https://www.youtube.com/channel/{channel_id}/streams")
+    } else if channel_id.starts_with('@') {
+        format!("https://www.youtube.com{channel_id}/streams")
+    } else {
+        format!("https://www.youtube.com/@{channel_id}/streams")
+    };
+    let mut req = http.get(&url).timeout(HTTP_TIMEOUT);
+    for (k, v) in SCRAPE_HEADERS {
+        req = req.header(*k, *v);
+    }
+    let resp = req.send().await.with_context(|| format!("GET {url}"))?;
+    if !resp.status().is_success() {
+        log::debug!("YT /streams {channel_id}: HTTP {}", resp.status());
+        return Ok(None);
+    }
+    let html = resp.text().await.context("reading /streams body")?;
+    Ok(extract_initial_data(&html, "ytInitialData"))
+}
+
+/// HTTP GET `youtube.com/watch?v={id}` and extract `ytInitialPlayerResponse`.
+async fn fetch_watch_html(http: &reqwest::Client, video_id: &str) -> Result<Option<Value>> {
+    let url = format!("https://www.youtube.com/watch?v={video_id}");
+    let mut req = http.get(&url).timeout(HTTP_TIMEOUT);
+    for (k, v) in SCRAPE_HEADERS {
+        req = req.header(*k, *v);
+    }
+    let resp = req.send().await.with_context(|| format!("GET {url}"))?;
+    if !resp.status().is_success() {
+        log::debug!("YT /watch {video_id}: HTTP {}", resp.status());
+        return Ok(None);
+    }
+    let html = resp.text().await.context("reading /watch body")?;
+    Ok(extract_initial_data(&html, "ytInitialPlayerResponse"))
 }
 
 /// Parse the `ytInitialData` JSON from a YouTube channel's `/streams` page
@@ -456,5 +562,26 @@ mod tests {
     fn parse_player_response_returns_none_for_unexpected_shape() {
         assert!(parse_player_response(&json!({})).is_none());
         assert!(parse_player_response(&json!({ "videoDetails": "wrong" })).is_none());
+    }
+
+    #[test]
+    fn extract_initial_data_finds_var_assignment() {
+        let html = r#"
+            <html><head><script>var ytInitialData = {"key":"value"};</script></head></html>
+        "#;
+        let data = extract_initial_data(html, "ytInitialData").unwrap();
+        assert_eq!(data["key"], "value");
+    }
+
+    #[test]
+    fn extract_initial_data_handles_window_assignment() {
+        let html = r#"<script>window["ytInitialPlayerResponse"] = {"a":1};</script>"#;
+        let data = extract_initial_data(html, "ytInitialPlayerResponse").unwrap();
+        assert_eq!(data["a"], 1);
+    }
+
+    #[test]
+    fn extract_initial_data_returns_none_when_absent() {
+        assert!(extract_initial_data("<html></html>", "ytInitialData").is_none());
     }
 }
