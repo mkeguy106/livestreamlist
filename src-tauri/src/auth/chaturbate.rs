@@ -28,27 +28,25 @@ const POLL_INTERVAL: Duration = Duration::from_millis(750);
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// Injected at DocumentCreation (before the page's own scripts run).
-/// Handles three jobs:
+/// Two jobs:
 ///
 /// 1. Pre-set common onboarding-tour localStorage keys to "seen" so the
 ///    site's first-visit tour modal doesn't bother to render.
 ///
-/// 2. Wait for `document.body`, then inject our zinc-950 titlebar +
-///    close button — restores chrome that we removed via
-///    `decorations(false)`. The close button navigates to `about:blank`;
-///    the host-side poll loop watches for the scheme flip and bails the
-///    future as user-cancel.
-///
-/// 3. Install a MutationObserver that continuously dismisses any modals
-///    that DO mount (age-gate, tour, etc.) — runs for the lifetime of
-///    the page, not just a fixed retry window. Cheap because the
-///    operations are all idempotent querySelector sweeps.
+/// 2. Install a MutationObserver that continuously dismisses any modals
+///    that DO mount (age-gate, tour, etc.) — runs for the page's
+///    lifetime, not just a fixed retry window.
 ///
 /// We deliberately do NOT spoof the user-agent — Cloudflare's bot-check
 /// fingerprints fail when our claimed UA (Chrome) doesn't match the
 /// engine's actual JS APIs (WebKit), trapping the user in an unsolvable
-/// challenge loop. Better to take the WebKit-flavoured tour and dismiss
-/// it client-side than to break Cloudflare entirely.
+/// challenge loop.
+///
+/// Window chrome and dragging are handled by the OS via
+/// `decorations(true)` — same as the Qt app. Custom chrome was tried
+/// first but couldn't be made draggable on an external URL without
+/// granting the chaturbate.com webview access to our Tauri IPC, which
+/// is a security tradeoff not worth it for an aesthetic win.
 const INIT_SCRIPT: &str = r##"
 (function(){
     try {
@@ -77,13 +75,11 @@ const INIT_SCRIPT: &str = r##"
             '[aria-label*="close" i], [aria-label*="dismiss" i], ' +
             '.modal-close, .close-button, button[class*="close" i]'
         ).forEach(function(b){
-            if (b.id === 'lsl-titlebar-close') return;
             try { b.click(); } catch(e){}
         });
         var verbs = ['done','got it','skip','skip tour','no thanks',
                      'maybe later','close','dismiss','×','x'];
         document.querySelectorAll('button, a[role="button"], div[role="button"]').forEach(function(b){
-            if (b.id === 'lsl-titlebar-close') return;
             var t = (b.textContent || '').trim().toLowerCase();
             if (verbs.indexOf(t) !== -1) {
                 try { b.click(); } catch(e){}
@@ -91,48 +87,11 @@ const INIT_SCRIPT: &str = r##"
         });
     }
 
-    function injectTitlebar(){
-        if (document.getElementById('lsl-titlebar')) return;
-        if (!document.body) return;
-        if (!document.getElementById('lsl-titlebar-style')) {
-            var s = document.createElement('style');
-            s.id = 'lsl-titlebar-style';
-            s.textContent =
-              "#lsl-titlebar{position:fixed;top:0;left:0;right:0;height:32px;" +
-              "background:rgb(9,9,11);color:rgb(228,228,231);" +
-              "font:12px -apple-system,'Segoe UI',system-ui,sans-serif;" +
-              "display:flex;align-items:center;justify-content:space-between;" +
-              "padding:0 12px;border-bottom:1px solid rgba(255,255,255,.06);" +
-              "z-index:2147483647;user-select:none}" +
-              "#lsl-titlebar-title{font-weight:500}" +
-              "#lsl-titlebar-close{background:transparent;border:0;color:inherit;" +
-              "cursor:pointer;padding:4px 10px;border-radius:4px;" +
-              "font-size:18px;line-height:1}" +
-              "#lsl-titlebar-close:hover{background:rgba(255,255,255,.08)}" +
-              "html{padding-top:32px !important;background:rgb(9,9,11) !important}";
-            (document.head || document.documentElement).appendChild(s);
-        }
-        var bar = document.createElement('div');
-        bar.id = 'lsl-titlebar';
-        bar.innerHTML =
-          '<span id="lsl-titlebar-title">Sign in to Chaturbate</span>' +
-          '<button id="lsl-titlebar-close" type="button" aria-label="Close">×</button>';
-        document.body.insertBefore(bar, document.body.firstChild);
-        document.getElementById('lsl-titlebar-close').addEventListener('click', function(e){
-            e.preventDefault();
-            e.stopPropagation();
-            window.location.href = 'about:blank';
-        });
-    }
-
     function startObserving(){
-        injectTitlebar();
         dismissModals();
         try {
-            new MutationObserver(function(){
-                if (!document.getElementById('lsl-titlebar')) injectTitlebar();
-                dismissModals();
-            }).observe(document.body, {childList:true, subtree:true});
+            new MutationObserver(dismissModals)
+                .observe(document.body, {childList:true, subtree:true});
         } catch(e){}
     }
 
@@ -262,14 +221,17 @@ pub async fn login_via_webview(app: AppHandle) -> Result<ChaturbateAuth> {
         // below ~768 CSS px and the login form becomes unusable
         // (compressed nav row eats the form's vertical space). Sit
         // comfortably above the breakpoint so the desktop layout
-        // renders. Matches what Qt's QWebEngine shows when the user
-        // resizes the login window to a comfortable working size.
+        // renders. Matches what Qt's QWebEngine shows.
         .inner_size(800.0, 880.0)
         .min_inner_size(780.0, 720.0)
         .data_directory(profile_dir)
-        .decorations(false)
+        // Native OS decorations — gives drag + min/max/close for free
+        // and matches what the Qt app does (its own login window has
+        // native chrome too).
+        .decorations(true)
         .visible(false)
         .background_color(zinc_950)
+        .center()
         .initialization_script(INIT_SCRIPT)
         .devtools(cfg!(debug_assertions))
         .on_page_load(|w: WebviewWindow, payload: PageLoadPayload<'_>| {
