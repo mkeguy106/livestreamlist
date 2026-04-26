@@ -455,7 +455,7 @@ fn verify_chaturbate_auth(window: &WebviewWindow, app: &AppHandle) {
 /// compositor effects (wobbly, blur, minimize/restore animations, …) for
 /// this specific window. Effective immediately, no restart needed.
 #[cfg(target_os = "linux")]
-fn set_bypass_compositor(gdk_win: &gtk::gdk::Window) {
+pub(crate) fn set_bypass_compositor(gdk_win: &gtk::gdk::Window) {
     use gtk::glib::Cast;
     use std::ffi::CString;
 

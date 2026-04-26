@@ -5,10 +5,12 @@ use std::collections::HashMap;
 use crate::channels::{Livestream, SharedStore};
 use crate::platforms::{chaturbate, kick, twitch, youtube, Platform};
 
-/// Concurrency caps per platform. Kick/Chaturbate are cheap REST calls, but
-/// yt-dlp spawns a subprocess per channel — keep YouTube at 5 to match the
-/// Qt app's empirically-safe rate without tripping YouTube's throttling.
-const YT_CONCURRENCY: usize = 5;
+/// Concurrency cap for yt-dlp subprocesses. Each invocation makes 3-5
+/// internal YouTube requests, so 5 in parallel + a 60 s refresh interval
+/// would burst ~20 RPS at peak — enough for YouTube to start
+/// rate-limiting an IP after a few minutes. 2 keeps the burst under
+/// what `--sleep-requests 1` is shaped to absorb.
+const YT_CONCURRENCY: usize = 2;
 
 /// Refresh all channels' live status across every supported platform in
 /// parallel. Commits all results to the store under a single lock.
@@ -156,6 +158,13 @@ async fn fetch_youtube_all(
     http: &reqwest::Client,
 ) -> HashMap<String, youtube::YouTubeLive> {
     let mut out = HashMap::new();
+    if youtube::is_rate_limited() {
+        log::warn!(
+            "YouTube refresh skipped — rate-limit cooldown still active ({} channels)",
+            ids.len()
+        );
+        return out;
+    }
     for chunk in ids.chunks(YT_CONCURRENCY) {
         let futs: Vec<_> = chunk
             .iter()
