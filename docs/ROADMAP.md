@@ -230,6 +230,14 @@ Today the Columns layout auto-populates from every live channel in the store. Th
 
 ---
 
+## Dev infrastructure
+
+Cross-cutting tooling work that doesn't fit a user-facing phase but unblocks higher-quality work in all of them.
+
+- [ ] **Headless WebKit test harness for webview-lifecycle code** — today the auth flows (`auth/youtube.rs`, the upcoming `auth/chaturbate.rs`) and the chat-embed window manager (`embed.rs`) are exercised only by manual integration tests because Tauri's `WebviewWindow` needs a real WebKit2GTK runtime. Stand up a CI-runnable harness — Xvfb + WebKitGTK in a container, or `wry` directly with a virtual display — so we can write unit tests that cover: login-window URL-change detection, post-load JS injection, cookie persistence across "restarts", embed window create/navigate/teardown, transient-for parenting. Pre-req for confidently refactoring the embed/auth code; current "test by clicking through the UI" loop is the bottleneck on those modules.
+
+---
+
 ## Proposed for roadmap review (2026-04-25)
 
 Gap analysis against the Qt app (`~/livestream.list.qt/`) — docs (`README.md`, `CHANGELOG.md`, `docs/youtube-cookies.md`) and source tree. Items below are **candidates** to triage into the phased plan; none are committed. Each is tagged with a suggested fit (`→ Ph N` for existing phase, `→ new` for candidate follow-up, `→ shipped?` where we may already have it partially and need to verify before re-adding).
