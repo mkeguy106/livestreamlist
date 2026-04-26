@@ -9,7 +9,7 @@ use crate::config;
 use crate::platforms::chaturbate::ChaturbateLive;
 use crate::platforms::kick::{KickLive, KickStream};
 use crate::platforms::twitch::TwitchStream;
-use crate::platforms::youtube::{YouTubeLive, YouTubeStream};
+use crate::platforms::youtube::YouTubeStream;
 use crate::platforms::Platform;
 
 /// Persisted channel — the user-configured list, independent of live status.

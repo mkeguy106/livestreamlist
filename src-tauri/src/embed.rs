@@ -141,10 +141,14 @@ impl EmbedManager {
                 let Some(ls) = livestream.as_ref().filter(|l| l.is_live) else {
                     return Ok(false);
                 };
+                // Prefer the explicit video_id field (populated by the
+                // multi-stream YT scraper). Fall back to the legacy
+                // thumbnail-URL parse for any livestream entry that
+                // predates the field landing.
                 let Some(video_id) = ls
-                    .thumbnail_url
-                    .as_ref()
-                    .and_then(|u| yt_video_id(u))
+                    .video_id
+                    .clone()
+                    .or_else(|| ls.thumbnail_url.as_deref().and_then(yt_video_id))
                 else {
                     return Ok(false);
                 };
