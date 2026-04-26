@@ -78,7 +78,7 @@ Most of this phase shipped during Phase 2b execution (across multiple PRs). Rema
   - (a) **In-app sign-in** — opens a `youtube-login` WebviewWindow at `https://accounts.google.com/signin` with a persistent profile dir (`~/.local/share/livestreamlist/webviews/youtube/`). Polls `cookies_for_url(google.com)` every 750 ms; once all five target cookies are present, saves to the keyring (entry: `youtube_cookies`) + a Netscape `youtube-cookies.txt` for `yt-dlp --cookies` and closes the window. Cookies are also injected into the main webview at startup via `set_cookie` so the embedded `/live_chat` window sees us as signed in.
   - (b) **Manual paste fallback** — Preferences → Accounts → YouTube → "Paste cookies…" textarea. Accepts cookie-header (`SID=…; HSID=…`), one-per-line, or Netscape `cookies.txt` format. Required for Flatpak sandboxed builds where the in-app webview can't persist cookies.
   - (c) **Browser-cookie picker** — auto-detected installed browsers (Chrome, Firefox, Brave, Edge, Opera, Vivaldi, LibreWolf) shown as buttons under Preferences → Accounts → YouTube → "Other ways to sign in". Saves the choice to `settings.general.youtube_cookies_browser`; `yt-dlp` calls then pass `--cookies-from-browser <name>` instead of `--cookies <file>`. Mirrors the Qt app's primary auth path without us reimplementing the SQLite/decryption logic in Rust.
-- [ ] **Chaturbate login** — small `chaturbate-login` WebviewWindow at `https://chaturbate.com/auth/login/`. Poll the profile's cookie store for the site session cookie (`csrftoken` + logged-in marker); close the window and persist the profile once signed in. The same profile is reused by the chat embed and the follow-import call.
+- [x] **Chaturbate login** (PR #23) — `chaturbate-login` WebviewWindow at `https://chaturbate.com/auth/login/` with custom zinc-950 chrome (drag + close via scoped capability granting `start_dragging` + `close` to chaturbate.com only). Poll for `sessionid` cookie via event-driven close detection + close-check-before-cookies-poll loop. Persistent profile shared with the chat embed (no re-injection). Stamp file (`chaturbate-auth.json`) with `last_verified_at` timestamp; embed-side verification on every page-load emits `chat:auth:chaturbate { signed_in, reason }` events that drive the Accounts row + chat-pane banner. Drift detection clears stamp only (not profile dir, embed window may be live). Playback uses `yt-dlp -g` → mpv (matches Qt's `LaunchMethod.YT_DLP` for CB).
 - [ ] **YouTube multi-concurrent-stream channels** (NASA-style) — some channels (NASA Space Station, news outlets, event channels) broadcast 2+ simultaneous live streams from one channel id. The Qt app detects this in `api/youtube.py::_fetch_concurrent_live_video_ids` by scraping the channel's `/streams` page for all currently-live video IDs, then fetching each video's `ytInitialPlayerResponse` to get per-stream title / viewers / thumbnails. Model change: our `Livestream.unique_key` must gain a video-id suffix for YouTube so two concurrent streams from one channel can coexist as separate list entries (`youtube:{channel_id}:{video_id}`). Refresh flow returns a `Vec<Livestream>` per YouTube channel, flattened into the store.
 
 ---
@@ -227,6 +227,14 @@ Today the Columns layout auto-populates from every live channel in the store. Th
 - Phase 3 depends on Phase 2b's full chat plumbing
 - Phase 4 depends on nothing phase-specific, but preferences wiring is much more useful after Phase 3 (more things to configure)
 - Phase 5 could ship in any order; the release pipeline is the only item with hard external dependencies
+
+---
+
+## Dev infrastructure
+
+Cross-cutting tooling work that doesn't fit a user-facing phase but unblocks higher-quality work in all of them.
+
+- [ ] **Headless WebKit test harness for webview-lifecycle code** — today the auth flows (`auth/youtube.rs`, the upcoming `auth/chaturbate.rs`) and the chat-embed window manager (`embed.rs`) are exercised only by manual integration tests because Tauri's `WebviewWindow` needs a real WebKit2GTK runtime. Stand up a CI-runnable harness — Xvfb + WebKitGTK in a container, or `wry` directly with a virtual display — so we can write unit tests that cover: login-window URL-change detection, post-load JS injection, cookie persistence across "restarts", embed window create/navigate/teardown, transient-for parenting. Pre-req for confidently refactoring the embed/auth code; current "test by clicking through the UI" loop is the bottleneck on those modules.
 
 ---
 

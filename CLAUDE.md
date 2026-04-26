@@ -229,6 +229,17 @@ Branch protection is on `main`. **Never commit directly to `main`** — always b
 
 **Releases** — tag-driven (Phase 5 work). `git tag vX.Y.Z && git push --tags` will (eventually) fire a CI workflow producing AppImage / .deb / .dmg / .exe artifacts.
 
+## Roadmap maintenance
+
+`docs/ROADMAP.md` is the source of truth for what's planned vs shipped. **Whenever a feature from the roadmap ships, the roadmap must be updated in the same PR (or a follow-up docs PR if the feature PR was already merged):**
+
+- Flip the leading `- [ ]` to `- [x]` on the relevant bullet
+- Append `(PR #N)` after the title for traceability
+- If implementation diverged meaningfully from the original description (different storage path, different API endpoint, additional sub-features), edit the bullet to reflect what actually shipped — not what was originally proposed
+- For phase headers, when ALL items in a phase or sub-phase are checked, mark the header `## Phase X — title  ✓ shipped (PR #N)` so a glance shows the phase status without expanding the bullets
+
+This keeps the roadmap accurate so future planning isn't done against stale assumptions, and so the gap between "planned" and "actually built" is always visible. If you discover during a session that previously-shipped work isn't reflected, fix it before doing new work — never plan on top of a known-stale roadmap.
+
 ## Useful scripts
 
 - See `package.json` for npm scripts
