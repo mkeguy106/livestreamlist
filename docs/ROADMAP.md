@@ -40,9 +40,9 @@ Twitch is the hardest one and it's done; the others are straightforward ports.
 
 ---
 
-## Phase 2b — Chat sending + Kick chat + moderation
+## Phase 2b — Chat sending + Kick chat + moderation  ✓ shipped
 
-Most of this phase shipped during Phase 2b execution (across multiple PRs). Remaining work is YouTube + Chaturbate cookie auth and YouTube multi-concurrent-stream support — see the unchecked items below.
+All Phase 2b items shipped across multiple PRs (Twitch auth + sending, Kick chat, per-channel emotes, YT/CB embedded chat, YouTube cookie login, Chaturbate login + chat embed + playback in #23, YouTube multi-concurrent-stream support in #25).
 
 ### Twitch auth + sending  ✓ shipped
 
@@ -79,7 +79,7 @@ Most of this phase shipped during Phase 2b execution (across multiple PRs). Rema
   - (b) **Manual paste fallback** — Preferences → Accounts → YouTube → "Paste cookies…" textarea. Accepts cookie-header (`SID=…; HSID=…`), one-per-line, or Netscape `cookies.txt` format. Required for Flatpak sandboxed builds where the in-app webview can't persist cookies.
   - (c) **Browser-cookie picker** — auto-detected installed browsers (Chrome, Firefox, Brave, Edge, Opera, Vivaldi, LibreWolf) shown as buttons under Preferences → Accounts → YouTube → "Other ways to sign in". Saves the choice to `settings.general.youtube_cookies_browser`; `yt-dlp` calls then pass `--cookies-from-browser <name>` instead of `--cookies <file>`. Mirrors the Qt app's primary auth path without us reimplementing the SQLite/decryption logic in Rust.
 - [x] **Chaturbate login** (PR #23) — `chaturbate-login` WebviewWindow at `https://chaturbate.com/auth/login/` with custom zinc-950 chrome (drag + close via scoped capability granting `start_dragging` + `close` to chaturbate.com only). Poll for `sessionid` cookie via event-driven close detection + close-check-before-cookies-poll loop. Persistent profile shared with the chat embed (no re-injection). Stamp file (`chaturbate-auth.json`) with `last_verified_at` timestamp; embed-side verification on every page-load emits `chat:auth:chaturbate { signed_in, reason }` events that drive the Accounts row + chat-pane banner. Drift detection clears stamp only (not profile dir, embed window may be live). Playback uses `yt-dlp -g` → mpv (matches Qt's `LaunchMethod.YT_DLP` for CB).
-- [ ] **YouTube multi-concurrent-stream channels** (NASA-style) — some channels (NASA Space Station, news outlets, event channels) broadcast 2+ simultaneous live streams from one channel id. The Qt app detects this in `api/youtube.py::_fetch_concurrent_live_video_ids` by scraping the channel's `/streams` page for all currently-live video IDs, then fetching each video's `ytInitialPlayerResponse` to get per-stream title / viewers / thumbnails. Model change: our `Livestream.unique_key` must gain a video-id suffix for YouTube so two concurrent streams from one channel can coexist as separate list entries (`youtube:{channel_id}:{video_id}`). Refresh flow returns a `Vec<Livestream>` per YouTube channel, flattened into the store.
+- [x] **YouTube multi-concurrent-stream channels** (PR #25) — NASA-style channels with 2+ simultaneous live streams render as N rows. `Livestream` gains `video_id: Option<String>`; `unique_key()` adds `:{video_id}` suffix for live YT (e.g. `youtube:UCnasa:isst1`). `platforms/youtube.rs` orchestrates yt-dlp primary detection + `youtube.com/channel/{id}/streams` HTML scrape (via `BADGE_STYLE_TYPE_LIVE_NOW` / `LIVE` overlay heuristic) + `youtube.com/watch?v=` per-video metadata scrape. Portrait dedupe (auto-Shorts variant of the primary feed) swaps to landscape via `find_landscape_alternative`. `channels::channel_key_of` strips the suffix for per-channel ops; per-stream ops carry the full key through to `embed.rs` + `player.rs` so chat/play/browser-open hit the SPECIFIC video. `YOUTUBE_MISS_THRESHOLD = 2` gives secondaries one cycle of grace before reaping (avoids flap on transient `/streams` partial returns).
 
 ---
 
