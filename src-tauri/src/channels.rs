@@ -130,12 +130,15 @@ impl Livestream {
         ls
     }
 
-    pub fn from_youtube(channel: &Channel, live: &YouTubeLive) -> Self {
+    /// Build a live YouTube Livestream from a single concurrent stream.
+    /// Sets `video_id` from the stream and recomputes `unique_key` so the
+    /// new entry is keyed `youtube:{channel_id}:{video_id}` — distinct from
+    /// other concurrent streams of the same channel.
+    pub fn from_youtube(channel: &Channel, stream: &YouTubeStream) -> Self {
         let mut ls = Self::offline_for(channel, None);
-        ls.display_name = live.display_name.clone();
-        if let Some(stream) = &live.stream {
-            apply_youtube_stream(&mut ls, stream);
-        }
+        apply_youtube_stream(&mut ls, stream);
+        ls.video_id = Some(stream.video_id.clone());
+        ls.recompute_unique_key();
         ls
     }
 
@@ -364,5 +367,24 @@ mod tests {
         assert_eq!(channel_key_of(""), "");
         assert_eq!(channel_key_of("not_a_key"), "not_a_key");
         assert_eq!(channel_key_of("unknownplatform:foo:bar"), "unknownplatform:foo:bar");
+    }
+
+    #[test]
+    fn from_youtube_populates_video_id_and_unique_key() {
+        let ch = test_channel(Platform::Youtube, "UCnasa");
+        let stream = crate::platforms::youtube::YouTubeStream {
+            video_id: "isst1".to_string(),
+            title: "ISS Earth View".to_string(),
+            viewers: Some(1234),
+            game: None,
+            started_at: None,
+            thumbnail_url: Some("https://i.ytimg.com/vi/isst1/hi.jpg".to_string()),
+        };
+        let ls = Livestream::from_youtube(&ch, &stream);
+        assert!(ls.is_live);
+        assert_eq!(ls.video_id.as_deref(), Some("isst1"));
+        assert_eq!(ls.title.as_deref(), Some("ISS Earth View"));
+        assert_eq!(ls.viewers, Some(1234));
+        assert_eq!(ls.unique_key, "youtube:UCnasa:isst1");
     }
 }
