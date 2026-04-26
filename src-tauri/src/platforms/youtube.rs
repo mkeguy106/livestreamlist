@@ -157,6 +157,59 @@ fn parse_stream(root: &Value) -> YouTubeStream {
     }
 }
 
+/// Parse the `ytInitialData` JSON from a YouTube channel's `/streams` page
+/// into a list of currently-live video IDs. Live status is detected via
+/// either the `BADGE_STYLE_TYPE_LIVE_NOW` badge or the `LIVE` thumbnail-
+/// overlay style — matches Qt's heuristic.
+///
+/// Returns an empty vec on any unexpected shape (missing fields, wrong
+/// types). Better to underreport than to panic on a YouTube DOM change.
+fn parse_streams_page(initial_data: &Value) -> Vec<String> {
+    let mut ids = Vec::new();
+    let tabs = initial_data
+        .pointer("/contents/twoColumnBrowseResultsRenderer/tabs")
+        .and_then(|v| v.as_array());
+    let Some(tabs) = tabs else { return ids };
+
+    for tab in tabs {
+        let contents = tab.pointer("/tabRenderer/content/richGridRenderer/contents");
+        let Some(contents) = contents.and_then(|v| v.as_array()) else { continue };
+        for item in contents {
+            let renderer = item.pointer("/richItemRenderer/content/videoRenderer");
+            let Some(renderer) = renderer else { continue };
+            let badge_live = renderer
+                .get("badges")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter().any(|b| {
+                        b.pointer("/metadataBadgeRenderer/style")
+                            .and_then(|v| v.as_str())
+                            == Some("BADGE_STYLE_TYPE_LIVE_NOW")
+                    })
+                })
+                .unwrap_or(false);
+            let overlay_live = renderer
+                .get("thumbnailOverlays")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter().any(|o| {
+                        o.pointer("/thumbnailOverlayTimeStatusRenderer/style")
+                            .and_then(|v| v.as_str())
+                            == Some("LIVE")
+                    })
+                })
+                .unwrap_or(false);
+            if !(badge_live || overlay_live) {
+                continue;
+            }
+            if let Some(vid) = renderer.get("videoId").and_then(|v| v.as_str()) {
+                ids.push(vid.to_string());
+            }
+        }
+    }
+    ids
+}
+
 /// True when the first format with a width and height has width < height.
 /// Skips audio-only formats (which have no dimensions). False if no
 /// dimensioned format is present.
@@ -232,5 +285,62 @@ mod tests {
     fn is_portrait_false_when_streaming_data_missing() {
         assert!(!is_portrait(&json!({})));
         assert!(!is_portrait(&json!({ "videoDetails": {} })));
+    }
+
+    fn streams_page_fixture() -> Value {
+        json!({
+            "contents": {
+                "twoColumnBrowseResultsRenderer": {
+                    "tabs": [
+                        {
+                            "tabRenderer": {
+                                "title": "Streams",
+                                "content": {
+                                    "richGridRenderer": {
+                                        "contents": [
+                                            { "richItemRenderer": { "content": { "videoRenderer": {
+                                                "videoId": "live_v1",
+                                                "thumbnailOverlays": [
+                                                    { "thumbnailOverlayTimeStatusRenderer": { "style": "LIVE" } }
+                                                ]
+                                            }}}},
+                                            { "richItemRenderer": { "content": { "videoRenderer": {
+                                                "videoId": "live_v2",
+                                                "badges": [
+                                                    { "metadataBadgeRenderer": { "style": "BADGE_STYLE_TYPE_LIVE_NOW" } }
+                                                ]
+                                            }}}},
+                                            { "richItemRenderer": { "content": { "videoRenderer": {
+                                                "videoId": "vod_v3",
+                                                "thumbnailOverlays": [
+                                                    { "thumbnailOverlayTimeStatusRenderer": { "style": "DEFAULT" } }
+                                                ]
+                                            }}}},
+                                            { "richItemRenderer": { "content": { "videoRenderer": {
+                                                "videoId": "live_v4",
+                                                "badges": [{ "metadataBadgeRenderer": { "style": "BADGE_STYLE_TYPE_LIVE_NOW" } }],
+                                                "thumbnailOverlays": [{ "thumbnailOverlayTimeStatusRenderer": { "style": "LIVE" } }]
+                                            }}}}
+                                        ]
+                                    }
+                                }
+                            }
+                        }
+                    ]
+                }
+            }
+        })
+    }
+
+    #[test]
+    fn parse_streams_page_extracts_live_video_ids() {
+        let ids = parse_streams_page(&streams_page_fixture());
+        assert_eq!(ids, vec!["live_v1", "live_v2", "live_v4"]);
+    }
+
+    #[test]
+    fn parse_streams_page_returns_empty_for_unexpected_shape() {
+        assert!(parse_streams_page(&json!({})).is_empty());
+        assert!(parse_streams_page(&json!({ "contents": "wrong type" })).is_empty());
     }
 }
