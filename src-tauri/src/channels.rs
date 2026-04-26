@@ -34,6 +34,27 @@ impl Channel {
     }
 }
 
+/// Given a stream-level unique_key (which may include a `:{video_id}`
+/// suffix for live YouTube streams), return the channel-level unique_key.
+///
+/// For non-YouTube platforms and offline YouTube channels (those with no
+/// suffix), returns the input unchanged. Used by per-channel IPC handlers
+/// (set_favorite, remove_channel, set_dont_notify, set_auto_play) which
+/// need to look up the Channel even when given a stream-level key.
+pub fn channel_key_of(stream_key: &str) -> &str {
+    if !stream_key.starts_with("youtube:") {
+        return stream_key;
+    }
+    let mut parts = stream_key.splitn(3, ':');
+    let plat = parts.next();
+    let chan = parts.next();
+    if plat.is_some() && chan.is_some() && parts.next().is_some() {
+        let len = plat.unwrap().len() + 1 + chan.unwrap().len();
+        return &stream_key[..len];
+    }
+    stream_key
+}
+
 /// Transient live-status snapshot keyed by channel unique_key.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Livestream {
@@ -313,5 +334,35 @@ mod tests {
         ls.video_id = Some("anything".to_string());
         ls.recompute_unique_key();
         assert_eq!(ls.unique_key, "twitch:ninja");
+    }
+
+    #[test]
+    fn channel_key_of_strips_yt_video_suffix() {
+        assert_eq!(channel_key_of("youtube:UC123:vidABC"), "youtube:UC123");
+    }
+
+    #[test]
+    fn channel_key_of_passthrough_for_yt_without_suffix() {
+        assert_eq!(channel_key_of("youtube:UC123"), "youtube:UC123");
+    }
+
+    #[test]
+    fn channel_key_of_passthrough_for_other_platforms() {
+        assert_eq!(channel_key_of("twitch:ninja"), "twitch:ninja");
+        assert_eq!(channel_key_of("kick:adin"), "kick:adin");
+        assert_eq!(channel_key_of("chaturbate:user"), "chaturbate:user");
+    }
+
+    #[test]
+    fn channel_key_of_handles_at_handle_yt_id() {
+        assert_eq!(channel_key_of("youtube:@nasa"), "youtube:@nasa");
+        assert_eq!(channel_key_of("youtube:@nasa:vid1"), "youtube:@nasa");
+    }
+
+    #[test]
+    fn channel_key_of_returns_input_for_malformed() {
+        assert_eq!(channel_key_of(""), "");
+        assert_eq!(channel_key_of("not_a_key"), "not_a_key");
+        assert_eq!(channel_key_of("unknownplatform:foo:bar"), "unknownplatform:foo:bar");
     }
 }
