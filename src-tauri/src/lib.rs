@@ -162,21 +162,34 @@ fn launch_stream(
     state: State<'_, AppState>,
     player: State<'_, Arc<PlayerManager>>,
 ) -> Result<u32, String> {
-    let channel = state
-        .store
-        .lock()
-        .channels()
-        .iter()
-        .find(|c| c.unique_key() == unique_key)
-        .cloned()
-        .ok_or_else(|| format!("unknown channel {unique_key}"))?;
+    // The React side sends the stream-level key. For YT multi-stream
+    // that includes the :video_id suffix; we need the channel-level
+    // key to find the Channel + the original key to find the specific
+    // Livestream's video_id.
+    let channel_key = channels::channel_key_of(&unique_key).to_string();
+    let (channel, livestream) = {
+        let guard = state.store.lock();
+        let ch = guard
+            .channels()
+            .iter()
+            .find(|c| c.unique_key() == channel_key)
+            .cloned()
+            .ok_or_else(|| format!("unknown channel {unique_key}"))?;
+        let ls = guard
+            .snapshot()
+            .into_iter()
+            .find(|l| l.unique_key == unique_key);
+        (ch, ls)
+    };
+    let video_id = livestream.and_then(|ls| ls.video_id);
     player
         .launch(
-            channel.unique_key(),
+            unique_key,
             channel.platform,
             &channel.channel_id,
+            video_id.as_deref(),
             quality.as_deref().unwrap_or("best"),
-            None, // Turbo lives on a sibling branch; wire up when it lands
+            None,
         )
         .map_err(err_string)
 }
@@ -436,12 +449,16 @@ fn chat_connect(
     state: State<'_, AppState>,
     chat: State<'_, Arc<ChatManager>>,
 ) -> Result<(), String> {
+    // Per-stream IPC; strip the :video_id suffix to find the Channel.
+    // For YT/CB the chat is embed-based and chat.connect is a no-op,
+    // so the per-channel key is fine to pass through.
+    let channel_key = channels::channel_key_of(&unique_key).to_string();
     let channel = state
         .store
         .lock()
         .channels()
         .iter()
-        .find(|c| c.unique_key() == unique_key)
+        .find(|c| c.unique_key() == channel_key)
         .cloned()
         .ok_or_else(|| format!("unknown channel {unique_key}"))?;
     let key = channel.unique_key();
