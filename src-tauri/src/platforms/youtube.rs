@@ -35,7 +35,9 @@ const SCRAPE_HEADERS: &[(&str, &str)] = &[
 pub struct YouTubeLive {
     pub channel_id: String,
     pub display_name: String,
-    pub stream: Option<YouTubeStream>,
+    /// Empty when the channel is offline. Length 1 for typical single-
+    /// stream channels. Length 2+ for NASA-style multi-concurrent.
+    pub streams: Vec<YouTubeStream>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -56,13 +58,116 @@ fn live_url(channel_id: &str) -> String {
     }
 }
 
-/// Spawn `yt-dlp` for a single channel. Returns `None` when yt-dlp reports the
-/// channel is not currently live; bubbles real errors (missing binary, network
-/// failure, timeout) up.
+/// Fetch the current set of live streams for a YouTube channel. Returns
+/// `streams.is_empty()` for offline channels. For the typical single-
+/// stream live channel, returns `streams.len() == 1`. For NASA-style
+/// multi-concurrent channels, returns `streams.len() >= 2`.
+///
+/// Calls yt-dlp for the primary stream + scrapes `/streams` for the
+/// concurrent-list + scrapes `/watch?v=` per non-primary video for
+/// metadata. Portrait dedupe (auto-Shorts variant of the same primary
+/// feed): when the primary is portrait AND there's a landscape
+/// alternative, swap to the landscape one.
 pub async fn fetch_live(
     channel_id: &str,
     cookies_browser: Option<&str>,
-) -> Result<Option<YouTubeLive>> {
+    http: &reqwest::Client,
+) -> Result<YouTubeLive> {
+    // Step 1: primary via yt-dlp.
+    let primary = fetch_primary_via_ytdlp(channel_id, cookies_browser).await?;
+
+    // Offline → empty streams.
+    let primary_stream = match primary.streams.first() {
+        Some(s) => s.clone(),
+        None => return Ok(primary),
+    };
+
+    // Step 2: concurrent-list scrape.
+    let live_ids = match fetch_streams_html(http, channel_id).await {
+        Ok(Some(data)) => parse_streams_page(&data),
+        Ok(None) => Vec::new(),
+        Err(e) => {
+            log::warn!("YT /streams scrape failed for {channel_id}: {e:#}");
+            Vec::new()
+        }
+    };
+
+    // Single live id (or scrape failed) — return primary as-is.
+    if live_ids.len() <= 1 {
+        return Ok(primary);
+    }
+
+    // Step 3: portrait dedupe on primary — only when there's something to swap to.
+    let mut primary_resolved = primary_stream.clone();
+    let primary_player = match fetch_watch_html(http, &primary_stream.video_id).await {
+        Ok(Some(p)) => Some(p),
+        Ok(None) => None,
+        Err(e) => {
+            log::debug!("YT /watch primary scrape failed: {e:#}");
+            None
+        }
+    };
+    if primary_player.as_ref().map(is_portrait).unwrap_or(false) {
+        if let Some(landscape) =
+            find_landscape_alternative(http, &live_ids, &primary_stream.video_id).await
+        {
+            primary_resolved = landscape;
+        }
+    }
+
+    // Step 4: assemble the final stream list.
+    let mut streams = vec![primary_resolved.clone()];
+    for vid in live_ids.iter() {
+        if vid == &primary_resolved.video_id {
+            continue;
+        }
+        match fetch_watch_html(http, vid).await {
+            Ok(Some(player_response)) => {
+                if let Some(stream) = parse_player_response(&player_response) {
+                    streams.push(stream);
+                }
+            }
+            Ok(None) => log::debug!("YT /watch {vid}: no player response"),
+            Err(e) => log::warn!("YT /watch {vid} failed: {e:#}"),
+        }
+    }
+
+    Ok(YouTubeLive {
+        channel_id: primary.channel_id,
+        display_name: primary.display_name,
+        streams,
+    })
+}
+
+/// Returns the first non-portrait `YouTubeStream` from the candidate
+/// list (excluding `current_video_id`). Used to swap an auto-Shorts
+/// primary for the matching landscape variant on the same channel.
+async fn find_landscape_alternative(
+    http: &reqwest::Client,
+    candidates: &[String],
+    current_video_id: &str,
+) -> Option<YouTubeStream> {
+    for vid in candidates {
+        if vid == current_video_id {
+            continue;
+        }
+        let player_response = match fetch_watch_html(http, vid).await {
+            Ok(Some(p)) => p,
+            _ => continue,
+        };
+        if !is_portrait(&player_response) {
+            return parse_player_response(&player_response);
+        }
+    }
+    None
+}
+
+/// Existing yt-dlp primary detection — extracted from the old fetch_live
+/// body so the orchestration above can layer scraping on top.
+async fn fetch_primary_via_ytdlp(
+    channel_id: &str,
+    cookies_browser: Option<&str>,
+) -> Result<YouTubeLive> {
     let url = live_url(channel_id);
     let mut cmd = Command::new("yt-dlp");
     cmd.arg("--dump-single-json")
@@ -70,9 +175,6 @@ pub async fn fetch_live(
         .arg("--no-warnings")
         .arg("--skip-download")
         .arg("--no-playlist");
-    // Authenticate as the signed-in user when a browser is configured or a
-    // pasted cookies file is on disk. Lets age-restricted / member-only / sub-
-    // only livestreams resolve correctly.
     for arg in crate::auth::youtube::yt_dlp_cookie_args(cookies_browser) {
         cmd.arg(arg);
     }
@@ -81,7 +183,6 @@ pub async fn fetch_live(
     let out = match timeout(TIMEOUT, run).await {
         Err(_) => anyhow::bail!("yt-dlp timed out for {url}"),
         Ok(Err(e)) => {
-            // Classic "file not found" when yt-dlp isn't on PATH.
             if e.kind() == std::io::ErrorKind::NotFound {
                 anyhow::bail!("yt-dlp not found on PATH — install it to use YouTube channels");
             }
@@ -91,22 +192,19 @@ pub async fn fetch_live(
     };
 
     if !out.status.success() {
-        // yt-dlp exits non-zero on offline channels — this is not an error,
-        // just no live stream right now.
         let stderr = String::from_utf8_lossy(&out.stderr);
         if stderr.contains("does not exist") || stderr.contains("is not currently live") {
-            return Ok(Some(YouTubeLive {
+            return Ok(YouTubeLive {
                 channel_id: channel_id.to_string(),
                 display_name: channel_id.to_string(),
-                stream: None,
-            }));
+                streams: Vec::new(),
+            });
         }
-        // Anything else is a real failure
         anyhow::bail!("yt-dlp failed: {stderr}");
     }
 
     let data: Value = serde_json::from_slice(&out.stdout).context("parsing yt-dlp JSON")?;
-    Ok(Some(parse_live(&data, channel_id)))
+    Ok(parse_live(&data, channel_id))
 }
 
 fn parse_live(root: &Value, channel_fallback: &str) -> YouTubeLive {
@@ -131,16 +229,16 @@ fn parse_live(root: &Value, channel_fallback: &str) -> YouTubeLive {
         })
         .unwrap_or(false);
 
-    let stream = if is_live {
-        Some(parse_stream(root))
+    let streams = if is_live {
+        vec![parse_stream(root)]
     } else {
-        None
+        Vec::new()
     };
 
     YouTubeLive {
         channel_id,
         display_name,
-        stream,
+        streams,
     }
 }
 
