@@ -81,8 +81,14 @@ pub fn clear() -> Result<()> {
             let _ = std::fs::remove_file(&path);
         }
     }
-    if let Ok(dir) = webview_profile_dir() {
-        let _ = std::fs::remove_dir_all(&dir);
+    // Inline the profile-dir path — calling webview_profile_dir() here would
+    // create the directory (it has create_dir_all baked in) only to
+    // immediately delete it.
+    if let Ok(base) = config::data_dir() {
+        let dir = base.join("webviews").join("chaturbate");
+        if dir.exists() {
+            let _ = std::fs::remove_dir_all(&dir);
+        }
     }
     Ok(())
 }
