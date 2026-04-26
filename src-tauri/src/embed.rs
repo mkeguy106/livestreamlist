@@ -335,6 +335,23 @@ impl EmbedManager {
         }
     }
 
+    /// Close the current embed if it belongs to `platform`. Idempotent.
+    /// Used by auth flows that need to release the profile dir before
+    /// removing it on disk.
+    pub fn unmount_platform(&self, platform: Platform) {
+        let mut g = self.inner.lock();
+        if let Some(cur) = &g.current {
+            if cur.platform != platform {
+                return;
+            }
+        } else {
+            return;
+        }
+        if let Some(prev) = g.current.take() {
+            let _ = prev.window.close();
+        }
+    }
+
     pub fn set_visible_all(&self, visible: bool) {
         if let Some(cur) = &self.inner.lock().current {
             if visible {
