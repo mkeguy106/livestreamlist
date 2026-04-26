@@ -274,9 +274,27 @@ pub async fn login_via_webview(app: AppHandle) -> Result<ChaturbateAuth> {
     let started = std::time::Instant::now();
 
     loop {
-        // Cookie check first so a successful poll wins even if the window
-        // closed in the same tick (race with concurrent invocations or
-        // the WM closing the window after success).
+        // Close check FIRST. If we call cookies_for_url on a destroyed
+        // webview the WebKit-side handler may never reply, blocking the
+        // whole poll loop indefinitely — which is exactly what made the
+        // JS busy state stick on user-cancel before this fix.
+        if closed.load(Ordering::Relaxed)
+            || app.get_webview_window(LOGIN_WINDOW_LABEL).is_none()
+        {
+            // Window closed. Two reasons we might still want to return Ok:
+            // a concurrent invocation already wrote a fresher stamp, or
+            // the user signed in via another tab/path that bumped the
+            // stamp out from under us. Compare logged_in_at to what was
+            // there when we started.
+            if let Ok(Some(stamp)) = load() {
+                if Some(stamp.logged_in_at) != initial_logged_in_at {
+                    return Ok(stamp);
+                }
+            }
+            anyhow::bail!("login window closed before sign-in completed");
+        }
+
+        // Cookie check (the success path).
         match window.cookies_for_url(site.clone()) {
             Ok(jar) => {
                 let signed_in = jar
@@ -296,9 +314,9 @@ pub async fn login_via_webview(app: AppHandle) -> Result<ChaturbateAuth> {
             Err(e) => log::debug!("cookies_for_url(chaturbate.com): {e}"),
         }
 
-        // Cancel: the injected titlebar's close button navigates the
-        // page to about:blank. Treat any non-https scheme as user-cancel
-        // and tear down cleanly. Cookie-success above wins if it raced.
+        // Cancel via about:blank navigation (legacy path; the close
+        // button on the previous custom titlebar used this). Cookie-
+        // success above wins if it raced.
         if let Ok(url) = window.url() {
             if url.scheme() != "https" {
                 let _ = window.close();
@@ -306,14 +324,11 @@ pub async fn login_via_webview(app: AppHandle) -> Result<ChaturbateAuth> {
             }
         }
 
+        // Re-check close after the (possibly slow) cookies_for_url call,
+        // so we bail this iteration instead of waiting another POLL tick.
         if closed.load(Ordering::Relaxed)
             || app.get_webview_window(LOGIN_WINDOW_LABEL).is_none()
         {
-            // Window closed. Two reasons we might still want to return Ok:
-            // a concurrent invocation already wrote a fresher stamp, or
-            // the user signed in via another tab/path that bumped the
-            // stamp out from under us. Compare logged_in_at to what was
-            // there when we started.
             if let Ok(Some(stamp)) = load() {
                 if Some(stamp.logged_in_at) != initial_logged_in_at {
                     return Ok(stamp);

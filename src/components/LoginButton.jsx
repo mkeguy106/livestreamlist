@@ -52,9 +52,17 @@ export default function LoginButton() {
 
   const doLogin = async (platform) => {
     setBusyPlatform(platform);
+    // Defensive watchdog: if the IPC promise never settles (Rust-side
+    // hang on a destroyed webview, lost event, etc.), unstick the UI
+    // after 6 minutes — comfortably past Rust's own 5-minute login
+    // timeout so a real long-but-valid sign-in isn't yanked.
+    const watchdog = setTimeout(() => {
+      setBusyPlatform((current) => (current === platform ? null : current));
+    }, 6 * 60 * 1000);
     try {
       await login(platform);
     } finally {
+      clearTimeout(watchdog);
       setBusyPlatform(null);
     }
   };
