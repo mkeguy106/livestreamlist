@@ -52,7 +52,8 @@ pub async fn login_via_webview(app: AppHandle) -> Result<ChaturbateAuth>;
 Internals follow the same idioms as `auth/youtube.rs`:
 
 - `STAMP_FILENAME = "chaturbate-auth.json"` written under `config::data_dir()`
-  via `config::atomic_write` with `0600` mode on Unix.
+  (XDG `~/.local/share/livestreamlist/`, matching the YouTube cookies-file
+  convention) via `config::atomic_write` with `0600` mode on Unix.
 - `LOGIN_WINDOW_LABEL = "chaturbate-login"`.
 - `LOGIN_URL = "https://chaturbate.com/auth/login/"`.
 - `POLL_INTERVAL = 750ms`, `LOGIN_TIMEOUT = 5min`.
@@ -62,7 +63,7 @@ Internals follow the same idioms as `auth/youtube.rs`:
 
 ### Stamp file format
 
-`~/.config/livestreamlist/chaturbate-auth.json`:
+`~/.local/share/livestreamlist/chaturbate-auth.json`:
 
 ```json
 {
