@@ -210,6 +210,65 @@ fn parse_streams_page(initial_data: &Value) -> Vec<String> {
     ids
 }
 
+/// Parse a `ytInitialPlayerResponse` JSON object into a `YouTubeStream`.
+/// Returns `None` if the video isn't currently live or if any required
+/// field is missing.
+fn parse_player_response(player_response: &Value) -> Option<YouTubeStream> {
+    let details = player_response.get("videoDetails")?.as_object()?;
+    let video_id = details.get("videoId").and_then(|v| v.as_str())?.to_string();
+    let title = details
+        .get("title")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    let is_live = details
+        .get("isLive")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+        || player_response
+            .pointer("/microformat/playerMicroformatRenderer/liveBroadcastDetails/isLiveNow")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+    if !is_live {
+        return None;
+    }
+
+    // Thumbnail: pick the largest-width entry available.
+    let thumbnail_url = details
+        .get("thumbnail")
+        .and_then(|v| v.get("thumbnails"))
+        .and_then(|v| v.as_array())
+        .and_then(|arr| {
+            arr.iter()
+                .max_by_key(|t| t.get("width").and_then(|w| w.as_u64()).unwrap_or(0))
+                .and_then(|t| t.get("url").and_then(|u| u.as_str()))
+                .map(String::from)
+        });
+
+    // Viewers: microformat.playerMicroformatRenderer.viewCount is a string.
+    let viewers = player_response
+        .pointer("/microformat/playerMicroformatRenderer/viewCount")
+        .and_then(|v| v.as_str())
+        .and_then(|s| s.parse::<i64>().ok());
+
+    // started_at from liveBroadcastDetails.startTimestamp (RFC3339).
+    let started_at = player_response
+        .pointer("/microformat/playerMicroformatRenderer/liveBroadcastDetails/startTimestamp")
+        .and_then(|v| v.as_str())
+        .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+        .map(|dt| dt.with_timezone(&Utc));
+
+    Some(YouTubeStream {
+        video_id,
+        title,
+        viewers,
+        game: None,
+        started_at,
+        thumbnail_url,
+    })
+}
+
 /// True when the first format with a width and height has width < height.
 /// Skips audio-only formats (which have no dimensions). False if no
 /// dimensioned format is present.
@@ -342,5 +401,60 @@ mod tests {
     fn parse_streams_page_returns_empty_for_unexpected_shape() {
         assert!(parse_streams_page(&json!({})).is_empty());
         assert!(parse_streams_page(&json!({ "contents": "wrong type" })).is_empty());
+    }
+
+    fn watch_player_response_fixture(video_id: &str, title: &str, viewers: i64) -> Value {
+        json!({
+            "videoDetails": {
+                "videoId": video_id,
+                "title": title,
+                "isLive": true,
+                "isLiveContent": true,
+                "thumbnail": {
+                    "thumbnails": [
+                        { "url": "https://i.ytimg.com/vi/x/lo.jpg", "width": 168, "height": 94 },
+                        { "url": "https://i.ytimg.com/vi/x/hi.jpg", "width": 1280, "height": 720 }
+                    ]
+                }
+            },
+            "streamingData": {
+                "adaptiveFormats": [{ "width": 1920, "height": 1080 }]
+            },
+            "microformat": {
+                "playerMicroformatRenderer": {
+                    "liveBroadcastDetails": {
+                        "isLiveNow": true,
+                        "startTimestamp": "2026-04-26T12:00:00+00:00"
+                    },
+                    "viewCount": viewers.to_string()
+                }
+            }
+        })
+    }
+
+    #[test]
+    fn parse_player_response_extracts_metadata() {
+        let stream = parse_player_response(
+            &watch_player_response_fixture("vidXYZ", "ISS Earth View", 1234),
+        ).expect("should parse");
+        assert_eq!(stream.video_id, "vidXYZ");
+        assert_eq!(stream.title, "ISS Earth View");
+        assert_eq!(stream.viewers, Some(1234));
+        assert_eq!(stream.thumbnail_url.as_deref(), Some("https://i.ytimg.com/vi/x/hi.jpg"));
+        assert!(stream.started_at.is_some());
+    }
+
+    #[test]
+    fn parse_player_response_returns_none_when_not_live() {
+        let mut data = watch_player_response_fixture("vidXYZ", "title", 0);
+        data["videoDetails"]["isLive"] = json!(false);
+        data["microformat"]["playerMicroformatRenderer"]["liveBroadcastDetails"]["isLiveNow"] = json!(false);
+        assert!(parse_player_response(&data).is_none());
+    }
+
+    #[test]
+    fn parse_player_response_returns_none_for_unexpected_shape() {
+        assert!(parse_player_response(&json!({})).is_none());
+        assert!(parse_player_response(&json!({ "videoDetails": "wrong" })).is_none());
     }
 }
