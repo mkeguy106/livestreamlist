@@ -69,14 +69,22 @@ export default function Command({ ctx }) {
   const [sort, setSort] = useState(() => loadPref(STORAGE_KEYS.sort, 'viewers'));
   const [hideOffline, setHideOffline] = useState(() => loadPref(STORAGE_KEYS.hideOffline, false));
   const [openMenu, setOpenMenu] = useState(null); // 'filter' | 'sort' | null
+  // Channel-list search. Ephemeral by design — restoring a stale query
+  // on relaunch would surprise the user more than starting clean.
+  const [query, setQuery] = useState('');
 
   useEffect(() => { savePref(STORAGE_KEYS.filter, filter); }, [filter]);
   useEffect(() => { savePref(STORAGE_KEYS.sort, sort); }, [sort]);
   useEffect(() => { savePref(STORAGE_KEYS.hideOffline, hideOffline); }, [hideOffline]);
 
   const filtered = useMemo(() => {
+    const needle = query.trim().toLowerCase();
     let list = livestreams.filter((l) => {
       if (hideOffline && !l.is_live) return false;
+      if (needle) {
+        const hay = `${l.display_name} ${l.channel_id}`.toLowerCase();
+        if (!hay.includes(needle)) return false;
+      }
       switch (filter) {
         case 'twitch':    return l.platform === 'twitch';
         case 'kick':      return l.platform === 'kick';
@@ -99,10 +107,16 @@ export default function Command({ ctx }) {
     // Live rows always float above offline rows, regardless of sort key.
     list.sort((a, b) => (a.is_live === b.is_live ? cmp(a, b) : a.is_live ? -1 : 1));
     return list;
-  }, [livestreams, filter, sort, hideOffline, playing]);
+  }, [livestreams, filter, sort, hideOffline, playing, query]);
 
   const liveCount = filtered.filter((l) => l.is_live).length;
-  const selected = filtered.find((l) => l.unique_key === selectedKey) ?? filtered[0];
+  // Resolve the selected channel from the FULL list, not the filtered
+  // one. Otherwise typing in the search box (which filters the rail)
+  // would yank the chat panel onto whatever happens to top the
+  // filtered list. Selection only changes when the user explicitly
+  // clicks another channel.
+  const selected =
+    livestreams.find((l) => l.unique_key === selectedKey) ?? filtered[0];
   const filterLabel = FILTER_OPTS.find((o) => o.k === filter)?.l ?? 'All';
   const sortLabel = SORT_OPTS.find((o) => o.k === sort)?.l ?? 'Viewers';
 
@@ -189,7 +203,35 @@ export default function Command({ ctx }) {
               {filterLabel.toLowerCase()} · {sortLabel.toLowerCase()}
             </span>
           </div>
+          <div style={{ padding: '6px 10px', borderBottom: 'var(--hair)' }}>
+            <input
+              type="text"
+              className="rx-input"
+              placeholder="Search channels…"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Escape' && query) {
+                  e.stopPropagation();
+                  setQuery('');
+                }
+              }}
+              style={{ width: '100%', boxSizing: 'border-box' }}
+            />
+          </div>
           <div style={{ flex: 1, overflowY: 'auto' }}>
+            {filtered.length === 0 && query.trim() && (
+              <div
+                style={{
+                  padding: '12px',
+                  color: 'var(--zinc-500)',
+                  fontSize: 'var(--t-12)',
+                  textAlign: 'center',
+                }}
+              >
+                No matches for “{query.trim()}”
+              </div>
+            )}
             {filtered.map((ch) => {
               const active = ch.unique_key === selected?.unique_key;
               const isPlaying = playing.has(ch.unique_key);
