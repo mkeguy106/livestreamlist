@@ -55,15 +55,17 @@ export function AuthProvider({ children }) {
     let unlisten = null;
     let cancelled = false;
     listenEvent('chat:auth:chaturbate', (payload) => {
+      // Optimistic local update first so the UI reacts instantly.
       setState((s) => ({
         ...s,
         chaturbate: {
           ...s.chaturbate,
           signed_in: !!payload?.signed_in,
-          // last_verified_at is owned by the stamp file; refresh on next
-          // auth_status pull picks it up. Don't synthesise here.
         },
       }));
+      // Then re-pull auth_status so last_verified_at (owned by the stamp
+      // file in Rust) reflects the just-touched value.
+      refresh();
     })
       .then((u) => {
         if (cancelled) {
@@ -77,7 +79,7 @@ export function AuthProvider({ children }) {
       cancelled = true;
       if (unlisten) unlisten();
     };
-  }, []);
+  }, [refresh]);
 
   const login = useCallback(async (platform) => {
     try {
