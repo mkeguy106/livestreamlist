@@ -205,8 +205,8 @@ export default function LoginButton() {
 
 /**
  * One letter chiclet in the compact account row. Letter is in the
- * platform accent color; the small dot at top-right is green when the
- * user is signed into that platform, red when not.
+ * platform accent color (toned down via opacity); the small dot at
+ * top-right is a muted green when signed in, muted red when not.
  */
 function PlatformChiclet({ letter, color, signedIn }) {
   return (
@@ -222,6 +222,7 @@ function PlatformChiclet({ letter, color, signedIn }) {
         fontSize: 11,
         fontWeight: 700,
         color,
+        opacity: 0.7,
         lineHeight: 1,
       }}
     >
@@ -231,11 +232,13 @@ function PlatformChiclet({ letter, color, signedIn }) {
           position: 'absolute',
           top: -1,
           right: -1,
-          width: 6,
-          height: 6,
+          width: 5,
+          height: 5,
           borderRadius: '50%',
-          background: signedIn ? 'var(--ok, #22c55e)' : 'var(--live, #ef4444)',
-          boxShadow: '0 0 0 1.5px var(--zinc-950)',
+          // Muted Tailwind green-700 / red-800 — sits quietly on the
+          // zinc background instead of competing with live-stream dots.
+          background: signedIn ? '#15803d' : '#991b1b',
+          boxShadow: '0 0 0 1.5px var(--zinc-925)',
         }}
       />
     </div>
