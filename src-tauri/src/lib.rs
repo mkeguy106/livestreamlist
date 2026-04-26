@@ -107,6 +107,7 @@ fn add_channel_from_input(input: String, state: State<'_, AppState>) -> Result<C
 
 #[tauri::command]
 fn remove_channel(unique_key: String, state: State<'_, AppState>) -> Result<bool, String> {
+    let unique_key = channels::channel_key_of(&unique_key).to_string();
     state.store.lock().remove(&unique_key).map_err(err_string)
 }
 
@@ -116,6 +117,7 @@ fn set_favorite(
     favorite: bool,
     state: State<'_, AppState>,
 ) -> Result<bool, String> {
+    let unique_key = channels::channel_key_of(&unique_key).to_string();
     state
         .store
         .lock()
