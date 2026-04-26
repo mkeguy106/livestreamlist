@@ -821,18 +821,34 @@ fn replay_chat_history(
 
 #[tauri::command]
 fn open_in_browser(unique_key: String, state: State<'_, AppState>) -> Result<(), String> {
-    let channel = state
-        .store
-        .lock()
-        .channels()
-        .iter()
-        .find(|c| c.unique_key() == unique_key)
-        .cloned()
-        .ok_or_else(|| format!("unknown channel {unique_key}"))?;
+    // The React side sends a stream-level key (which for live YT may
+    // include a :video_id suffix). Find the Channel by the channel-level
+    // key, but keep the original stream key around to look up the
+    // Livestream's video_id for per-stream YT URLs.
+    let channel_key = channels::channel_key_of(&unique_key).to_string();
+    let (channel, livestream) = {
+        let guard = state.store.lock();
+        let ch = guard
+            .channels()
+            .iter()
+            .find(|c| c.unique_key() == channel_key)
+            .cloned()
+            .ok_or_else(|| format!("unknown channel {unique_key}"))?;
+        let ls = guard
+            .snapshot()
+            .into_iter()
+            .find(|l| l.unique_key == unique_key);
+        (ch, ls)
+    };
     let url = match channel.platform {
         Platform::Twitch => format!("https://www.twitch.tv/{}", channel.channel_id),
         Platform::Youtube => {
-            if channel.channel_id.starts_with("UC") {
+            // Prefer per-video URL when the livestream has a video_id —
+            // matches Qt's per-stream open behaviour for multi-concurrent
+            // channels. Falls back to the channel landing page otherwise.
+            if let Some(vid) = livestream.and_then(|ls| ls.video_id) {
+                format!("https://www.youtube.com/watch?v={vid}")
+            } else if channel.channel_id.starts_with("UC") {
                 format!("https://www.youtube.com/channel/{}", channel.channel_id)
             } else {
                 format!("https://www.youtube.com/@{}", channel.channel_id)
