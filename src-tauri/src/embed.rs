@@ -123,10 +123,15 @@ impl EmbedManager {
     ) -> Result<bool> {
         let (channel, livestream) = {
             let g = store.lock();
+            // Stream-level key from React may include :video_id for YT
+            // multi-stream — strip for the Channel lookup, keep the
+            // original for the Livestream lookup so we get the right
+            // video's metadata.
+            let channel_key = crate::channels::channel_key_of(unique_key);
             let ch = g
                 .channels()
                 .iter()
-                .find(|c| c.unique_key() == unique_key)
+                .find(|c| c.unique_key() == channel_key)
                 .cloned()
                 .ok_or_else(|| anyhow!("unknown channel {unique_key}"))?;
             let ls = g
@@ -141,10 +146,14 @@ impl EmbedManager {
                 let Some(ls) = livestream.as_ref().filter(|l| l.is_live) else {
                     return Ok(false);
                 };
+                // Prefer the explicit video_id field (populated by the
+                // multi-stream YT scraper). Fall back to the legacy
+                // thumbnail-URL parse for any livestream entry that
+                // predates the field landing.
                 let Some(video_id) = ls
-                    .thumbnail_url
-                    .as_ref()
-                    .and_then(|u| yt_video_id(u))
+                    .video_id
+                    .clone()
+                    .or_else(|| ls.thumbnail_url.as_deref().and_then(yt_video_id))
                 else {
                     return Ok(false);
                 };

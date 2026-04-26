@@ -240,6 +240,20 @@ Branch protection is on `main`. **Never commit directly to `main`** — always b
 
 This keeps the roadmap accurate so future planning isn't done against stale assumptions, and so the gap between "planned" and "actually built" is always visible. If you discover during a session that previously-shipped work isn't reflected, fix it before doing new work — never plan on top of a known-stale roadmap.
 
+## "Ship it" — what the user means
+
+When the user says **"ship it"** about a finished feature branch, do the entire integration sequence end-to-end without further prompting. Each step is non-negotiable:
+
+1. **Verify clean state** — `cargo test` + `npm run build` green, no uncommitted changes that don't belong in the PR
+2. **Push the branch** — `git push -u origin <branch>`
+3. **Open the PR** — `gh pr create` with a substantive title (under 70 chars) and a body covering Summary + key tradeoffs + Test plan
+4. **Merge the PR** — `gh pr merge <N> --squash --delete-branch` (squash is the repo convention; never use merge or rebase merge unless the user asks)
+5. **Mark the roadmap** — per the section above. If the shipped feature is **not** on the roadmap at all (a one-off fix or a small UX improvement), add it to the appropriate phase as a checked item with `(PR #N)` so the phase still tells a complete story. If the shipped feature was the LAST unshipped item in a phase, also mark the phase header `✓ shipped`.
+6. **Land the roadmap update** — small follow-up docs PR (the feature PR is already merged by step 4); push, `gh pr create`, `gh pr merge --squash --delete-branch`
+7. **Local cleanup** — pull main, delete the local feature branch, remove any worktree
+
+Don't stop after step 4 thinking the feature is "shipped" — the roadmap mark is part of shipping. If the workflow is being applied to a branch that already merged via someone else's hand, just do step 5-7.
+
 ## Useful scripts
 
 - See `package.json` for npm scripts

@@ -87,6 +87,7 @@ impl PlayerManager {
         unique_key: String,
         platform: Platform,
         channel_id: &str,
+        video_id: Option<&str>,
         quality: &str,
         turbo: Option<&str>,
     ) -> Result<u32> {
@@ -95,7 +96,15 @@ impl PlayerManager {
             return Ok(*self.players.lock().get(&unique_key).unwrap() as u32);
         }
 
-        let url = stream_url(platform, channel_id);
+        // For YT multi-stream, prefer the per-video URL so yt-dlp
+        // resolves the SPECIFIC stream instead of whichever the
+        // /channel/{id}/live URL happens to redirect to. Falls back to
+        // the channel URL for non-YT and for YT entries without a
+        // video_id (which shouldn't happen in practice but is safe).
+        let url = match (platform, video_id) {
+            (Platform::Youtube, Some(vid)) => format!("https://www.youtube.com/watch?v={vid}"),
+            _ => stream_url(platform, channel_id),
+        };
         let q = if quality.is_empty() { "best" } else { quality };
 
         let mut cmd = if use_ytdlp(platform) {
