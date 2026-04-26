@@ -347,15 +347,13 @@ impl EmbedManager {
 }
 
 fn profile_dir(platform: Platform) -> Result<PathBuf> {
-    let name = match platform {
-        Platform::Youtube => "youtube",
-        Platform::Chaturbate => "chaturbate",
-        Platform::Twitch | Platform::Kick => "_unused",
-    };
-    let dir = config::data_dir()?.join("webviews").join(name);
-    std::fs::create_dir_all(&dir)
-        .with_context(|| format!("creating webview profile dir {}", dir.display()))?;
-    Ok(dir)
+    match platform {
+        Platform::Youtube => crate::auth::youtube::webview_profile_dir(),
+        Platform::Chaturbate => crate::auth::chaturbate::webview_profile_dir(),
+        Platform::Twitch | Platform::Kick => {
+            anyhow::bail!("no webview profile dir for {:?}", platform)
+        }
+    }
 }
 
 fn yt_video_id(thumbnail_url: &str) -> Option<String> {
