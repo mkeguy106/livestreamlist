@@ -156,3 +156,81 @@ fn parse_stream(root: &Value) -> YouTubeStream {
             .map(String::from),
     }
 }
+
+/// True when the first format with a width and height has width < height.
+/// Skips audio-only formats (which have no dimensions). False if no
+/// dimensioned format is present.
+fn is_portrait(player_response: &Value) -> bool {
+    let streaming_data = match player_response.get("streamingData") {
+        Some(v) => v,
+        None => return false,
+    };
+    for fmts_key in &["adaptiveFormats", "formats"] {
+        if let Some(fmts) = streaming_data.get(fmts_key).and_then(|v| v.as_array()) {
+            for fmt in fmts {
+                let w = fmt.get("width").and_then(|v| v.as_u64()).unwrap_or(0);
+                let h = fmt.get("height").and_then(|v| v.as_u64()).unwrap_or(0);
+                if w > 0 && h > 0 {
+                    return w < h;
+                }
+            }
+        }
+    }
+    false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn is_portrait_true_when_height_exceeds_width() {
+        let response = json!({
+            "streamingData": {
+                "adaptiveFormats": [{ "width": 720, "height": 1280 }]
+            }
+        });
+        assert!(is_portrait(&response));
+    }
+
+    #[test]
+    fn is_portrait_false_for_landscape() {
+        let response = json!({
+            "streamingData": {
+                "adaptiveFormats": [{ "width": 1920, "height": 1080 }]
+            }
+        });
+        assert!(!is_portrait(&response));
+    }
+
+    #[test]
+    fn is_portrait_falls_back_to_formats_when_adaptive_empty() {
+        let response = json!({
+            "streamingData": {
+                "adaptiveFormats": [],
+                "formats": [{ "width": 480, "height": 1080 }]
+            }
+        });
+        assert!(is_portrait(&response));
+    }
+
+    #[test]
+    fn is_portrait_skips_format_entries_without_dimensions() {
+        let response = json!({
+            "streamingData": {
+                "adaptiveFormats": [
+                    { "mimeType": "audio/mp4" },
+                    { "width": 1920, "height": 1080 }
+                ]
+            }
+        });
+        assert!(!is_portrait(&response));
+    }
+
+    #[test]
+    fn is_portrait_false_when_streaming_data_missing() {
+        assert!(!is_portrait(&json!({})));
+        assert!(!is_portrait(&json!({ "videoDetails": {} })));
+    }
+}
