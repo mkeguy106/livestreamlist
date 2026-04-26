@@ -30,12 +30,20 @@ const POLL_INTERVAL: Duration = Duration::from_millis(750);
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// Injected at DocumentCreation (before the page's own scripts run).
-/// Two jobs:
+/// Three jobs:
 ///
 /// 1. Pre-set common onboarding-tour localStorage keys to "seen" so the
 ///    site's first-visit tour modal doesn't bother to render.
 ///
-/// 2. Install a MutationObserver that continuously dismisses any modals
+/// 2. Inject our own zinc-950 titlebar + close button (replaces the
+///    native chrome we drop with `decorations(false)` to match the rest
+///    of the app's design). Mousedown on the bar invokes Tauri's
+///    `start_dragging` via `__TAURI_INTERNALS__`; the close button
+///    invokes `close`. Both calls are gated by the dedicated
+///    `chaturbate-login` capability — only those two commands are
+///    exposed to the chaturbate.com origin, no data-access leakage.
+///
+/// 3. Install a MutationObserver that continuously dismisses any modals
 ///    that DO mount (age-gate, tour, etc.) — runs for the page's
 ///    lifetime, not just a fixed retry window.
 ///
@@ -43,12 +51,6 @@ const LOGIN_TIMEOUT: Duration = Duration::from_secs(300);
 /// fingerprints fail when our claimed UA (Chrome) doesn't match the
 /// engine's actual JS APIs (WebKit), trapping the user in an unsolvable
 /// challenge loop.
-///
-/// Window chrome and dragging are handled by the OS via
-/// `decorations(true)` — same as the Qt app. Custom chrome was tried
-/// first but couldn't be made draggable on an external URL without
-/// granting the chaturbate.com webview access to our Tauri IPC, which
-/// is a security tradeoff not worth it for an aesthetic win.
 const INIT_SCRIPT: &str = r##"
 (function(){
     try {
@@ -59,6 +61,15 @@ const INIT_SCRIPT: &str = r##"
             try { localStorage.setItem(k, '1'); } catch(e){}
         });
     } catch(e){}
+
+    function tauriInvoke(cmd, args){
+        try {
+            if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {
+                return window.__TAURI_INTERNALS__.invoke(cmd, args || {});
+            }
+        } catch(e){}
+        return null;
+    }
 
     function dismissModals(){
         var ageBtn = document.getElementById('close_entrance_terms');
@@ -77,11 +88,13 @@ const INIT_SCRIPT: &str = r##"
             '[aria-label*="close" i], [aria-label*="dismiss" i], ' +
             '.modal-close, .close-button, button[class*="close" i]'
         ).forEach(function(b){
+            if (b.id === 'lsl-titlebar-close') return;
             try { b.click(); } catch(e){}
         });
         var verbs = ['done','got it','skip','skip tour','no thanks',
                      'maybe later','close','dismiss','×','x'];
         document.querySelectorAll('button, a[role="button"], div[role="button"]').forEach(function(b){
+            if (b.id === 'lsl-titlebar-close') return;
             var t = (b.textContent || '').trim().toLowerCase();
             if (verbs.indexOf(t) !== -1) {
                 try { b.click(); } catch(e){}
@@ -89,11 +102,58 @@ const INIT_SCRIPT: &str = r##"
         });
     }
 
+    function injectTitlebar(){
+        if (document.getElementById('lsl-titlebar')) return;
+        if (!document.body) return;
+        if (!document.getElementById('lsl-titlebar-style')) {
+            var s = document.createElement('style');
+            s.id = 'lsl-titlebar-style';
+            s.textContent =
+              "#lsl-titlebar{position:fixed;top:0;left:0;right:0;height:32px;" +
+              "background:rgb(9,9,11);color:rgb(228,228,231);" +
+              "font:12px -apple-system,'Segoe UI',system-ui,sans-serif;" +
+              "display:flex;align-items:center;justify-content:space-between;" +
+              "padding:0 12px;border-bottom:1px solid rgba(255,255,255,.06);" +
+              "z-index:2147483647;user-select:none;cursor:default}" +
+              "#lsl-titlebar-title{font-weight:500;flex:1;pointer-events:none}" +
+              "#lsl-titlebar-close{background:transparent;border:0;color:inherit;" +
+              "cursor:pointer;padding:4px 10px;border-radius:4px;" +
+              "font-size:18px;line-height:1}" +
+              "#lsl-titlebar-close:hover{background:rgba(255,255,255,.08)}" +
+              "html{padding-top:32px !important;background:rgb(9,9,11) !important}";
+            (document.head || document.documentElement).appendChild(s);
+        }
+        var bar = document.createElement('div');
+        bar.id = 'lsl-titlebar';
+        bar.innerHTML =
+          '<span id="lsl-titlebar-title">Sign in to Chaturbate</span>' +
+          '<button id="lsl-titlebar-close" type="button" aria-label="Close">×</button>';
+        document.body.insertBefore(bar, document.body.firstChild);
+
+        // Drag the window when the user grabs the bar (but not when
+        // they click the close button).
+        bar.addEventListener('mousedown', function(e){
+            if (e.button !== 0) return;
+            if (e.target.closest('button')) return;
+            e.preventDefault();
+            tauriInvoke('plugin:window|start_dragging');
+        });
+
+        document.getElementById('lsl-titlebar-close').addEventListener('click', function(e){
+            e.preventDefault();
+            e.stopPropagation();
+            tauriInvoke('plugin:window|close');
+        });
+    }
+
     function startObserving(){
+        injectTitlebar();
         dismissModals();
         try {
-            new MutationObserver(dismissModals)
-                .observe(document.body, {childList:true, subtree:true});
+            new MutationObserver(function(){
+                if (!document.getElementById('lsl-titlebar')) injectTitlebar();
+                dismissModals();
+            }).observe(document.body, {childList:true, subtree:true});
         } catch(e){}
     }
 
@@ -228,17 +288,19 @@ pub async fn login_via_webview(app: AppHandle) -> Result<ChaturbateAuth> {
         )
         .title("Sign in to Chaturbate")
         // Chaturbate's responsive design switches to a mobile layout
-        // below ~768 CSS px and the login form becomes unusable
-        // (compressed nav row eats the form's vertical space). Sit
+        // below ~768 CSS px and the login form becomes unusable. Sit
         // comfortably above the breakpoint so the desktop layout
-        // renders. Matches what Qt's QWebEngine shows.
-        .inner_size(800.0, 880.0)
-        .min_inner_size(780.0, 720.0)
+        // renders. +32 px of vertical headroom for our injected
+        // titlebar so the usable page area still matches what the
+        // login form needs.
+        .inner_size(800.0, 912.0)
+        .min_inner_size(780.0, 752.0)
         .data_directory(profile_dir)
-        // Native OS decorations — gives drag + min/max/close for free
-        // and matches what the Qt app does (its own login window has
-        // native chrome too).
-        .decorations(true)
+        // Custom chrome to match the rest of the app — drag + close
+        // wired up in INIT_SCRIPT via __TAURI_INTERNALS__, gated by
+        // the chaturbate-login capability (start_dragging + close
+        // commands only).
+        .decorations(false)
         .visible(false)
         .background_color(zinc_950)
         .center()

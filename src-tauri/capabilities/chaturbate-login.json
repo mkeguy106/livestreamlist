@@ -1,0 +1,13 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "chaturbate-login",
+  "description": "Allow the chaturbate-login window's injected titlebar JS (running in the chaturbate.com origin) to call exactly two window-control commands: start a drag and close the window. Scoped to this one window + URL pattern; no data-access or app commands are exposed to chaturbate.com.",
+  "windows": ["chaturbate-login"],
+  "remote": {
+    "urls": ["https://chaturbate.com/*"]
+  },
+  "permissions": [
+    "core:window:allow-start-dragging",
+    "core:window:allow-close"
+  ]
+}
