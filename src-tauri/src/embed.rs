@@ -19,7 +19,7 @@ use std::sync::Arc;
 use tauri::utils::config::Color;
 use tauri::webview::{PageLoadEvent, PageLoadPayload};
 use tauri::{
-    AppHandle, Manager, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindow,
+    AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindow,
     WebviewWindowBuilder,
 };
 
@@ -229,9 +229,16 @@ impl EmbedManager {
             .data_directory(profile)
             .visible(false)
             .background_color(zinc_950)
-            .on_page_load(move |w: WebviewWindow, payload: PageLoadPayload<'_>| {
-                if matches!(payload.event(), PageLoadEvent::Finished) {
-                    let _ = w.show();
+            .on_page_load({
+                let app_for_load = app.clone();
+                let platform_for_load = channel.platform;
+                move |w: WebviewWindow, payload: PageLoadPayload<'_>| {
+                    if matches!(payload.event(), PageLoadEvent::Finished) {
+                        let _ = w.show();
+                        if platform_for_load == Platform::Chaturbate {
+                            verify_chaturbate_auth(&w, &app_for_load);
+                        }
+                    }
                 }
             })
             .transient_for(&main)
@@ -384,6 +391,50 @@ fn yt_video_id(thumbnail_url: &str) -> Option<String> {
 
 fn json_string(s: &str) -> String {
     serde_json::to_string(s).unwrap_or_else(|_| "''".to_string())
+}
+
+#[derive(Clone, serde::Serialize)]
+struct ChaturbateAuthEvent {
+    signed_in: bool,
+    /// "ok" | "session_expired" | "not_logged_in"
+    reason: &'static str,
+}
+
+/// On a Chaturbate embed page-load-finished, decide auth status from the
+/// embed's own cookie store and broadcast it. Stamp file gets touched
+/// or cleared so `auth_status` stays in sync.
+fn verify_chaturbate_auth(window: &WebviewWindow, app: &AppHandle) {
+    let site: url::Url = match "https://chaturbate.com/".parse() {
+        Ok(u) => u,
+        Err(_) => return,
+    };
+    let signed_in = match window.cookies_for_url(site) {
+        Ok(jar) => jar
+            .iter()
+            .any(|c| c.name() == "sessionid" && !c.value().is_empty()),
+        Err(e) => {
+            log::warn!("verify_chaturbate_auth cookies_for_url: {e:#}");
+            return; // transient — don't flap the UI
+        }
+    };
+    let stamp_present = matches!(crate::auth::chaturbate::load(), Ok(Some(_)));
+    let reason = if signed_in {
+        if let Err(e) = crate::auth::chaturbate::touch_verified() {
+            log::warn!("touch_verified failed: {e:#}");
+        }
+        "ok"
+    } else if stamp_present {
+        if let Err(e) = crate::auth::chaturbate::clear() {
+            log::warn!("clear (drift) failed: {e:#}");
+        }
+        "session_expired"
+    } else {
+        "not_logged_in"
+    };
+    let payload = ChaturbateAuthEvent { signed_in, reason };
+    if let Err(e) = app.emit("chat:auth:chaturbate", payload) {
+        log::warn!("emit chat:auth:chaturbate: {e:#}");
+    }
 }
 
 /// Set `_NET_WM_BYPASS_COMPOSITOR=1` on the X11 window so KWin skips ALL
