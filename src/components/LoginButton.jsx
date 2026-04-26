@@ -2,14 +2,19 @@ import { useEffect, useRef, useState } from 'react';
 import { useAuth } from '../hooks/useAuth.jsx';
 
 /**
- * Titlebar dropdown showing Twitch / Kick / YouTube auth state and a
- * login/logout action per platform.
+ * Titlebar account widget. Two display modes:
  *
- * Dropdown stays OPEN during login so the OAuth callback errors surface
- * inline instead of vanishing behind the closed menu.
+ *   - **Empty state** — no platform signed in: a single "Log in" button.
+ *   - **Compact state** — at least one signed in: a row of T/Y/K/C
+ *     chiclets, each with a small green dot when signed in or red when
+ *     not. The whole row is one click target that opens the dropdown.
+ *
+ * The dropdown lists all four platforms (Twitch, Kick, YouTube,
+ * Chaturbate) with per-row login/logout actions. Stays open during a
+ * login so OAuth-callback errors surface inline.
  */
 export default function LoginButton() {
-  const { loading, twitch, kick, youtube, login, logout, error } = useAuth();
+  const { loading, twitch, kick, youtube, chaturbate, login, logout, error } = useAuth();
   const [open, setOpen] = useState(false);
   const [busyPlatform, setBusyPlatform] = useState(null);
   const containerRef = useRef(null);
@@ -33,11 +38,17 @@ export default function LoginButton() {
   }
 
   const ytSignedIn = Boolean(youtube?.browser || youtube?.has_paste);
-  const summaryParts = [];
-  if (twitch) summaryParts.push(`@${twitch.login}`);
-  if (kick) summaryParts.push(`k:@${kick.login}`);
-  if (ytSignedIn) summaryParts.push('y');
-  const summary = summaryParts.length ? summaryParts.join(' · ') : 'Log in';
+  const cbSignedIn = Boolean(chaturbate?.signed_in);
+  const twitchSignedIn = Boolean(twitch);
+  const kickSignedIn = Boolean(kick);
+  const anySignedIn = twitchSignedIn || kickSignedIn || ytSignedIn || cbSignedIn;
+
+  const platforms = [
+    { id: 'twitch',     letter: 'T', color: 'var(--twitch)',   signedIn: twitchSignedIn },
+    { id: 'youtube',    letter: 'Y', color: 'var(--youtube)',  signedIn: ytSignedIn },
+    { id: 'kick',       letter: 'K', color: 'var(--kick)',     signedIn: kickSignedIn },
+    { id: 'chaturbate', letter: 'C', color: 'var(--cb)',       signedIn: cbSignedIn },
+  ];
 
   const doLogin = async (platform) => {
     setBusyPlatform(platform);
@@ -65,15 +76,42 @@ export default function LoginButton() {
 
   return (
     <div ref={containerRef} style={{ position: 'relative' }}>
-      <button
-        type="button"
-        className={twitch || kick || ytSignedIn ? 'rx-btn rx-btn-ghost' : 'rx-btn'}
-        onClick={() => setOpen((v) => !v)}
-        title={error ?? 'Accounts'}
-        style={{ padding: '2px 8px', fontSize: 10 }}
-      >
-        {summary}
-      </button>
+      {anySignedIn ? (
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          title={error ?? 'Accounts'}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 4,
+            background: 'transparent',
+            border: '1px solid var(--zinc-800)',
+            borderRadius: 6,
+            padding: '2px 4px',
+            cursor: 'pointer',
+          }}
+        >
+          {platforms.map((p) => (
+            <PlatformChiclet
+              key={p.id}
+              letter={p.letter}
+              color={p.color}
+              signedIn={p.signedIn}
+            />
+          ))}
+        </button>
+      ) : (
+        <button
+          type="button"
+          className="rx-btn"
+          onClick={() => setOpen((v) => !v)}
+          title={error ?? 'Accounts'}
+          style={{ padding: '2px 8px', fontSize: 10 }}
+        >
+          Log in
+        </button>
+      )}
       {open && (
         <div
           onClick={(e) => e.stopPropagation()}
@@ -98,7 +136,7 @@ export default function LoginButton() {
             label="Twitch"
             color="var(--twitch)"
             statusText={twitch ? `@${twitch.login}` : 'Not logged in'}
-            signedIn={Boolean(twitch)}
+            signedIn={twitchSignedIn}
             busy={busyPlatform === 'twitch'}
             onLogin={() => doLogin('twitch')}
             onLogout={() => doLogout('twitch')}
@@ -107,7 +145,7 @@ export default function LoginButton() {
             label="Kick"
             color="var(--kick)"
             statusText={kick ? `@${kick.login}` : 'Not logged in'}
-            signedIn={Boolean(kick)}
+            signedIn={kickSignedIn}
             busy={busyPlatform === 'kick'}
             onLogin={() => doLogin('kick')}
             onLogout={() => doLogout('kick')}
@@ -121,6 +159,15 @@ export default function LoginButton() {
             onLogin={() => doLogin('youtube')}
             onLogout={() => doLogout('youtube')}
           />
+          <AccountRow
+            label="Chaturbate"
+            color="var(--cb)"
+            statusText={cbSignedIn ? 'Signed in' : 'Not logged in'}
+            signedIn={cbSignedIn}
+            busy={busyPlatform === 'chaturbate'}
+            onLogin={() => doLogin('chaturbate')}
+            onLogout={() => doLogout('chaturbate')}
+          />
           {busyPlatform && (
             <div
               style={{
@@ -132,6 +179,8 @@ export default function LoginButton() {
             >
               {busyPlatform === 'youtube'
                 ? 'Sign in to Google in the window that just opened — it will close when cookies are captured.'
+                : busyPlatform === 'chaturbate'
+                ? 'Sign in to Chaturbate in the window that just opened — it will close once the session cookie is captured.'
                 : 'Waiting for the browser — approve the login in the page that just opened, then come back here.'}
             </div>
           )}
@@ -154,6 +203,45 @@ export default function LoginButton() {
   );
 }
 
+/**
+ * One letter chiclet in the compact account row. Letter is in the
+ * platform accent color; the small dot at top-right is green when the
+ * user is signed into that platform, red when not.
+ */
+function PlatformChiclet({ letter, color, signedIn }) {
+  return (
+    <div
+      style={{
+        position: 'relative',
+        width: 18,
+        height: 18,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        fontFamily: 'var(--font-mono)',
+        fontSize: 11,
+        fontWeight: 700,
+        color,
+        lineHeight: 1,
+      }}
+    >
+      {letter}
+      <span
+        style={{
+          position: 'absolute',
+          top: -1,
+          right: -1,
+          width: 6,
+          height: 6,
+          borderRadius: '50%',
+          background: signedIn ? 'var(--ok, #22c55e)' : 'var(--live, #ef4444)',
+          boxShadow: '0 0 0 1.5px var(--zinc-950)',
+        }}
+      />
+    </div>
+  );
+}
+
 function AccountRow({ label, color, statusText, signedIn, busy, onLogin, onLogout }) {
   return (
     <div
@@ -164,7 +252,7 @@ function AccountRow({ label, color, statusText, signedIn, busy, onLogin, onLogou
         padding: '6px 10px',
       }}
     >
-      <span style={{ color, fontSize: 'var(--t-11)', fontWeight: 600, minWidth: 54 }}>{label}</span>
+      <span style={{ color, fontSize: 'var(--t-11)', fontWeight: 600, minWidth: 70 }}>{label}</span>
       <span
         style={{
           fontSize: 'var(--t-11)',
