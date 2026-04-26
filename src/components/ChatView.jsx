@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '../hooks/useAuth.jsx';
 import { useChat } from '../hooks/useChat.js';
 import { usePreferences } from '../hooks/usePreferences.jsx';
+import ChaturbateAuthBanner from './ChaturbateAuthBanner.jsx';
 import ChatModeBanner from './ChatModeBanner.jsx';
 import Composer from './Composer.jsx';
 import ConversationDialog from './ConversationDialog.jsx';
@@ -50,6 +51,7 @@ export default function ChatView({
         }}
       >
         {header}
+        {platform === 'chaturbate' && <ChaturbateAuthBanner />}
         <div style={{ flex: 1, position: 'relative', minHeight: 0, overflow: 'hidden' }}>
           <EmbeddedChat
             channelKey={channelKey}

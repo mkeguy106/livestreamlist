@@ -643,6 +643,7 @@ struct AuthStatus {
     twitch: Option<auth::twitch::TwitchIdentity>,
     kick: Option<auth::kick::KickIdentity>,
     youtube: YoutubeAuthStatus,
+    chaturbate: ChaturbateAuthStatus,
 }
 
 #[derive(serde::Serialize)]
@@ -653,6 +654,12 @@ struct YoutubeAuthStatus {
     has_paste: bool,
 }
 
+#[derive(serde::Serialize)]
+struct ChaturbateAuthStatus {
+    signed_in: bool,
+    last_verified_at: Option<String>, // RFC3339, None when not signed in
+}
+
 #[tauri::command]
 async fn auth_status(state: State<'_, AppState>) -> Result<AuthStatus, String> {
     let twitch = auth::twitch::status(&state.http)
@@ -661,10 +668,21 @@ async fn auth_status(state: State<'_, AppState>) -> Result<AuthStatus, String> {
     let kick = auth::kick::status(&state.http).await.map_err(err_string)?;
     let browser = state.settings.read().general.youtube_cookies_browser.clone();
     let has_paste = auth::youtube::cookies_file_present();
+    let chaturbate = match auth::chaturbate::load().map_err(err_string)? {
+        Some(stamp) => ChaturbateAuthStatus {
+            signed_in: true,
+            last_verified_at: Some(stamp.last_verified_at.to_rfc3339()),
+        },
+        None => ChaturbateAuthStatus {
+            signed_in: false,
+            last_verified_at: None,
+        },
+    };
     Ok(AuthStatus {
         twitch,
         kick,
         youtube: YoutubeAuthStatus { browser, has_paste },
+        chaturbate,
     })
 }
 
@@ -744,6 +762,23 @@ fn youtube_login_paste(
 fn youtube_logout(state: State<'_, AppState>) -> Result<(), String> {
     auth::youtube::clear().map_err(err_string)?;
     clear_youtube_browser_pref(&state);
+    Ok(())
+}
+
+#[tauri::command]
+async fn chaturbate_login(app: tauri::AppHandle) -> Result<bool, String> {
+    auth::chaturbate::login_via_webview(app)
+        .await
+        .map_err(err_string)?;
+    Ok(true)
+}
+
+#[tauri::command]
+fn chaturbate_logout(
+    embeds: State<'_, Arc<embed::EmbedManager>>,
+) -> Result<(), String> {
+    embeds.unmount_platform(Platform::Chaturbate);
+    auth::chaturbate::clear().map_err(err_string)?;
     Ok(())
 }
 
@@ -936,6 +971,8 @@ pub fn run() {
             youtube_login_paste,
             youtube_logout,
             youtube_detect_browsers,
+            chaturbate_login,
+            chaturbate_logout,
             import_twitch_follows,
         ])
         .run(tauri::generate_context!())

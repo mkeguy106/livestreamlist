@@ -22,3 +22,22 @@ export function formatUptime(iso) {
 export function platformLetter(platform) {
   return (platform ?? '').charAt(0).toLowerCase(); // t/y/k/c
 }
+
+/**
+ * Turn an RFC3339 timestamp (or anything Date.parse() handles) into a
+ * coarse relative string: "just now", "5m ago", "3h ago", "2d ago".
+ * Returns the original string on parse failure.
+ */
+export function formatRelative(ts) {
+  if (!ts) return '';
+  const ms = Date.parse(ts);
+  if (Number.isNaN(ms)) return ts;
+  const diff = Date.now() - ms;
+  if (diff < 0 || diff < 30_000) return 'just now';
+  const m = Math.floor(diff / 60_000);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 48) return `${h}h ago`;
+  const d = Math.floor(h / 24);
+  return `${d}d ago`;
+}

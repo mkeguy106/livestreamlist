@@ -1,6 +1,8 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import {
   authStatus,
+  chaturbateLogin,
+  chaturbateLogout,
   kickLogin,
   kickLogout,
   twitchLogin,
@@ -8,6 +10,7 @@ import {
   youtubeLogin,
   youtubeLoginPaste,
   youtubeLogout,
+  listenEvent,
 } from '../ipc.js';
 
 /**
@@ -24,6 +27,7 @@ export function AuthProvider({ children }) {
     twitch: null,
     kick: null,
     youtube: { browser: null, has_paste: false },
+    chaturbate: { signed_in: false, last_verified_at: null },
     error: null,
   });
 
@@ -35,6 +39,7 @@ export function AuthProvider({ children }) {
         twitch: data?.twitch ?? null,
         kick: data?.kick ?? null,
         youtube: data?.youtube ?? { browser: null, has_paste: false },
+        chaturbate: data?.chaturbate ?? { signed_in: false, last_verified_at: null },
         error: null,
       });
     } catch (e) {
@@ -46,10 +51,45 @@ export function AuthProvider({ children }) {
     refresh();
   }, [refresh]);
 
+  useEffect(() => {
+    let unlisten = null;
+    let cancelled = false;
+    listenEvent('chat:auth:chaturbate', (payload) => {
+      // Optimistic local update first so the UI reacts instantly.
+      setState((s) => ({
+        ...s,
+        chaturbate: {
+          ...s.chaturbate,
+          signed_in: !!payload?.signed_in,
+        },
+      }));
+      // Then re-pull auth_status so last_verified_at (owned by the stamp
+      // file in Rust) reflects the just-touched value.
+      refresh();
+    })
+      .then((u) => {
+        if (cancelled) {
+          u?.();
+        } else {
+          unlisten = u;
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+      if (unlisten) unlisten();
+    };
+  }, [refresh]);
+
   const login = useCallback(async (platform) => {
     try {
       if (platform === 'youtube') {
         await youtubeLogin();
+        await refresh();
+        return;
+      }
+      if (platform === 'chaturbate') {
+        await chaturbateLogin();
         await refresh();
         return;
       }
@@ -66,6 +106,10 @@ export function AuthProvider({ children }) {
       if (platform === 'kick') await kickLogout();
       else if (platform === 'youtube') {
         await youtubeLogout();
+        await refresh();
+        return;
+      } else if (platform === 'chaturbate') {
+        await chaturbateLogout();
         await refresh();
         return;
       } else {
