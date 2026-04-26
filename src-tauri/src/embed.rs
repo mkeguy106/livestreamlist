@@ -354,6 +354,7 @@ impl EmbedManager {
             return;
         }
         if let Some(prev) = g.current.take() {
+            g.last_bounds.remove(&prev.unique_key);
             let _ = prev.window.close();
         }
     }

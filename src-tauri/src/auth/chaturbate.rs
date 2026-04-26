@@ -9,7 +9,7 @@
 //! the webview profile dir (shared with the chat embed); the stamp is
 //! a presence flag plus timestamps the UI uses to render hints.
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
