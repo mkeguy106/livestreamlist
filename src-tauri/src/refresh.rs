@@ -36,7 +36,7 @@ pub async fn refresh_all(
     // Fire all four fetch groups in parallel
     let twitch_fut = twitch::fetch_live(&client, &twitch_logins);
     let kick_fut = fetch_kick_all(&client, &kick_slugs);
-    let youtube_fut = fetch_youtube_all(&youtube_ids, youtube_cookies_browser.as_deref());
+    let youtube_fut = fetch_youtube_all(&youtube_ids, youtube_cookies_browser.as_deref(), &client);
     let cb_fut = fetch_chaturbate_all(&client, &cb_names);
 
     let (twitch_res, kick_map, youtube_map, cb_map) =
@@ -50,29 +50,51 @@ pub async fn refresh_all(
     {
         let mut guard = store.lock();
         for ch in &channels {
-            let ls = match ch.platform {
-                Platform::Twitch => twitch_map
-                    .get(&ch.channel_id.to_ascii_lowercase())
-                    .map(|live| Livestream::from_twitch(ch, live))
-                    .unwrap_or_else(|| {
-                        let mut ls = Livestream::offline_for(ch, None);
-                        ls.error = Some("not found".into());
-                        ls
-                    }),
-                Platform::Kick => kick_map
-                    .get(&ch.channel_id.to_ascii_lowercase())
-                    .map(|live| Livestream::from_kick(ch, live))
-                    .unwrap_or_else(|| Livestream::offline_for(ch, None)),
-                Platform::Youtube => youtube_map
-                    .get(&ch.channel_id)
-                    .map(|live| Livestream::from_youtube(ch, live))
-                    .unwrap_or_else(|| Livestream::offline_for(ch, None)),
-                Platform::Chaturbate => cb_map
-                    .get(&ch.channel_id.to_ascii_lowercase())
-                    .map(|live| Livestream::from_chaturbate(ch, live))
-                    .unwrap_or_else(|| Livestream::offline_for(ch, None)),
-            };
-            guard.upsert_livestream(ls);
+            match ch.platform {
+                Platform::Youtube => {
+                    // YouTube produces 0..N streams per channel — flatten
+                    // into Livestream entries and route through the
+                    // miss-threshold-aware batch update.
+                    let live = youtube_map.get(&ch.channel_id);
+                    let mut streams: Vec<Livestream> = live
+                        .map(|l| {
+                            l.streams
+                                .iter()
+                                .map(|s| Livestream::from_youtube(ch, s))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    if streams.is_empty() {
+                        streams.push(Livestream::offline_for(ch, None));
+                    }
+                    guard.replace_livestreams_for_channel(&ch.unique_key(), streams);
+                }
+                Platform::Twitch => {
+                    let ls = twitch_map
+                        .get(&ch.channel_id.to_ascii_lowercase())
+                        .map(|live| Livestream::from_twitch(ch, live))
+                        .unwrap_or_else(|| {
+                            let mut ls = Livestream::offline_for(ch, None);
+                            ls.error = Some("not found".into());
+                            ls
+                        });
+                    guard.upsert_livestream(ls);
+                }
+                Platform::Kick => {
+                    let ls = kick_map
+                        .get(&ch.channel_id.to_ascii_lowercase())
+                        .map(|live| Livestream::from_kick(ch, live))
+                        .unwrap_or_else(|| Livestream::offline_for(ch, None));
+                    guard.upsert_livestream(ls);
+                }
+                Platform::Chaturbate => {
+                    let ls = cb_map
+                        .get(&ch.channel_id.to_ascii_lowercase())
+                        .map(|live| Livestream::from_chaturbate(ch, live))
+                        .unwrap_or_else(|| Livestream::offline_for(ch, None));
+                    guard.upsert_livestream(ls);
+                }
+            }
         }
     }
 
@@ -123,29 +145,30 @@ async fn fetch_chaturbate_all(
     out
 }
 
-/// Run yt-dlp in batches of YT_CONCURRENCY to keep the subprocess load bounded.
+/// Run yt-dlp + concurrent-list scraping in batches of YT_CONCURRENCY to
+/// keep the subprocess + network load bounded. Returns one entry per
+/// channel id whose `streams` vec is empty for offline channels, length
+/// 1 for typical single-stream live channels, and length >= 2 for
+/// NASA-style multi-concurrent channels.
 async fn fetch_youtube_all(
     ids: &[String],
     cookies_browser: Option<&str>,
+    http: &reqwest::Client,
 ) -> HashMap<String, youtube::YouTubeLive> {
     let mut out = HashMap::new();
     for chunk in ids.chunks(YT_CONCURRENCY) {
         let futs: Vec<_> = chunk
             .iter()
             .map(|id| async move {
-                (
-                    id.clone(),
-                    youtube::fetch_live(id, cookies_browser).await,
-                )
+                (id.clone(), youtube::fetch_live(id, cookies_browser, http).await)
             })
             .collect();
         let results = join_all(futs).await;
         for (id, res) in results {
             match res {
-                Ok(Some(live)) => {
+                Ok(live) => {
                     out.insert(id, live);
                 }
-                Ok(None) => {}
                 Err(e) => log::warn!("YouTube refresh failed for {id}: {e:#}"),
             }
         }
