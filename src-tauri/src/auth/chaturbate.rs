@@ -75,12 +75,23 @@ pub fn touch_verified() -> Result<()> {
     save(&stamp)
 }
 
-pub fn clear() -> Result<()> {
+/// Drop only the stamp file, leaving the webview profile dir intact.
+///
+/// Use this when the embed window may still be alive (e.g. drift
+/// detection from inside the embed's own page-load callback). The full
+/// `clear()` would `remove_dir_all` the profile dir while WebKit holds
+/// fds open in it, leaving the live process writing to orphaned inodes.
+pub fn clear_stamp_only() -> Result<()> {
     if let Ok(path) = stamp_path() {
         if path.exists() {
             let _ = std::fs::remove_file(&path);
         }
     }
+    Ok(())
+}
+
+pub fn clear() -> Result<()> {
+    clear_stamp_only()?;
     // Inline the profile-dir path — calling webview_profile_dir() here would
     // create the directory (it has create_dir_all baked in) only to
     // immediately delete it.

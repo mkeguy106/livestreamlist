@@ -425,8 +425,12 @@ fn verify_chaturbate_auth(window: &WebviewWindow, app: &AppHandle) {
         }
         "ok"
     } else if stamp_present {
-        if let Err(e) = crate::auth::chaturbate::clear() {
-            log::warn!("clear (drift) failed: {e:#}");
+        // Drift: server cleared the session but our stamp says signed-in.
+        // Clear ONLY the stamp — the embed window is still alive against
+        // the profile dir at this exact moment, so a full clear() would
+        // remove_dir_all under WebKit's feet.
+        if let Err(e) = crate::auth::chaturbate::clear_stamp_only() {
+            log::warn!("clear_stamp_only (drift) failed: {e:#}");
         }
         "session_expired"
     } else {
