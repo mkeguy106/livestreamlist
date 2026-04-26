@@ -13,10 +13,12 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 use tauri::utils::config::Color;
 use tauri::webview::{PageLoadEvent, PageLoadPayload};
-use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
 
 use crate::config;
 
@@ -198,6 +200,14 @@ pub fn clear() -> Result<()> {
 pub async fn login_via_webview(app: AppHandle) -> Result<ChaturbateAuth> {
     let initial_logged_in_at = load()?.map(|s| s.logged_in_at);
 
+    // Event-driven close detection. The 750 ms cookie poll already has an
+    // is_none() fallback, but window destruction by the WM can take a
+    // moment to flow through Tauri's manager — relying on the poll alone
+    // means the JS-side busy state spins for up to ~1.5 s of WM lag, and
+    // in some races never clears at all. WindowEvent::Destroyed fires
+    // synchronously in the runtime as soon as the window is gone.
+    let closed = Arc::new(AtomicBool::new(false));
+
     let window = if let Some(existing) = app.get_webview_window(LOGIN_WINDOW_LABEL) {
         let _ = existing.set_focus();
         existing
@@ -249,6 +259,17 @@ pub async fn login_via_webview(app: AppHandle) -> Result<ChaturbateAuth> {
         builder.build().context("opening Chaturbate login window")?
     };
 
+    // Attach (or re-attach for re-entry) the close listener on the
+    // window we're about to poll against. Tauri's on_window_event takes
+    // owned listeners; calling it twice on the same window stacks
+    // listeners, which is fine — both invocations' atomics get flipped.
+    let closed_for_event = closed.clone();
+    window.on_window_event(move |event| {
+        if matches!(event, WindowEvent::Destroyed | WindowEvent::CloseRequested { .. }) {
+            closed_for_event.store(true, Ordering::Relaxed);
+        }
+    });
+
     let site: url::Url = SITE_URL.parse()?;
     let started = std::time::Instant::now();
 
@@ -285,7 +306,9 @@ pub async fn login_via_webview(app: AppHandle) -> Result<ChaturbateAuth> {
             }
         }
 
-        if app.get_webview_window(LOGIN_WINDOW_LABEL).is_none() {
+        if closed.load(Ordering::Relaxed)
+            || app.get_webview_window(LOGIN_WINDOW_LABEL).is_none()
+        {
             // Window closed. Two reasons we might still want to return Ok:
             // a concurrent invocation already wrote a fresher stamp, or
             // the user signed in via another tab/path that bumped the
