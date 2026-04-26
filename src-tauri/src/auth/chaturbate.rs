@@ -14,7 +14,9 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::time::Duration;
-use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::utils::config::Color;
+use tauri::webview::{PageLoadEvent, PageLoadPayload};
+use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
 use crate::config;
 
@@ -108,35 +110,58 @@ pub fn clear() -> Result<()> {
 /// cookie jar until `sessionid` appears, then save + close. Bubbles a
 /// clear error if the user closes the window or the timeout (5 min)
 /// expires.
+///
+/// Re-entry: if the login window is already open (user double-clicked
+/// "Sign in"), we focus the existing one and start a parallel poll
+/// loop against it instead of close-and-rebuild — closing the window
+/// would race the first invocation's poll and surface a confusing
+/// "closed before sign-in completed" error for the second click.
 pub async fn login_via_webview(app: AppHandle) -> Result<ChaturbateAuth> {
-    if let Some(existing) = app.get_webview_window(LOGIN_WINDOW_LABEL) {
-        let _ = existing.close();
-    }
-    let profile_dir = webview_profile_dir()?;
-    let window = WebviewWindowBuilder::new(
-        &app,
-        LOGIN_WINDOW_LABEL,
-        WebviewUrl::External(LOGIN_URL.parse()?),
-    )
-    .title("Sign in to Chaturbate")
-    .inner_size(480.0, 720.0)
-    .min_inner_size(400.0, 600.0)
-    .data_directory(profile_dir)
-    .build()
-    .context("opening Chaturbate login window")?;
+    let initial_logged_in_at = load()?.map(|s| s.logged_in_at);
+
+    let window = if let Some(existing) = app.get_webview_window(LOGIN_WINDOW_LABEL) {
+        let _ = existing.set_focus();
+        existing
+    } else {
+        let profile_dir = webview_profile_dir()?;
+        let main = app.get_webview_window("main");
+        // Reveal-after-paint pattern (matches embed.rs): keep the window
+        // hidden behind a zinc-950 background until the login page has
+        // painted, so the user never sees a white flash.
+        let zinc_950 = Color(9, 9, 11, 255);
+        let mut builder = WebviewWindowBuilder::new(
+            &app,
+            LOGIN_WINDOW_LABEL,
+            WebviewUrl::External(LOGIN_URL.parse()?),
+        )
+        .title("Sign in to Chaturbate")
+        .inner_size(480.0, 720.0)
+        .min_inner_size(400.0, 600.0)
+        .data_directory(profile_dir)
+        .visible(false)
+        .background_color(zinc_950)
+        .on_page_load(|w: WebviewWindow, payload: PageLoadPayload<'_>| {
+            if matches!(payload.event(), PageLoadEvent::Finished) {
+                let _ = w.show();
+            }
+        });
+        if let Some(main) = main.as_ref() {
+            // Parent to main so KWin keeps stacking and focus consistent
+            // (no `always_on_top` needed; transient_for handles it).
+            builder = builder
+                .transient_for(main)
+                .context("transient_for(main) on Chaturbate login window")?;
+        }
+        builder.build().context("opening Chaturbate login window")?
+    };
 
     let site: url::Url = SITE_URL.parse()?;
     let started = std::time::Instant::now();
 
     loop {
-        if started.elapsed() > LOGIN_TIMEOUT {
-            let _ = window.close();
-            anyhow::bail!("Chaturbate login timed out after 5 minutes");
-        }
-        if app.get_webview_window(LOGIN_WINDOW_LABEL).is_none() {
-            anyhow::bail!("login window closed before sign-in completed");
-        }
-
+        // Cookie check first so a successful poll wins even if the window
+        // closed in the same tick (race with concurrent invocations or
+        // the WM closing the window after success).
         match window.cookies_for_url(site.clone()) {
             Ok(jar) => {
                 let signed_in = jar
@@ -155,6 +180,26 @@ pub async fn login_via_webview(app: AppHandle) -> Result<ChaturbateAuth> {
             }
             Err(e) => log::debug!("cookies_for_url(chaturbate.com): {e}"),
         }
+
+        if app.get_webview_window(LOGIN_WINDOW_LABEL).is_none() {
+            // Window closed. Two reasons we might still want to return Ok:
+            // a concurrent invocation already wrote a fresher stamp, or
+            // the user signed in via another tab/path that bumped the
+            // stamp out from under us. Compare logged_in_at to what was
+            // there when we started.
+            if let Ok(Some(stamp)) = load() {
+                if Some(stamp.logged_in_at) != initial_logged_in_at {
+                    return Ok(stamp);
+                }
+            }
+            anyhow::bail!("login window closed before sign-in completed");
+        }
+
+        if started.elapsed() > LOGIN_TIMEOUT {
+            let _ = window.close();
+            anyhow::bail!("Chaturbate login timed out after 5 minutes");
+        }
+
         tokio::time::sleep(POLL_INTERVAL).await;
     }
 }
