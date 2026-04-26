@@ -51,6 +51,13 @@ pub struct Livestream {
     pub profile_image_url: Option<String>,
     pub last_checked: Option<DateTime<Utc>>,
     pub error: Option<String>,
+    /// YouTube-only: the live video id. When present on a YouTube
+    /// Livestream, `unique_key` includes a trailing `:{video_id}`
+    /// segment to distinguish multiple concurrent streams from the
+    /// same channel. `None` for non-YT platforms and offline YT
+    /// placeholders.
+    #[serde(default)]
+    pub video_id: Option<String>,
     /// Mirrored from Channel so the frontend can filter to favorites without
     /// an extra round-trip.
     #[serde(default)]
@@ -58,6 +65,18 @@ pub struct Livestream {
 }
 
 impl Livestream {
+    /// Build the unique_key from current platform/channel_id/video_id.
+    /// Call this whenever video_id changes after construction.
+    pub fn recompute_unique_key(&mut self) {
+        self.unique_key = format!("{}:{}", self.platform.as_str(), self.channel_id);
+        if matches!(self.platform, Platform::Youtube) {
+            if let Some(vid) = &self.video_id {
+                self.unique_key.push(':');
+                self.unique_key.push_str(vid);
+            }
+        }
+    }
+
     pub fn offline_for(channel: &Channel, profile_image_url: Option<String>) -> Self {
         Self {
             unique_key: channel.unique_key(),
@@ -252,3 +271,47 @@ impl ChannelStore {
 }
 
 pub type SharedStore = Arc<Mutex<ChannelStore>>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::platforms::Platform;
+
+    fn test_channel(platform: Platform, channel_id: &str) -> Channel {
+        Channel {
+            platform,
+            channel_id: channel_id.to_string(),
+            display_name: channel_id.to_string(),
+            favorite: false,
+            dont_notify: false,
+            auto_play: false,
+            added_at: None,
+        }
+    }
+
+    #[test]
+    fn livestream_unique_key_no_video_id_matches_channel() {
+        let ch = test_channel(Platform::Youtube, "UC123");
+        let ls = Livestream::offline_for(&ch, None);
+        assert_eq!(ls.unique_key, "youtube:UC123");
+        assert!(ls.video_id.is_none());
+    }
+
+    #[test]
+    fn livestream_unique_key_with_video_id_appends_suffix() {
+        let ch = test_channel(Platform::Youtube, "UC123");
+        let mut ls = Livestream::offline_for(&ch, None);
+        ls.video_id = Some("vidABC".to_string());
+        ls.recompute_unique_key();
+        assert_eq!(ls.unique_key, "youtube:UC123:vidABC");
+    }
+
+    #[test]
+    fn livestream_unique_key_video_id_only_affects_youtube() {
+        let ch = test_channel(Platform::Twitch, "ninja");
+        let mut ls = Livestream::offline_for(&ch, None);
+        ls.video_id = Some("anything".to_string());
+        ls.recompute_unique_key();
+        assert_eq!(ls.unique_key, "twitch:ninja");
+    }
+}
