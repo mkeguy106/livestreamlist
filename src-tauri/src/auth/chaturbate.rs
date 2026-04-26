@@ -27,6 +27,14 @@ const SITE_URL: &str = "https://chaturbate.com/";
 const POLL_INTERVAL: Duration = Duration::from_millis(750);
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(300);
 
+/// Default WebKitGTK reports a Safari/WebKit user-agent. Chaturbate's
+/// onboarding logic shows different first-visit modals depending on the
+/// browser family — WebKit gets the "Find exactly what you're into"
+/// search tour over the login form, Chromium does not. Qt's QWebEngine
+/// is Chromium-based and gets the cleaner flow. Spoof a recent Chrome
+/// UA so the login window matches Qt's behaviour.
+const LOGIN_USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36";
+
 /// Injected on every page load. Two jobs:
 ///
 /// 1. Replace the missing native chrome (we run with `decorations(false)`
@@ -92,7 +100,19 @@ const POST_LOAD_JS: &str = r##"
             if (b.id === 'lsl-titlebar-close') return;
             try { b.click(); } catch(e){}
         });
-        if (++tries < 12) setTimeout(dismissModals, 250);
+        // Text-based fallback for tour/onboarding modals (the "Find
+        // exactly what you're into" search tour uses a Done button with
+        // no aria-label or close-class). Match common dismiss verbs.
+        var dismissText = ['done', 'got it', 'skip', 'skip tour',
+                           'no thanks', 'maybe later', 'close'];
+        document.querySelectorAll('button, a[role="button"]').forEach(function(b){
+            if (b.id === 'lsl-titlebar-close') return;
+            var t = (b.textContent || '').trim().toLowerCase();
+            if (dismissText.indexOf(t) !== -1) {
+                try { b.click(); } catch(e){}
+            }
+        });
+        if (++tries < 16) setTimeout(dismissModals, 250);
     }
     dismissModals();
 })();
@@ -212,6 +232,7 @@ pub async fn login_via_webview(app: AppHandle) -> Result<ChaturbateAuth> {
         .inner_size(480.0, 752.0)
         .min_inner_size(400.0, 632.0)
         .data_directory(profile_dir)
+        .user_agent(LOGIN_USER_AGENT)
         .decorations(false)
         .visible(false)
         .background_color(zinc_950)
