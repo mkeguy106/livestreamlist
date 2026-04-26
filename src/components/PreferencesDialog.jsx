@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useAuth } from '../hooks/useAuth.jsx';
 import { usePreferences } from '../hooks/usePreferences.jsx';
+import { formatRelative } from '../utils/format.js';
 import {
   importTwitchFollows,
   listBlockedUsers,
@@ -123,10 +124,24 @@ export default function PreferencesDialog({ open, onClose }) {
 }
 
 function AccountsTab() {
-  const { twitch, kick, youtube, login, logout, loginYoutubePaste, refresh } = useAuth();
+  const { twitch, kick, youtube, chaturbate, login, logout, loginYoutubePaste, refresh } = useAuth();
   const { settings, patch } = usePreferences();
   const [importState, setImportState] = useState(null); // {running, result, error}
   const [ytLoginRunning, setYtLoginRunning] = useState(false);
+  const [cbLoginRunning, setCbLoginRunning] = useState(false);
+  const [cbError, setCbError] = useState(null);
+
+  const runChaturbateLogin = async () => {
+    setCbError(null);
+    setCbLoginRunning(true);
+    try {
+      await login('chaturbate');
+    } catch (e) {
+      setCbError(String(e?.message ?? e));
+    } finally {
+      setCbLoginRunning(false);
+    }
+  };
   const [ytPasteOpen, setYtPasteOpen] = useState(false);
   const [ytError, setYtError] = useState(null);
   const [ytAdvanced, setYtAdvanced] = useState(false);
@@ -324,6 +339,49 @@ function AccountsTab() {
         )}
         {ytError && (
           <div style={{ marginTop: 6, fontSize: 'var(--t-11)', color: '#f87171' }}>{ytError}</div>
+        )}
+      </Row>
+
+      <Row
+        label="Chaturbate"
+        hint={
+          chaturbate?.signed_in
+            ? `Signed in · verified ${formatRelative(chaturbate.last_verified_at)}`
+            : 'Sign in to chat as yourself'
+        }
+      >
+        {chaturbate?.signed_in ? (
+          <div style={{ display: 'flex', gap: 6 }}>
+            <button
+              type="button"
+              className="rx-btn rx-btn-ghost"
+              onClick={runChaturbateLogin}
+              disabled={cbLoginRunning}
+            >
+              {cbLoginRunning ? 'Signing in…' : 'Sign in again'}
+            </button>
+            <button
+              type="button"
+              className="rx-btn rx-btn-ghost"
+              onClick={() => logout('chaturbate')}
+            >
+              Log out
+            </button>
+          </div>
+        ) : (
+          <button
+            type="button"
+            className="rx-btn"
+            onClick={runChaturbateLogin}
+            disabled={cbLoginRunning}
+          >
+            {cbLoginRunning ? 'Waiting on Chaturbate…' : 'Sign in to Chaturbate'}
+          </button>
+        )}
+        {cbError && (
+          <div style={{ marginTop: 6, fontSize: 'var(--t-11)', color: 'var(--live)' }}>
+            {cbError}
+          </div>
         )}
       </Row>
 
