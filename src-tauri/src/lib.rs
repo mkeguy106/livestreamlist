@@ -8,6 +8,7 @@ mod channels;
 mod chat;
 mod config;
 mod embed;
+mod login_popup;
 mod notify;
 mod platforms;
 mod player;
@@ -433,6 +434,40 @@ fn embed_set_visible(embeds: State<'_, Arc<embed::EmbedManager>>, visible: bool)
     embeds.set_visible_all(visible);
 }
 
+#[tauri::command]
+fn login_popup_open(
+    app: tauri::AppHandle,
+    popup: State<'_, Arc<login_popup::LoginPopupManager>>,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+) -> Result<(), String> {
+    popup.open(&app, x, y, width, height).map_err(err_string)
+}
+
+#[tauri::command]
+fn login_popup_close(popup: State<'_, Arc<login_popup::LoginPopupManager>>) {
+    popup.close();
+}
+
+#[tauri::command]
+fn login_popup_resize(
+    popup: State<'_, Arc<login_popup::LoginPopupManager>>,
+    width: f64,
+    height: f64,
+) -> Result<(), String> {
+    popup.resize(width, height).map_err(err_string)
+}
+
+/// Broadcast a no-payload "auth state changed" event so every webview
+/// (main + login popup) can re-pull `auth_status`. Logged but not fatal.
+fn broadcast_auth_changed(app: &tauri::AppHandle) {
+    if let Err(e) = app.emit("auth:changed", ()) {
+        log::warn!("emit auth:changed: {e:#}");
+    }
+}
+
 
 #[tauri::command]
 fn open_url(url: String) -> Result<(), String> {
@@ -707,6 +742,7 @@ async fn auth_status(state: State<'_, AppState>) -> Result<AuthStatus, String> {
 
 #[tauri::command]
 async fn twitch_login(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     chat: State<'_, Arc<ChatManager>>,
 ) -> Result<auth::twitch::TwitchIdentity, String> {
@@ -714,36 +750,43 @@ async fn twitch_login(
     // Auth state changed — reconnect any live Twitch chat tasks so they
     // pick up the new credentials.
     chat.reconnect_platform(Platform::Twitch, &state.store);
+    broadcast_auth_changed(&app);
     Ok(identity)
 }
 
 #[tauri::command]
 fn twitch_logout(
+    app: tauri::AppHandle,
     chat: State<'_, Arc<ChatManager>>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     auth::twitch::logout().map_err(err_string)?;
     chat.reconnect_platform(Platform::Twitch, &state.store);
+    broadcast_auth_changed(&app);
     Ok(())
 }
 
 #[tauri::command]
 async fn kick_login(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     chat: State<'_, Arc<ChatManager>>,
 ) -> Result<auth::kick::KickIdentity, String> {
     let identity = auth::kick::login(&state.http).await.map_err(err_string)?;
     chat.reconnect_platform(Platform::Kick, &state.store);
+    broadcast_auth_changed(&app);
     Ok(identity)
 }
 
 #[tauri::command]
 fn kick_logout(
+    app: tauri::AppHandle,
     chat: State<'_, Arc<ChatManager>>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     auth::kick::logout().map_err(err_string)?;
     chat.reconnect_platform(Platform::Kick, &state.store);
+    broadcast_auth_changed(&app);
     Ok(())
 }
 
@@ -759,6 +802,7 @@ async fn youtube_login(
     if let Err(e) = auth::youtube::inject_into_main_webview(&app) {
         log::warn!("post-login cookie injection failed: {e:#}");
     }
+    broadcast_auth_changed(&app);
     Ok(true)
 }
 
@@ -774,30 +818,38 @@ fn youtube_login_paste(
     if let Err(e) = auth::youtube::inject_into_main_webview(&app) {
         log::warn!("post-login cookie injection failed: {e:#}");
     }
+    broadcast_auth_changed(&app);
     Ok(true)
 }
 
 #[tauri::command]
-fn youtube_logout(state: State<'_, AppState>) -> Result<(), String> {
+fn youtube_logout(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
     auth::youtube::clear().map_err(err_string)?;
     clear_youtube_browser_pref(&state);
+    broadcast_auth_changed(&app);
     Ok(())
 }
 
 #[tauri::command]
 async fn chaturbate_login(app: tauri::AppHandle) -> Result<bool, String> {
-    auth::chaturbate::login_via_webview(app)
+    auth::chaturbate::login_via_webview(app.clone())
         .await
         .map_err(err_string)?;
+    broadcast_auth_changed(&app);
     Ok(true)
 }
 
 #[tauri::command]
 fn chaturbate_logout(
+    app: tauri::AppHandle,
     embeds: State<'_, Arc<embed::EmbedManager>>,
 ) -> Result<(), String> {
     embeds.unmount_platform(Platform::Chaturbate);
     auth::chaturbate::clear().map_err(err_string)?;
+    broadcast_auth_changed(&app);
     Ok(())
 }
 
@@ -953,6 +1005,8 @@ pub fn run() {
             app.manage(player_mgr);
             let embed_mgr = embed::EmbedManager::new();
             app.manage(embed_mgr);
+            let login_popup_mgr = login_popup::LoginPopupManager::new();
+            app.manage(login_popup_mgr);
             // No focus-tracking hide: `transient_for(main)` makes the WM
             // stack the embed above the main window, so when the user
             // switches to another app it naturally goes behind. Manual
@@ -988,6 +1042,9 @@ pub fn run() {
             embed_position,
             embed_unmount,
             embed_set_visible,
+            login_popup_open,
+            login_popup_close,
+            login_popup_resize,
             list_emotes,
             replay_chat_history,
             get_settings,

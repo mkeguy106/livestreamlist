@@ -81,6 +81,29 @@ export function AuthProvider({ children }) {
     };
   }, [refresh]);
 
+  // Cross-window auth sync. Rust broadcasts `auth:changed` after every
+  // login/logout IPC; both the main window and the login popup listen
+  // here so a sign-in performed in one window propagates to the other.
+  useEffect(() => {
+    let unlisten = null;
+    let cancelled = false;
+    listenEvent('auth:changed', () => {
+      refresh();
+    })
+      .then((u) => {
+        if (cancelled) {
+          u?.();
+        } else {
+          unlisten = u;
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+      if (unlisten) unlisten();
+    };
+  }, [refresh]);
+
   const login = useCallback(async (platform) => {
     try {
       if (platform === 'youtube') {

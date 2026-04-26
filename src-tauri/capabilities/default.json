@@ -3,7 +3,8 @@
   "identifier": "default",
   "description": "default app permissions",
   "windows": [
-    "main"
+    "main",
+    "login-popup"
   ],
   "permissions": [
     "core:default",

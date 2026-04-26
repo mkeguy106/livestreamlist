@@ -1,5 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { useAuth } from '../hooks/useAuth.jsx';
+import { listenEvent, loginPopupClose, loginPopupOpen } from '../ipc.js';
+
+const inTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+const POPUP_W_CSS = 280;
+// Close-to-resting initial height; LoginPopupRoot's ResizeObserver
+// snaps to exact content height immediately after first paint.
+const POPUP_H_CSS = 130;
 
 /**
  * Titlebar account widget. Two display modes:
@@ -9,19 +16,47 @@ import { useAuth } from '../hooks/useAuth.jsx';
  *     chiclets, each with a small green dot when signed in or red when
  *     not. The whole row is one click target that opens the dropdown.
  *
- * The dropdown lists all four platforms (Twitch, Kick, YouTube,
- * Chaturbate) with per-row login/logout actions. Stays open during a
- * login so OAuth-callback errors surface inline.
+ * Inside Tauri the dropdown is a separate borderless transient_for
+ * WebviewWindow (`login_popup` Rust module) so it stacks above the
+ * YouTube/Chaturbate embed window. In a plain-browser dev session
+ * (`!inTauri`) the dropdown renders inline as a plain HTML overlay so the
+ * UI is still iterable without the desktop shell.
  */
 export default function LoginButton() {
   const { loading, twitch, kick, youtube, chaturbate, login, logout, error } = useAuth();
   const [open, setOpen] = useState(false);
   const [busyPlatform, setBusyPlatform] = useState(null);
   const containerRef = useRef(null);
+  const buttonRef = useRef(null);
+  // Mirror of `open` for sync access — rapid back-to-back chiclet
+  // clicks would otherwise both read the stale `open` from the same
+  // render closure and miss the toggle.
+  const openRef = useRef(false);
 
-  // Close the dropdown on outside click.
+  // Reset the local "open" flag when the Tauri popup closes (focus loss,
+  // explicit close IPC, etc.) so the next chiclet click re-opens it.
   useEffect(() => {
-    if (!open) return;
+    if (!inTauri) return;
+    let unlisten = null;
+    let cancelled = false;
+    listenEvent('login-popup:closed', () => {
+      openRef.current = false;
+      setOpen(false);
+    })
+      .then((u) => {
+        if (cancelled) u?.();
+        else unlisten = u;
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+      if (unlisten) unlisten();
+    };
+  }, []);
+
+  // Inline dropdown (browser dev only) — close on outside click.
+  useEffect(() => {
+    if (inTauri || !open) return;
     const onDown = (e) => {
       if (containerRef.current && !containerRef.current.contains(e.target)) {
         setOpen(false);
@@ -30,6 +65,52 @@ export default function LoginButton() {
     document.addEventListener('mousedown', onDown);
     return () => document.removeEventListener('mousedown', onDown);
   }, [open]);
+
+  const openPopup = async () => {
+    // Use the ref so rapid clicks toggle correctly without waiting for
+    // a re-render to flow `open` back to the closure.
+    if (openRef.current) {
+      openRef.current = false;
+      setOpen(false);
+      if (inTauri) loginPopupClose().catch(() => {});
+      return;
+    }
+    if (!inTauri) {
+      openRef.current = true;
+      setOpen(true);
+      return;
+    }
+    const btn = buttonRef.current;
+    if (!btn) return;
+    try {
+      const r = btn.getBoundingClientRect();
+      const dpr = window.devicePixelRatio || 1;
+      const winApi = await import('@tauri-apps/api/window');
+      const outer = await winApi.getCurrentWindow().outerPosition();
+      // Right-align with the chiclet button; sit just below it. No
+      // multi-monitor screen-bounds clamp — `window.screen.availWidth`
+      // returns the PRIMARY monitor on most platforms, so clamping yanks
+      // the popup off whichever monitor the main window is actually on.
+      const w = POPUP_W_CSS * dpr;
+      const h = POPUP_H_CSS * dpr;
+      const x = outer.x + (r.right - POPUP_W_CSS) * dpr;
+      const y = outer.y + (r.bottom + 4) * dpr;
+      openRef.current = true;
+      setOpen(true);
+      await loginPopupOpen(x, y, w, h);
+    } catch (e) {
+      console.error('login_popup_open', e);
+      openRef.current = false;
+      setOpen(false);
+    }
+  };
+
+  // Close the popup on unmount so it doesn't outlive the main window.
+  useEffect(() => {
+    return () => {
+      if (inTauri) loginPopupClose().catch(() => {});
+    };
+  }, []);
 
   if (loading) {
     return (
@@ -86,8 +167,9 @@ export default function LoginButton() {
     <div ref={containerRef} style={{ position: 'relative' }}>
       {anySignedIn ? (
         <button
+          ref={buttonRef}
           type="button"
-          onClick={() => setOpen((v) => !v)}
+          onClick={openPopup}
           title={error ?? 'Accounts'}
           style={{
             display: 'flex',
@@ -111,16 +193,17 @@ export default function LoginButton() {
         </button>
       ) : (
         <button
+          ref={buttonRef}
           type="button"
           className="rx-btn"
-          onClick={() => setOpen((v) => !v)}
+          onClick={openPopup}
           title={error ?? 'Accounts'}
           style={{ padding: '2px 8px', fontSize: 10 }}
         >
           Log in
         </button>
       )}
-      {open && (
+      {!inTauri && open && (
         <div
           onClick={(e) => e.stopPropagation()}
           style={{

@@ -33,6 +33,11 @@ export const embedPosition = (uniqueKey, x, y, width, height) =>
   invoke('embed_position', { uniqueKey, x, y, width, height });
 export const embedUnmount = (uniqueKey) => invoke('embed_unmount', { uniqueKey });
 export const embedSetVisible = (visible) => invoke('embed_set_visible', { visible });
+export const loginPopupOpen = (x, y, width, height) =>
+  invoke('login_popup_open', { x, y, width, height });
+export const loginPopupClose = () => invoke('login_popup_close');
+export const loginPopupResize = (width, height) =>
+  invoke('login_popup_resize', { width, height });
 export const listEmotes = (uniqueKey) => invoke('list_emotes', { uniqueKey });
 export const replayChatHistory = (uniqueKey, limit = 100) =>
   invoke('replay_chat_history', { uniqueKey, limit });

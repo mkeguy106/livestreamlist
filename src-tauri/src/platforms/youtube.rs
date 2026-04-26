@@ -8,15 +8,53 @@
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::time::Duration;
+use std::sync::OnceLock;
+use std::time::{Duration, Instant};
 use tokio::process::Command;
 use tokio::time::timeout;
 
 const TIMEOUT: Duration = Duration::from_secs(20);
 
 const HTTP_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// When YouTube hands back a rate-limit error, every subsequent yt-dlp
+/// invocation lengthens the ban — refreshes within this window are
+/// skipped entirely. yt-dlp's own message says "up to an hour"; 30 min
+/// is a conservative midpoint that keeps the app responsive once the
+/// throttle clears without risking a re-trigger.
+const RATE_LIMIT_COOLDOWN: Duration = Duration::from_secs(30 * 60);
+
+static RATE_LIMITED_UNTIL: OnceLock<Mutex<Option<Instant>>> = OnceLock::new();
+
+fn rate_limit_state() -> &'static Mutex<Option<Instant>> {
+    RATE_LIMITED_UNTIL.get_or_init(|| Mutex::new(None))
+}
+
+/// True when a previous refresh tripped YouTube's rate-limit and the
+/// cooldown is still in effect. `refresh.rs` checks this to skip the
+/// whole YouTube fan-out instead of piling more failed requests on top.
+pub fn is_rate_limited() -> bool {
+    rate_limit_state()
+        .lock()
+        .map(|deadline| Instant::now() < deadline)
+        .unwrap_or(false)
+}
+
+fn mark_rate_limited() {
+    *rate_limit_state().lock() = Some(Instant::now() + RATE_LIMIT_COOLDOWN);
+    log::warn!(
+        "YouTube rate-limit detected — pausing YT refreshes for {} min",
+        RATE_LIMIT_COOLDOWN.as_secs() / 60
+    );
+}
+
+fn stderr_says_rate_limited(stderr: &str) -> bool {
+    let lower = stderr.to_ascii_lowercase();
+    lower.contains("rate-limit") || lower.contains("rate limit")
+}
 
 const SCRAPE_HEADERS: &[(&str, &str)] = &[
     (
@@ -174,7 +212,12 @@ async fn fetch_primary_via_ytdlp(
         .arg("--no-download")
         .arg("--no-warnings")
         .arg("--skip-download")
-        .arg("--no-playlist");
+        .arg("--no-playlist")
+        // Spread yt-dlp's internal request burst over time so a single
+        // invocation doesn't fire 4-5 YouTube hits in a single TCP
+        // window. yt-dlp itself recommends this in the rate-limit error.
+        .arg("--sleep-requests")
+        .arg("1");
     for arg in crate::auth::youtube::yt_dlp_cookie_args(cookies_browser) {
         cmd.arg(arg);
     }
@@ -199,6 +242,9 @@ async fn fetch_primary_via_ytdlp(
                 display_name: channel_id.to_string(),
                 streams: Vec::new(),
             });
+        }
+        if stderr_says_rate_limited(&stderr) {
+            mark_rate_limited();
         }
         anyhow::bail!("yt-dlp failed: {stderr}");
     }
