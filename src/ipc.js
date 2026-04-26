@@ -45,6 +45,8 @@ export const youtubeLogin = () => invoke('youtube_login');
 export const youtubeLoginPaste = (text) => invoke('youtube_login_paste', { text });
 export const youtubeLogout = () => invoke('youtube_logout');
 export const youtubeDetectBrowsers = () => invoke('youtube_detect_browsers');
+export const chaturbateLogin = () => invoke('chaturbate_login');
+export const chaturbateLogout = () => invoke('chaturbate_logout');
 export const importTwitchFollows = () => invoke('import_twitch_follows');
 export const getSettings = () => invoke('get_settings');
 export const updateSettings = (patch) => invoke('update_settings', { patch });
@@ -94,7 +96,7 @@ const MOCK_LIVE = {
 };
 
 let mockChannels = [...MOCK_CHANNELS];
-let mockAuth = { twitch: null, kick: null };
+let mockAuth = { twitch: null, kick: null, chaturbate: null };
 const mockPlaying = new Set();
 let mockSettings = {
   general: { refresh_interval_seconds: 60, notify_on_live: true, close_to_tray: false },
@@ -216,7 +218,12 @@ async function mockInvoke(name, args) {
         { name: 'peepoClap',url_1x: '', url_2x: null, url_4x: null, animated: false },
       ];
     case 'auth_status':
-      return mockAuth;
+      return {
+        ...mockAuth,
+        chaturbate: mockAuth.chaturbate
+          ? mockAuth.chaturbate
+          : { signed_in: false, last_verified_at: null },
+      };
     case 'twitch_login':
       mockAuth = { ...mockAuth, twitch: { login: 'mock_user', user_id: '0', scopes: ['chat:edit'] } };
       return mockAuth.twitch;
@@ -228,6 +235,15 @@ async function mockInvoke(name, args) {
       return mockAuth.kick;
     case 'kick_logout':
       mockAuth = { ...mockAuth, kick: null };
+      return null;
+    case 'chaturbate_login':
+      mockAuth = {
+        ...mockAuth,
+        chaturbate: { signed_in: true, last_verified_at: new Date().toISOString() },
+      };
+      return mockAuth.chaturbate;
+    case 'chaturbate_logout':
+      mockAuth = { ...mockAuth, chaturbate: null };
       return null;
     case 'import_twitch_follows':
       return { added: 0, skipped: 0, total_seen: 0 };
