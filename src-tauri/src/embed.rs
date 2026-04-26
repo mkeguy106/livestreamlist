@@ -24,7 +24,6 @@ use tauri::{
 };
 
 use crate::channels::SharedStore;
-use crate::config;
 use crate::platforms::Platform;
 
 const YT_THEME_CSS: &str = r#"
