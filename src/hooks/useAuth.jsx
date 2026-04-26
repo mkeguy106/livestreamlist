@@ -1,6 +1,8 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import {
   authStatus,
+  chaturbateLogin,
+  chaturbateLogout,
   kickLogin,
   kickLogout,
   twitchLogin,
@@ -8,6 +10,7 @@ import {
   youtubeLogin,
   youtubeLoginPaste,
   youtubeLogout,
+  listenEvent,
 } from '../ipc.js';
 
 /**
@@ -24,6 +27,7 @@ export function AuthProvider({ children }) {
     twitch: null,
     kick: null,
     youtube: { browser: null, has_paste: false },
+    chaturbate: { signed_in: false, last_verified_at: null },
     error: null,
   });
 
@@ -35,6 +39,7 @@ export function AuthProvider({ children }) {
         twitch: data?.twitch ?? null,
         kick: data?.kick ?? null,
         youtube: data?.youtube ?? { browser: null, has_paste: false },
+        chaturbate: data?.chaturbate ?? { signed_in: false, last_verified_at: null },
         error: null,
       });
     } catch (e) {
@@ -46,10 +51,43 @@ export function AuthProvider({ children }) {
     refresh();
   }, [refresh]);
 
+  useEffect(() => {
+    let unlisten = null;
+    let cancelled = false;
+    listenEvent('chat:auth:chaturbate', (payload) => {
+      setState((s) => ({
+        ...s,
+        chaturbate: {
+          ...s.chaturbate,
+          signed_in: !!payload?.signed_in,
+          // last_verified_at is owned by the stamp file; refresh on next
+          // auth_status pull picks it up. Don't synthesise here.
+        },
+      }));
+    })
+      .then((u) => {
+        if (cancelled) {
+          u?.();
+        } else {
+          unlisten = u;
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+      if (unlisten) unlisten();
+    };
+  }, []);
+
   const login = useCallback(async (platform) => {
     try {
       if (platform === 'youtube') {
         await youtubeLogin();
+        await refresh();
+        return;
+      }
+      if (platform === 'chaturbate') {
+        await chaturbateLogin();
         await refresh();
         return;
       }
@@ -66,6 +104,10 @@ export function AuthProvider({ children }) {
       if (platform === 'kick') await kickLogout();
       else if (platform === 'youtube') {
         await youtubeLogout();
+        await refresh();
+        return;
+      } else if (platform === 'chaturbate') {
+        await chaturbateLogout();
         await refresh();
         return;
       } else {
