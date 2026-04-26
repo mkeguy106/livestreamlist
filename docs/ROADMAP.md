@@ -36,7 +36,8 @@ Twitch is the hardest one and it's done; the others are straightforward ports.
 - [x] **YouTube live check** — subprocess `yt-dlp --dump-single-json --no-download` (matches Qt app). Parses `is_live`/`live_status`, `title`, `concurrent_view_count`, `release_timestamp`, thumbnail.
 - [x] **Kick live check** — `GET https://kick.com/api/v2/channels/{slug}`; maps `livestream` object to `Livestream` struct. `start_time` parsed as UTC (handles both naive `YYYY-MM-DD HH:MM:SS` and RFC3339).
 - [x] **Chaturbate live check** — individual `/api/chatvideocontext/{user}/` (public). Surfaces private/hidden/group as a non-error status so the UI can dim. Bulk follow endpoint deferred to Phase 2b (needs cookies).
-- [x] Wired into `refresh.rs` alongside Twitch with `YT_CONCURRENCY = 5` cap; Kick/Chaturbate are cheap REST and run unbounded `join_all`.
+- [x] Wired into `refresh.rs` alongside Twitch with `YT_CONCURRENCY = 2` cap (originally 5; lowered in PR #27 after observing YouTube rate-limiting); Kick/Chaturbate are cheap REST and run unbounded `join_all`.
+- [x] **YouTube rate-limit cooldown** (PR #27) — yt-dlp's "rate-limited for up to an hour" notice was firing on the 60 s refresh; added `--sleep-requests 1` to space each invocation's internal request burst, plus a process-global `RATE_LIMITED_UNTIL` (`OnceLock<Mutex<Option<Instant>>>` in `platforms/youtube.rs`) that flips for 30 min when stderr matches "rate-limit" / "rate limit". `fetch_youtube_all` checks `is_rate_limited()` first and short-circuits with a single warn log so an active throttle isn't deepened by retries. Cooldown is in-process; relaunching resets it.
 
 ---
 
@@ -114,6 +115,7 @@ These are small-scoped UX fixes that don't belong under a "phase" but should lan
   - **Sidebar collapse toggle**: a small chevron in the rail header collapses the list to a 48 px icon-only rail (first letter of each channel's display name inside a platform-accent chip, live-dot to its left). Click any icon to re-expand on hover, or hit the chevron again to pin-open. Persist as `settings.appearance.command_sidebar_collapsed`.
   - **Sidebar density**: Comfortable (current) / Compact — swaps row height between 40 px (comfortable) and 28 px (compact) and the font size between `--t-13` and `--t-12`. Useful when the user has a long channel list and wants to see more on screen without using a smaller overall UI scale.
   - All four settings live as CSS custom properties on `:root` so Command.jsx doesn't have to branch — the grid template and spacing read from them.
+- [x] **Login dropdown as separate WebviewWindow** (PR #27) — the inline titlebar dropdown was occluded by the YouTube/Chaturbate chat embed, which is itself a top-level `transient_for` window stacked above main. Replaced with a sibling borderless `transient_for` `WebviewWindow` (`login-popup` label, `WindowTypeHint::DropdownMenu` for KWin to stack it above the embed's `Utility`) loaded with the same React bundle; `LoginPopupRoot` renders the rows. Self-sizes via `ResizeObserver` → `login_popup_resize` IPC so the OS window tracks content height (rows + busy/error banners + future platforms). Cross-window auth state syncs via a global `auth:changed` event broadcast from each auth IPC. Dismissal is two-layered: the popup polls `document.hasFocus()` (300 ms grace, then 100 ms interval) AND the chiclet toggles via `openRef` so rapid double/triple-clicks can't strand a popup that never received focus. `resizable(true)` on the builder is required — KWin silently ignores `set_size` on non-resizable windows.
 - [ ] **UI scale setting (accessibility)** — slider under Preferences → Appearance → UI Scale, range 75% – 200% in 5% steps, default 100%. Needed for users with low vision and for 4K-at-small-physical-size setups where the default sizing is too tight. Implementation options to evaluate:
   - (a) `WebviewWindow::set_zoom()` — Tauri 2 exposes WebKit/Chromium's page zoom. Best typography quality; scales the whole webview uniformly including fonts, images, and layout.
   - (b) CSS-variable approach — add `:root { font-size: calc(16px * var(--ui-scale)); }` and express every sizing token in `rem`. More invasive (needs a sweep of `tokens.css` and the inline-styled components), but gives us pixel-perfect control and survives future webview runtime changes.
@@ -174,6 +176,8 @@ These are small-scoped UX fixes that don't belong under a "phase" but should lan
 ## Phase 6 — Columns layout redesign + in-app playback
 
 Today the Columns layout auto-populates from every live channel in the store. The target is a user-curated workspace: the user builds a column set, saves it as a named group, switches between groups, and actually watches the streams inline instead of shelling out to an external player.
+
+- [x] **Pause auto-populate Columns ahead of redesign** (PR #27) — replaced the live-column rendering with a "redesign in progress" placeholder so no `<ChatView>` instances mount in this layout. Clears the deck for the new group-management + inline-playback work without ripping the layout switcher out. Restore happens as part of the items below.
 
 ### Group management
 
