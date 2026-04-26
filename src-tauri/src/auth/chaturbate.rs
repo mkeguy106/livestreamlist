@@ -258,8 +258,14 @@ pub async fn login_via_webview(app: AppHandle) -> Result<ChaturbateAuth> {
             WebviewUrl::External(LOGIN_URL.parse()?),
         )
         .title("Sign in to Chaturbate")
-        .inner_size(480.0, 752.0)
-        .min_inner_size(400.0, 632.0)
+        // Chaturbate's responsive design switches to a mobile layout
+        // below ~768 CSS px and the login form becomes unusable
+        // (compressed nav row eats the form's vertical space). Sit
+        // comfortably above the breakpoint so the desktop layout
+        // renders. Matches what Qt's QWebEngine shows when the user
+        // resizes the login window to a comfortable working size.
+        .inner_size(800.0, 880.0)
+        .min_inner_size(780.0, 720.0)
         .data_directory(profile_dir)
         .decorations(false)
         .visible(false)
