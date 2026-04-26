@@ -27,59 +27,39 @@ const SITE_URL: &str = "https://chaturbate.com/";
 const POLL_INTERVAL: Duration = Duration::from_millis(750);
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(300);
 
-/// Default WebKitGTK reports a Safari/WebKit user-agent. Chaturbate's
-/// onboarding logic shows different first-visit modals depending on the
-/// browser family — WebKit gets the "Find exactly what you're into"
-/// search tour over the login form, Chromium does not. Qt's QWebEngine
-/// is Chromium-based and gets the cleaner flow. Spoof a recent Chrome
-/// UA so the login window matches Qt's behaviour.
-const LOGIN_USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36";
-
-/// Injected on every page load. Two jobs:
+/// Injected at DocumentCreation (before the page's own scripts run).
+/// Handles three jobs:
 ///
-/// 1. Replace the missing native chrome (we run with `decorations(false)`
-///    so the rest of the app's design stays consistent) with a thin
-///    zinc-950 titlebar + close button. The close button navigates to
-///    `about:blank`; the host-side poll loop watches for the scheme flip
-///    and bails the future as user-cancel.
+/// 1. Pre-set common onboarding-tour localStorage keys to "seen" so the
+///    site's first-visit tour modal doesn't bother to render.
 ///
-/// 2. Dismiss Chaturbate's age-gate AND the "Find exactly what you're
-///    into" tour modal that obscures the login form. Re-tries every
-///    250 ms for the first 3 s in case the modal mounts late.
-const POST_LOAD_JS: &str = r##"
+/// 2. Wait for `document.body`, then inject our zinc-950 titlebar +
+///    close button — restores chrome that we removed via
+///    `decorations(false)`. The close button navigates to `about:blank`;
+///    the host-side poll loop watches for the scheme flip and bails the
+///    future as user-cancel.
+///
+/// 3. Install a MutationObserver that continuously dismisses any modals
+///    that DO mount (age-gate, tour, etc.) — runs for the lifetime of
+///    the page, not just a fixed retry window. Cheap because the
+///    operations are all idempotent querySelector sweeps.
+///
+/// We deliberately do NOT spoof the user-agent — Cloudflare's bot-check
+/// fingerprints fail when our claimed UA (Chrome) doesn't match the
+/// engine's actual JS APIs (WebKit), trapping the user in an unsolvable
+/// challenge loop. Better to take the WebKit-flavoured tour and dismiss
+/// it client-side than to break Cloudflare entirely.
+const INIT_SCRIPT: &str = r##"
 (function(){
-    var bar = document.getElementById('lsl-titlebar');
-    if (!bar) {
-        var s = document.createElement('style');
-        s.id = 'lsl-titlebar-style';
-        s.textContent = "" +
-          "#lsl-titlebar{position:fixed;top:0;left:0;right:0;height:32px;" +
-          "background:rgb(9,9,11);color:rgb(228,228,231);" +
-          "font:12px -apple-system,'Segoe UI',system-ui,sans-serif;" +
-          "display:flex;align-items:center;justify-content:space-between;" +
-          "padding:0 12px;border-bottom:1px solid rgba(255,255,255,.06);" +
-          "z-index:2147483647;user-select:none}" +
-          "#lsl-titlebar-title{font-weight:500}" +
-          "#lsl-titlebar-close{background:transparent;border:0;color:inherit;" +
-          "cursor:pointer;padding:4px 10px;border-radius:4px;" +
-          "font-size:18px;line-height:1}" +
-          "#lsl-titlebar-close:hover{background:rgba(255,255,255,.08)}" +
-          "html{padding-top:32px !important;background:rgb(9,9,11) !important}";
-        document.head.appendChild(s);
-        bar = document.createElement('div');
-        bar.id = 'lsl-titlebar';
-        bar.innerHTML = '<span id="lsl-titlebar-title">Sign in to Chaturbate</span>' +
-                        '<button id="lsl-titlebar-close" type="button" aria-label="Close">×</button>';
-        (document.body || document.documentElement).insertBefore(
-            bar, (document.body || document.documentElement).firstChild
-        );
-        document.getElementById('lsl-titlebar-close').addEventListener('click', function(e){
-            e.preventDefault();
-            e.stopPropagation();
-            window.location.href = 'about:blank';
+    try {
+        ['searchTourSeen','hasSeenSearchTour','tour_complete','onboarding_done',
+         'searchOnboardingSeen','closedSearchTour','find_tour_seen','cb_tour_seen',
+         'landingTourSeen','introTourSeen','hasSeenTour'].forEach(function(k){
+            try { localStorage.setItem(k, 'true'); } catch(e){}
+            try { localStorage.setItem(k, '1'); } catch(e){}
         });
-    }
-    var tries = 0;
+    } catch(e){}
+
     function dismissModals(){
         var ageBtn = document.getElementById('close_entrance_terms');
         if (ageBtn) { try { ageBtn.click(); } catch(e){} }
@@ -89,8 +69,8 @@ const POST_LOAD_JS: &str = r##"
             ageOverlay.style.visibility = 'hidden';
         }
         try {
-            document.body.dispatchEvent(new KeyboardEvent('keydown', {
-                key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true
+            document.body && document.body.dispatchEvent(new KeyboardEvent('keydown', {
+                key:'Escape',code:'Escape',keyCode:27,which:27,bubbles:true
             }));
         } catch(e){}
         document.querySelectorAll(
@@ -100,21 +80,70 @@ const POST_LOAD_JS: &str = r##"
             if (b.id === 'lsl-titlebar-close') return;
             try { b.click(); } catch(e){}
         });
-        // Text-based fallback for tour/onboarding modals (the "Find
-        // exactly what you're into" search tour uses a Done button with
-        // no aria-label or close-class). Match common dismiss verbs.
-        var dismissText = ['done', 'got it', 'skip', 'skip tour',
-                           'no thanks', 'maybe later', 'close'];
-        document.querySelectorAll('button, a[role="button"]').forEach(function(b){
+        var verbs = ['done','got it','skip','skip tour','no thanks',
+                     'maybe later','close','dismiss','×','x'];
+        document.querySelectorAll('button, a[role="button"], div[role="button"]').forEach(function(b){
             if (b.id === 'lsl-titlebar-close') return;
             var t = (b.textContent || '').trim().toLowerCase();
-            if (dismissText.indexOf(t) !== -1) {
+            if (verbs.indexOf(t) !== -1) {
                 try { b.click(); } catch(e){}
             }
         });
-        if (++tries < 16) setTimeout(dismissModals, 250);
     }
-    dismissModals();
+
+    function injectTitlebar(){
+        if (document.getElementById('lsl-titlebar')) return;
+        if (!document.body) return;
+        if (!document.getElementById('lsl-titlebar-style')) {
+            var s = document.createElement('style');
+            s.id = 'lsl-titlebar-style';
+            s.textContent =
+              "#lsl-titlebar{position:fixed;top:0;left:0;right:0;height:32px;" +
+              "background:rgb(9,9,11);color:rgb(228,228,231);" +
+              "font:12px -apple-system,'Segoe UI',system-ui,sans-serif;" +
+              "display:flex;align-items:center;justify-content:space-between;" +
+              "padding:0 12px;border-bottom:1px solid rgba(255,255,255,.06);" +
+              "z-index:2147483647;user-select:none}" +
+              "#lsl-titlebar-title{font-weight:500}" +
+              "#lsl-titlebar-close{background:transparent;border:0;color:inherit;" +
+              "cursor:pointer;padding:4px 10px;border-radius:4px;" +
+              "font-size:18px;line-height:1}" +
+              "#lsl-titlebar-close:hover{background:rgba(255,255,255,.08)}" +
+              "html{padding-top:32px !important;background:rgb(9,9,11) !important}";
+            (document.head || document.documentElement).appendChild(s);
+        }
+        var bar = document.createElement('div');
+        bar.id = 'lsl-titlebar';
+        bar.innerHTML =
+          '<span id="lsl-titlebar-title">Sign in to Chaturbate</span>' +
+          '<button id="lsl-titlebar-close" type="button" aria-label="Close">×</button>';
+        document.body.insertBefore(bar, document.body.firstChild);
+        document.getElementById('lsl-titlebar-close').addEventListener('click', function(e){
+            e.preventDefault();
+            e.stopPropagation();
+            window.location.href = 'about:blank';
+        });
+    }
+
+    function startObserving(){
+        injectTitlebar();
+        dismissModals();
+        try {
+            new MutationObserver(function(){
+                if (!document.getElementById('lsl-titlebar')) injectTitlebar();
+                dismissModals();
+            }).observe(document.body, {childList:true, subtree:true});
+        } catch(e){}
+    }
+
+    if (document.body) {
+        startObserving();
+    } else {
+        var rootObs = new MutationObserver(function(_, obs){
+            if (document.body) { obs.disconnect(); startObserving(); }
+        });
+        rootObs.observe(document.documentElement, {childList:true});
+    }
 })();
 "##;
 
@@ -232,15 +261,13 @@ pub async fn login_via_webview(app: AppHandle) -> Result<ChaturbateAuth> {
         .inner_size(480.0, 752.0)
         .min_inner_size(400.0, 632.0)
         .data_directory(profile_dir)
-        .user_agent(LOGIN_USER_AGENT)
         .decorations(false)
         .visible(false)
         .background_color(zinc_950)
+        .initialization_script(INIT_SCRIPT)
+        .devtools(cfg!(debug_assertions))
         .on_page_load(|w: WebviewWindow, payload: PageLoadPayload<'_>| {
             if matches!(payload.event(), PageLoadEvent::Finished) {
-                if let Err(e) = w.eval(POST_LOAD_JS) {
-                    log::warn!("CB login post-load eval: {e:#}");
-                }
                 let _ = w.show();
             }
         });
