@@ -293,16 +293,16 @@ export default function App() {
         <div className="rx-tb-label rx-mono">{rightLabel}</div>
         {error && <div className="rx-tb-label rx-mono" style={{ color: '#f87171' }}>· refresh failed</div>}
         <div style={{ width: 8 }} />
+        <LoginButton />
         <button
           type="button"
           className="rx-btn rx-btn-ghost"
           onClick={() => setPrefsOpen(true)}
           title="Preferences (⌘,)"
-          style={{ padding: '2px 6px', fontSize: 10 }}
+          style={{ padding: '1px 6px', fontSize: 14 }}
         >
           ⚙
         </button>
-        <LoginButton />
         <div style={{ width: 4 }} />
         <WindowControls />
       </div>
