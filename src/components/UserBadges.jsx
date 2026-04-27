@@ -4,6 +4,8 @@
 // `is_mod` flag stamped server-side so cosmetic vs mod-authority badges
 // can be toggled independently in Preferences.
 
+import Tooltip from './Tooltip.jsx';
+
 export default function UserBadges({ badges, showCosmetic, showMod, size = 14 }) {
   const filtered = (badges ?? []).filter(
     (b) => (b.is_mod ? showMod : showCosmetic) && b.url,
@@ -19,15 +21,15 @@ export default function UserBadges({ badges, showCosmetic, showMod, size = 14 })
       }}
     >
       {filtered.map((b) => (
-        <img
-          key={`${b.id}-${b.url}`}
-          src={b.url}
-          alt=""
-          title={b.title || b.id}
-          width={size}
-          height={size}
-          style={{ display: 'block', flexShrink: 0 }}
-        />
+        <Tooltip key={`${b.id}-${b.url}`} placement="top" text={b.title || b.id}>
+          <img
+            src={b.url}
+            alt=""
+            width={size}
+            height={size}
+            style={{ display: 'block', flexShrink: 0 }}
+          />
+        </Tooltip>
       ))}
     </span>
   );

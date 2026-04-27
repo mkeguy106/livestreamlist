@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { chatOpenPopout, chatSend, listEmotes } from '../ipc.js';
+import Tooltip from './Tooltip.jsx';
 
 const MAX_LEN = 500;
 const SUGGESTION_CAP = 8;
@@ -173,15 +174,20 @@ export default function Composer({ channelKey, platform, auth, mentionCandidates
           maxLength={MAX_LEN}
         />
         {channelKey && (
-          <button
-            type="button"
-            className="rx-btn rx-btn-ghost"
-            onClick={() => chatOpenPopout(channelKey).catch((e) => setError(String(e?.message ?? e)))}
-            title={embedOnly ? 'Open the platform\'s native popout chat' : 'Open popout chat in a separate window'}
-            style={{ padding: '2px 6px', fontSize: 10 }}
+          <Tooltip
+            placement="top"
+            align="right"
+            text={embedOnly ? "Open the platform's native popout chat" : 'Open popout chat in a separate window'}
           >
-            Popout ↗
-          </button>
+            <button
+              type="button"
+              className="rx-btn rx-btn-ghost"
+              onClick={() => chatOpenPopout(channelKey).catch((e) => setError(String(e?.message ?? e)))}
+              style={{ padding: '2px 6px', fontSize: 10 }}
+            >
+              Popout ↗
+            </button>
+          </Tooltip>
         )}
         <span className="rx-mono" style={{ fontSize: 10, color: 'var(--zinc-600)', minWidth: 54, textAlign: 'right' }}>
           {text.length} / {MAX_LEN}

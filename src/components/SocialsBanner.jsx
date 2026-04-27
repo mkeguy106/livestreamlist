@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { listSocials, openUrl } from '../ipc.js';
+import Tooltip from './Tooltip.jsx';
 
 /**
  * Channel socials strip. Silently empty while fetching or when a channel
@@ -42,16 +43,16 @@ export default function SocialsBanner({ channelKey }) {
     >
       <span className="rx-chiclet" style={{ color: 'var(--zinc-600)' }}>SOCIALS</span>
       {links.map((l) => (
-        <button
-          key={l.id || `${l.name}:${l.url}`}
-          type="button"
-          className="rx-btn rx-btn-ghost"
-          onClick={() => openUrl(l.url).catch(() => {})}
-          style={{ padding: '1px 7px', fontSize: 10 }}
-          title={l.url}
-        >
-          {l.title || l.name}
-        </button>
+        <Tooltip key={l.id || `${l.name}:${l.url}`} wrap text={l.url}>
+          <button
+            type="button"
+            className="rx-btn rx-btn-ghost"
+            onClick={() => openUrl(l.url).catch(() => {})}
+            style={{ padding: '1px 7px', fontSize: 10 }}
+          >
+            {l.title || l.name}
+          </button>
+        </Tooltip>
       ))}
     </div>
   );

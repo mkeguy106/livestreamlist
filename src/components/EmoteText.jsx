@@ -1,3 +1,5 @@
+import Tooltip from './Tooltip.jsx';
+
 /**
  * Render chat text with emote byte-ranges substituted for <img> elements.
  * Ranges are byte offsets (as emitted by the Rust IRC parser). We slice the
@@ -34,24 +36,30 @@ export default function EmoteText({ text, ranges, size = 20 }) {
         seg.type === 'text' ? (
           <span key={i}>{seg.text}</span>
         ) : (
-          <img
+          <Tooltip
             key={i}
-            src={seg.range.url_1x}
-            srcSet={
-              seg.range.url_2x
-                ? `${seg.range.url_1x} 1x, ${seg.range.url_2x} 2x${seg.range.url_4x ? `, ${seg.range.url_4x} 4x` : ''}`
-                : undefined
-            }
-            alt={seg.range.name}
-            title={seg.range.name}
-            loading="lazy"
-            style={{
-              height: size,
-              width: 'auto',
+            placement="top"
+            text={seg.range.name}
+            wrapperStyle={{
               verticalAlign: -Math.round(size * 0.25),
               margin: '0 1px',
             }}
-          />
+          >
+            <img
+              src={seg.range.url_1x}
+              srcSet={
+                seg.range.url_2x
+                  ? `${seg.range.url_1x} 1x, ${seg.range.url_2x} 2x${seg.range.url_4x ? `, ${seg.range.url_4x} 4x` : ''}`
+                  : undefined
+              }
+              alt={seg.range.name}
+              loading="lazy"
+              style={{
+                height: size,
+                width: 'auto',
+              }}
+            />
+          </Tooltip>
         ),
       )}
     </span>

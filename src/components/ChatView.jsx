@@ -8,6 +8,7 @@ import Composer from './Composer.jsx';
 import ConversationDialog from './ConversationDialog.jsx';
 import EmbeddedChat from './EmbeddedChat.jsx';
 import EmoteText from './EmoteText.jsx';
+import Tooltip from './Tooltip.jsx';
 import UserBadges from './UserBadges.jsx';
 
 // Qt-style auto-scroll: when the user scrolls up, pause auto-follow for 5
@@ -514,10 +515,14 @@ function CompactRow({
 
 function ReplyContextRow({ reply, compact = false, onClick }) {
   return (
+    <Tooltip
+      placement="top"
+      wrap
+      text={`Click to view the thread — ${reply.parent_display_name}: ${reply.parent_text}`}
+    >
     <button
       type="button"
       onClick={onClick}
-      title={`Click to view the thread — ${reply.parent_display_name}: ${reply.parent_text}`}
       style={{
         all: 'unset',
         cursor: onClick ? 'pointer' : 'default',
@@ -545,6 +550,7 @@ function ReplyContextRow({ reply, compact = false, onClick }) {
         {reply.parent_text}
       </span>
     </button>
+    </Tooltip>
   );
 }
 

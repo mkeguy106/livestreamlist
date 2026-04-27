@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { getUserMessages } from '../ipc';
+import Tooltip from './Tooltip.jsx';
 
 export default function UserHistoryDialog({ open, channelKey, user, onClose }) {
   const [messages, setMessages] = useState([]);
@@ -67,20 +68,21 @@ export default function UserHistoryDialog({ open, channelKey, user, onClose }) {
             <div style={{ color: 'var(--zinc-500)' }}>No messages.</div>
           ) : (
             filtered.map(m => (
-              <div
-                key={m.id}
-                onClick={() => navigator.clipboard?.writeText(m.text)}
-                title="Click to copy"
-                style={{
-                  padding: '6px 0', borderBottom: 'var(--hair)',
-                  color: 'var(--zinc-300)', cursor: 'copy', fontSize: 12,
-                }}
-              >
-                <span style={{ color: 'var(--zinc-500)', marginRight: 8, fontSize: 11 }}>
-                  {new Date(m.timestamp).toLocaleTimeString()}
-                </span>
-                {m.text}
-              </div>
+              <Tooltip key={m.id} block placement="top" text="Click to copy">
+                <div
+                  onClick={() => navigator.clipboard?.writeText(m.text)}
+                  style={{
+                    padding: '6px 0', borderBottom: 'var(--hair)',
+                    color: 'var(--zinc-300)', cursor: 'copy', fontSize: 12,
+                    width: '100%',
+                  }}
+                >
+                  <span style={{ color: 'var(--zinc-500)', marginRight: 8, fontSize: 11 }}>
+                    {new Date(m.timestamp).toLocaleTimeString()}
+                  </span>
+                  {m.text}
+                </div>
+              </Tooltip>
             ))
           )}
         </div>

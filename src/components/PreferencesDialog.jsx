@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useAuth } from '../hooks/useAuth.jsx';
 import { usePreferences } from '../hooks/usePreferences.jsx';
 import { formatRelative } from '../utils/format.js';
+import Tooltip from './Tooltip.jsx';
 import {
   importTwitchFollows,
   listBlockedUsers,
@@ -299,15 +300,18 @@ function AccountsTab() {
                   {browsers.map((b) => {
                     const active = ytBrowser === b.id;
                     return (
-                      <button
+                      <Tooltip
                         key={b.id}
-                        type="button"
-                        className={active ? 'rx-btn' : 'rx-btn rx-btn-ghost'}
-                        onClick={() => setYtBrowser(active ? null : b.id)}
-                        title={active ? `Stop using ${b.label} cookies` : `Use ${b.label} cookies`}
+                        text={active ? `Stop using ${b.label} cookies` : `Use ${b.label} cookies`}
                       >
-                        {active ? `✓ ${b.label}` : b.label}
-                      </button>
+                        <button
+                          type="button"
+                          className={active ? 'rx-btn' : 'rx-btn rx-btn-ghost'}
+                          onClick={() => setYtBrowser(active ? null : b.id)}
+                        >
+                          {active ? `✓ ${b.label}` : b.label}
+                        </button>
+                      </Tooltip>
                     );
                   })}
                 </div>
