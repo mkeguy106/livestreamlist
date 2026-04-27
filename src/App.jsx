@@ -25,6 +25,15 @@ const LAYOUTS = [
   { id: 'focus',   label: 'Focus',   letter: 'C', Component: Focus   },
 ];
 const STORAGE_KEY = 'livestreamlist.layout';
+const SELECTED_STORAGE_KEY = 'livestreamlist.lastChannel';
+
+function loadInitialSelectedKey() {
+  try {
+    return localStorage.getItem(SELECTED_STORAGE_KEY) || null;
+  } catch {
+    return null;
+  }
+}
 
 function loadInitialLayout() {
   try {
@@ -38,7 +47,7 @@ export default function App() {
   const [layoutId, setLayoutId] = useState(loadInitialLayout);
   const [addOpen, setAddOpen] = useState(false);
   const [prefsOpen, setPrefsOpen] = useState(false);
-  const [selectedKey, setSelectedKey] = useState(null);
+  const [selectedKey, setSelectedKey] = useState(loadInitialSelectedKey);
 
   const { settings } = usePreferences();
   const hoverEnabled = settings?.chat?.user_card_hover !== false; // default true
@@ -172,13 +181,50 @@ export default function App() {
     if (def && LAYOUTS.some((l) => l.id === def)) setLayoutId(def);
   }, [settings?.appearance?.default_layout]);
 
-  // Default selection: first live channel, else first in list.
+  // The cached `list_livestreams` snapshot returns all channels with
+  // is_live=false on a fresh launch (live state is transient — not
+  // persisted across runs). Both effects below gate on `loading` so we
+  // wait for the first `refresh_all` to actually populate live state
+  // before making any selection decisions; otherwise we'd validate the
+  // restored channel against stale data and always fall back.
+  const restoredKeyAtMount = useRef(selectedKey);
+  const restoredValidated = useRef(false);
+
+  // One-shot: a channel restored from localStorage at mount is only
+  // honored if the first refresh confirms it's live. Only validates
+  // the value that was in localStorage at mount — a user click during
+  // the loading window is left alone.
   useEffect(() => {
+    if (loading) return;
+    if (livestreams.length === 0) return;
+    if (restoredValidated.current) return;
+    restoredValidated.current = true;
+    if (selectedKey == null || selectedKey !== restoredKeyAtMount.current) return;
+    const ch = livestreams.find((l) => l.unique_key === selectedKey);
+    if (!ch || !ch.is_live) {
+      setSelectedKey(null);
+    }
+  }, [livestreams, selectedKey, loading]);
+
+  // Default selection: first live channel, else first in list. Skips
+  // while loading so the cached-with-offline snapshot doesn't pick a
+  // wrong default that we'd then have to correct.
+  useEffect(() => {
+    if (loading) return;
+    if (livestreams.length === 0) return;
     if (selectedKey && livestreams.some((l) => l.unique_key === selectedKey)) return;
     const firstLive = livestreams.find((l) => l.is_live);
     const first = firstLive ?? livestreams[0];
     setSelectedKey(first?.unique_key ?? null);
-  }, [livestreams, selectedKey]);
+  }, [livestreams, selectedKey, loading]);
+
+  // Persist selection across runs.
+  useEffect(() => {
+    try {
+      if (selectedKey) localStorage.setItem(SELECTED_STORAGE_KEY, selectedKey);
+      else localStorage.removeItem(SELECTED_STORAGE_KEY);
+    } catch {}
+  }, [selectedKey]);
 
   useEffect(() => {
     try { localStorage.setItem(STORAGE_KEY, layoutId); } catch {}
