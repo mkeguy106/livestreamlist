@@ -292,6 +292,32 @@ impl ChannelStore {
         Ok(touched)
     }
 
+    /// Update the persisted `display_name` for a channel. Used by the
+    /// refresh path to backfill the friendly channel name once a
+    /// platform hands it to us — e.g. a YouTube channel added via its
+    /// UC URL has `display_name == channel_id` until yt-dlp returns the
+    /// real name. No-op if the name already matches.
+    pub fn update_channel_display_name(
+        &mut self,
+        unique_key: &str,
+        new_name: &str,
+    ) -> Result<bool> {
+        let mut touched = false;
+        for c in &mut self.channels {
+            if c.unique_key() == unique_key {
+                if c.display_name != new_name {
+                    c.display_name = new_name.to_string();
+                    touched = true;
+                }
+                break;
+            }
+        }
+        if touched {
+            self.save()?;
+        }
+        Ok(touched)
+    }
+
     pub fn upsert_livestream(&mut self, ls: Livestream) {
         self.livestreams.insert(ls.unique_key.clone(), ls);
     }

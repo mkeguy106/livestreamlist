@@ -58,16 +58,48 @@ pub async fn refresh_all(
                     // into Livestream entries and route through the
                     // miss-threshold-aware batch update.
                     let live = youtube_map.get(&ch.channel_id);
+
+                    // Friendly-name resolution. UC URLs add the channel
+                    // with display_name == channel_id ("UC...24chars");
+                    // once yt-dlp returns a real name we both backfill
+                    // the persisted Channel and use the resolved name
+                    // for this cycle's Livestream entries (live and
+                    // offline branches alike).
+                    let yt_name = live
+                        .map(|y| y.display_name.as_str())
+                        .filter(|s| !s.is_empty());
+                    if let Some(name) = yt_name {
+                        if name != ch.display_name && youtube::is_uc_id(&ch.display_name) {
+                            if let Err(e) = guard
+                                .update_channel_display_name(&ch.unique_key(), name)
+                            {
+                                log::warn!(
+                                    "backfill YT display_name for {}: {e:#}",
+                                    ch.unique_key()
+                                );
+                            }
+                        }
+                    }
+                    let resolved_name = yt_name
+                        .map(str::to_string)
+                        .unwrap_or_else(|| ch.display_name.clone());
+
                     let mut streams: Vec<Livestream> = live
                         .map(|l| {
                             l.streams
                                 .iter()
-                                .map(|s| Livestream::from_youtube(ch, s))
+                                .map(|s| {
+                                    let mut ls = Livestream::from_youtube(ch, s);
+                                    ls.display_name = resolved_name.clone();
+                                    ls
+                                })
                                 .collect()
                         })
                         .unwrap_or_default();
                     if streams.is_empty() {
-                        streams.push(Livestream::offline_for(ch, None));
+                        let mut ls = Livestream::offline_for(ch, None);
+                        ls.display_name = resolved_name.clone();
+                        streams.push(ls);
                     }
                     guard.replace_livestreams_for_channel(&ch.unique_key(), streams);
                 }
