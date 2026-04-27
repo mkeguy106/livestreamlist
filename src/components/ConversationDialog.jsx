@@ -1,5 +1,6 @@
 import { useEffect, useMemo } from 'react';
 import EmoteText from './EmoteText.jsx';
+import { readableColor } from '../utils/color.js';
 
 /**
  * Show the full @-mention thread between two users, filtered out of the
@@ -130,7 +131,7 @@ export default function ConversationDialog({ open, messages, pair, onClose }) {
                   {formatShortTime(m.timestamp)}
                 </span>
                 <span style={{ minWidth: 0 }}>
-                  <span style={{ color: m.user.color || '#a1a1aa', fontWeight: 500 }}>
+                  <span style={{ color: readableColor(m.user.color), fontWeight: 500 }}>
                     {m.user.display_name || m.user.login}
                   </span>
                   <span style={{ color: 'var(--zinc-600)' }}>:</span>{' '}

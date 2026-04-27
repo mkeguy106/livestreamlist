@@ -1,4 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { readableColor } from '../utils/color.js';
 import { useAuth } from '../hooks/useAuth.jsx';
 import { useChat } from '../hooks/useChat.js';
 import { usePreferences } from '../hooks/usePreferences.jsx';
@@ -422,7 +423,7 @@ function IrcRow({
           <span
             data-user-card-anchor
             style={{
-              color: m.user.color || '#a1a1aa',
+              color: readableColor(m.user.color),
               fontWeight: 500,
               cursor: 'pointer',
             }}
@@ -446,7 +447,7 @@ function IrcRow({
           <span style={{ color: 'var(--zinc-600)' }}>:</span>{' '}
           <span
             style={{
-              color: m.is_action ? m.user.color || '#a1a1aa' : 'var(--zinc-200)',
+              color: m.is_action ? readableColor(m.user.color) : 'var(--zinc-200)',
               fontStyle: m.is_action ? 'italic' : 'normal',
             }}
           >
@@ -496,7 +497,7 @@ function CompactRow({
         <span
           data-user-card-anchor
           style={{
-            color: m.user.color || '#a1a1aa',
+            color: readableColor(m.user.color),
             fontWeight: 500,
             flex: '0 0 auto',
             maxWidth: 110,

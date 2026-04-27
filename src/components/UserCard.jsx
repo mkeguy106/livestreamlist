@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import Tooltip from './Tooltip.jsx';
+import { readableColor } from '../utils/color.js';
 
 /**
  * Anchored portal popover for a single chat user. Caller mounts one of these
@@ -72,7 +73,10 @@ export default function UserCard({
   if (!open || !user) return null;
 
   const display = user.display_name || user.login;
-  const nameColor = user.color || 'var(--zinc-100)';
+  // var(--zinc-100) when no color set; otherwise apply the same
+  // lightness floor we use in chat rows so dark Twitch colors don't
+  // vanish in the popover.
+  const nameColor = user.color ? readableColor(user.color) : 'var(--zinc-100)';
 
   const card = (
     <div
