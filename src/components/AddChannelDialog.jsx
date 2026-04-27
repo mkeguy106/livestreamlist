@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { addChannelFromInput } from '../ipc.js';
+import { addChannelFromInput, clipboardChannelUrl } from '../ipc.js';
 
 export default function AddChannelDialog({ open, onClose, onAdded }) {
   const [value, setValue] = useState('');
@@ -12,8 +12,29 @@ export default function AddChannelDialog({ open, onClose, onAdded }) {
     setValue('');
     setError(null);
     setBusy(false);
+
+    // Auto-prefill with a clipboard URL when it points at a supported
+    // platform (Twitch / YouTube / Kick / Chaturbate). Mirrors the Qt
+    // app. Fires only on dialog open; no clipboard polling.
+    let cancelled = false;
+    clipboardChannelUrl()
+      .then((url) => {
+        if (cancelled || !url) return;
+        setValue(url);
+        // Select-all so a single keystroke replaces it for users who
+        // didn't intend to paste.
+        requestAnimationFrame(() => inputRef.current?.select());
+      })
+      .catch(() => {
+        // Clipboard read can fail if the system denies access; the
+        // user can still type or paste manually.
+      });
+
     const id = requestAnimationFrame(() => inputRef.current?.focus());
-    return () => cancelAnimationFrame(id);
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(id);
+    };
   }, [open]);
 
   useEffect(() => {
