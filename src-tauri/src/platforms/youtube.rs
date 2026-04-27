@@ -588,11 +588,24 @@ fn parse_player_response(player_response: &Value) -> Option<YouTubeStream> {
                 .map(String::from)
         });
 
-    // Viewers: microformat.playerMicroformatRenderer.viewCount is a string.
-    let viewers = player_response
-        .pointer("/microformat/playerMicroformatRenderer/viewCount")
-        .and_then(|v| v.as_str())
-        .and_then(|s| s.parse::<i64>().ok());
+    // Viewers: prefer `videoDetails.viewCount` — for LIVE streams this
+    // is the concurrent viewer count (Qt's parser uses the same field).
+    // `microformat.playerMicroformatRenderer.viewCount` is the all-time
+    // total and is typically missing on a live broadcast, which left
+    // small streamers showing no viewer count at all.
+    let parse_count = |v: &Value| -> Option<i64> {
+        v.as_str()
+            .and_then(|s| s.parse::<i64>().ok())
+            .or_else(|| v.as_i64())
+    };
+    let viewers = details
+        .get("viewCount")
+        .and_then(parse_count)
+        .or_else(|| {
+            player_response
+                .pointer("/microformat/playerMicroformatRenderer/viewCount")
+                .and_then(parse_count)
+        });
 
     // started_at from liveBroadcastDetails.startTimestamp (RFC3339).
     let started_at = player_response
@@ -752,6 +765,7 @@ mod tests {
                 "title": title,
                 "isLive": true,
                 "isLiveContent": true,
+                "viewCount": viewers.to_string(),
                 "thumbnail": {
                     "thumbnails": [
                         { "url": "https://i.ytimg.com/vi/x/lo.jpg", "width": 168, "height": 94 },
@@ -767,11 +781,35 @@ mod tests {
                     "liveBroadcastDetails": {
                         "isLiveNow": true,
                         "startTimestamp": "2026-04-26T12:00:00+00:00"
-                    },
-                    "viewCount": viewers.to_string()
+                    }
                 }
             }
         })
+    }
+
+    #[test]
+    fn parse_player_response_falls_back_to_microformat_view_count() {
+        // Some YT responses put the count only in microformat. Even if
+        // videoDetails.viewCount is missing, we still surface a number.
+        let data = json!({
+            "videoDetails": {
+                "videoId": "vid",
+                "title": "fallback case",
+                "isLive": true,
+                "thumbnail": { "thumbnails": [{ "url": "x", "width": 100, "height": 100 }] }
+            },
+            "microformat": {
+                "playerMicroformatRenderer": {
+                    "liveBroadcastDetails": {
+                        "isLiveNow": true,
+                        "startTimestamp": "2026-04-26T12:00:00+00:00"
+                    },
+                    "viewCount": "9999"
+                }
+            }
+        });
+        let stream = parse_player_response(&data).expect("live");
+        assert_eq!(stream.viewers, Some(9999));
     }
 
     #[test]
