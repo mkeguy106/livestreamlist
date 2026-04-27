@@ -7,6 +7,7 @@ import ChatView from '../components/ChatView.jsx';
 import ContextMenu from '../components/ContextMenu.jsx';
 import SocialsBanner from '../components/SocialsBanner.jsx';
 import TitleBanner from '../components/TitleBanner.jsx';
+import Tooltip from '../components/Tooltip.jsx';
 import { usePlayerState } from '../hooks/usePlayerState.js';
 import { stopStream } from '../ipc.js';
 import { formatUptime, formatViewers } from '../utils/format.js';
@@ -575,65 +576,37 @@ function IconRefresh({ spinning }) {
 
 /* ── icon button with optional caret + active state + themed tooltip ── */
 function IconBtn({ children, caret, active, onClick, title }) {
-  const [hover, setHover] = useState(false);
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-label={title}
-      style={{
-        position: 'relative',
-        display: 'inline-flex',
-        alignItems: 'center',
-        gap: 3,
-        padding: '3px 5px',
-        background: active ? 'var(--zinc-900)' : 'transparent',
-        border: '1px solid',
-        borderColor: active ? 'var(--zinc-800)' : 'transparent',
-        borderRadius: 3,
-        color: active ? 'var(--zinc-200)' : 'var(--zinc-500)',
-        cursor: 'pointer',
-        lineHeight: 0,
-        fontFamily: 'inherit',
-      }}
-      onMouseEnter={(e) => {
-        setHover(true);
-        if (!active) e.currentTarget.style.color = 'var(--zinc-300)';
-      }}
-      onMouseLeave={(e) => {
-        setHover(false);
-        if (!active) e.currentTarget.style.color = 'var(--zinc-500)';
-      }}
-    >
-      {children}
-      {caret && <IconCaret />}
-      {hover && title && (
-        <span
-          role="tooltip"
-          style={{
-            position: 'absolute',
-            top: 'calc(100% + 6px)',
-            left: '50%',
-            transform: 'translateX(-50%)',
-            padding: '3px 8px',
-            background: 'var(--zinc-925)',
-            color: 'var(--zinc-300)',
-            border: '1px solid var(--zinc-800)',
-            borderRadius: 3,
-            fontFamily: 'var(--font-mono)',
-            fontSize: 10,
-            letterSpacing: '.02em',
-            whiteSpace: 'nowrap',
-            lineHeight: 1.4,
-            pointerEvents: 'none',
-            boxShadow: '0 4px 12px rgba(0,0,0,.4)',
-            zIndex: 50,
-          }}
-        >
-          {title}
-        </span>
-      )}
-    </button>
+    <Tooltip text={title}>
+      <button
+        type="button"
+        onClick={onClick}
+        aria-label={title}
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 3,
+          padding: '3px 5px',
+          background: active ? 'var(--zinc-900)' : 'transparent',
+          border: '1px solid',
+          borderColor: active ? 'var(--zinc-800)' : 'transparent',
+          borderRadius: 3,
+          color: active ? 'var(--zinc-200)' : 'var(--zinc-500)',
+          cursor: 'pointer',
+          lineHeight: 0,
+          fontFamily: 'inherit',
+        }}
+        onMouseEnter={(e) => {
+          if (!active) e.currentTarget.style.color = 'var(--zinc-300)';
+        }}
+        onMouseLeave={(e) => {
+          if (!active) e.currentTarget.style.color = 'var(--zinc-500)';
+        }}
+      >
+        {children}
+        {caret && <IconCaret />}
+      </button>
+    </Tooltip>
   );
 }
 

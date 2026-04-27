@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useAuth } from '../hooks/useAuth.jsx';
 import { listenEvent, loginPopupClose, loginPopupOpen } from '../ipc.js';
+import Tooltip from './Tooltip.jsx';
 
 const inTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 const POPUP_W_CSS = 280;
@@ -166,42 +167,46 @@ export default function LoginButton() {
   return (
     <div ref={containerRef} style={{ position: 'relative' }}>
       {anySignedIn ? (
-        <button
-          ref={buttonRef}
-          type="button"
-          onClick={openPopup}
-          title={error ?? 'Accounts'}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 4,
-            background: 'transparent',
-            border: '1px solid var(--zinc-800)',
-            borderRadius: 6,
-            padding: '2px 4px',
-            cursor: 'pointer',
-          }}
-        >
-          {platforms.map((p) => (
-            <PlatformChiclet
-              key={p.id}
-              letter={p.letter}
-              color={p.color}
-              signedIn={p.signedIn}
-            />
-          ))}
-        </button>
+        <Tooltip text={error ?? 'Accounts'}>
+          <button
+            ref={buttonRef}
+            type="button"
+            onClick={openPopup}
+            aria-label={error ?? 'Accounts'}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 4,
+              background: 'transparent',
+              border: '1px solid var(--zinc-800)',
+              borderRadius: 6,
+              padding: '2px 4px',
+              cursor: 'pointer',
+            }}
+          >
+            {platforms.map((p) => (
+              <PlatformChiclet
+                key={p.id}
+                letter={p.letter}
+                color={p.color}
+                signedIn={p.signedIn}
+              />
+            ))}
+          </button>
+        </Tooltip>
       ) : (
-        <button
-          ref={buttonRef}
-          type="button"
-          className="rx-btn"
-          onClick={openPopup}
-          title={error ?? 'Accounts'}
-          style={{ padding: '2px 8px', fontSize: 10 }}
-        >
-          Log in
-        </button>
+        <Tooltip text={error ?? 'Accounts'}>
+          <button
+            ref={buttonRef}
+            type="button"
+            className="rx-btn"
+            onClick={openPopup}
+            aria-label={error ?? 'Accounts'}
+            style={{ padding: '2px 8px', fontSize: 10 }}
+          >
+            Log in
+          </button>
+        </Tooltip>
       )}
       {!inTauri && open && (
         <div
