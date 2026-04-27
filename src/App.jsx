@@ -12,6 +12,7 @@ import UserHistoryDialog from './components/UserHistoryDialog.jsx';
 import WindowControls from './components/WindowControls.jsx';
 import PreferencesDialog from './components/PreferencesDialog.jsx';
 import ResizeHandles from './components/ResizeHandles.jsx';
+import Tooltip from './components/Tooltip.jsx';
 import { useDragHandler } from './hooks/useDragRegion.js';
 import { useLivestreams } from './hooks/useLivestreams.js';
 import { usePreferences } from './hooks/usePreferences.jsx';
@@ -271,16 +272,16 @@ export default function App() {
       <div className="rx-titlebar" data-tauri-drag-region onMouseDown={onTitlebarMouseDown}>
         <div className="rx-tb-dots" role="tablist" aria-label="Layout">
           {LAYOUTS.map((l) => (
-            <button
-              key={l.id}
-              type="button"
-              role="tab"
-              aria-selected={l.id === layoutId}
-              aria-label={`${l.label} layout (${l.letter})`}
-              title={`${l.letter} · ${l.label}`}
-              className={`rx-tb-dot ${l.id === layoutId ? 'active' : ''}`}
-              onClick={() => selectLayout(l.id)}
-            />
+            <Tooltip key={l.id} text={`${l.letter} · ${l.label}`}>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={l.id === layoutId}
+                aria-label={`${l.label} layout (${l.letter})`}
+                className={`rx-tb-dot ${l.id === layoutId ? 'active' : ''}`}
+                onClick={() => selectLayout(l.id)}
+              />
+            </Tooltip>
           ))}
         </div>
         <div style={{ width: 12 }} />
@@ -294,15 +295,17 @@ export default function App() {
         {error && <div className="rx-tb-label rx-mono" style={{ color: '#f87171' }}>· refresh failed</div>}
         <div style={{ width: 8 }} />
         <LoginButton />
-        <button
-          type="button"
-          className="rx-btn rx-btn-ghost"
-          onClick={() => setPrefsOpen(true)}
-          title="Preferences (⌘,)"
-          style={{ padding: '1px 6px', fontSize: 14 }}
-        >
-          ⚙
-        </button>
+        <Tooltip text="Preferences (⌘,)">
+          <button
+            type="button"
+            className="rx-btn rx-btn-ghost"
+            onClick={() => setPrefsOpen(true)}
+            aria-label="Preferences"
+            style={{ padding: '1px 6px', fontSize: 14 }}
+          >
+            ⚙
+          </button>
+        </Tooltip>
         <div style={{ width: 4 }} />
         <WindowControls />
       </div>
