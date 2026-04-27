@@ -85,6 +85,25 @@ fn list_channels(state: State<'_, AppState>) -> Vec<Channel> {
     state.store.lock().channels().to_vec()
 }
 
+/// If the system clipboard contains a URL pointing at a supported
+/// platform, return it so the Add Channel dialog can prefill on open.
+/// Returns None for empty clipboards, non-URL strings (so a copied
+/// bare handle like "shroud" doesn't auto-fill), oversized payloads,
+/// and URLs that the existing parser doesn't recognise.
+#[tauri::command]
+fn clipboard_channel_url(app: tauri::AppHandle) -> Option<String> {
+    use tauri_plugin_clipboard_manager::ClipboardExt;
+    let raw = app.clipboard().read_text().ok()?;
+    let trimmed = raw.trim();
+    if !(trimmed.starts_with("http://") || trimmed.starts_with("https://")) {
+        return None;
+    }
+    if trimmed.len() > 500 {
+        return None;
+    }
+    parse_channel_input(trimmed).map(|_| trimmed.to_string())
+}
+
 #[tauri::command]
 fn add_channel_from_input(input: String, state: State<'_, AppState>) -> Result<Channel, String> {
     let parsed = parse_channel_input(&input)
@@ -1022,6 +1041,7 @@ pub fn run() {
                 .with_state_flags(window_state::state_flags())
                 .build(),
         )
+        .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_single_instance::init(
             |app: &tauri::AppHandle, _argv: Vec<String>, _cwd: String| {
@@ -1077,6 +1097,7 @@ pub fn run() {
             list_livestreams,
             list_channels,
             add_channel_from_input,
+            clipboard_channel_url,
             remove_channel,
             set_favorite,
             refresh_all,

@@ -16,6 +16,7 @@ async function invoke(name, args) {
 export const listLivestreams = () => invoke('list_livestreams');
 export const listChannels = () => invoke('list_channels');
 export const addChannelFromInput = (input) => invoke('add_channel_from_input', { input });
+export const clipboardChannelUrl = () => invoke('clipboard_channel_url');
 export const removeChannel = (uniqueKey) => invoke('remove_channel', { uniqueKey });
 export const setFavorite = (uniqueKey, favorite) => invoke('set_favorite', { uniqueKey, favorite });
 export const refreshAll = () => invoke('refresh_all');
@@ -208,6 +209,9 @@ async function mockInvoke(name, args) {
       return null;
     case 'replay_chat_history':
       return [];
+    case 'clipboard_channel_url':
+      // Browser-dev: skip clipboard auto-detect (no system clipboard via the plugin).
+      return null;
     case 'list_socials':
       // Stub sample so the UI still shows something in browser-dev mode.
       return [
