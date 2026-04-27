@@ -80,12 +80,16 @@ pub async fn login(client: &reqwest::Client) -> Result<TwitchIdentity> {
         &serde_json::to_string(&identity).unwrap_or_default(),
     )
     .ok();
+    // New token may have moderator:read:followers / new mod status — let
+    // /channels/followers retry instead of staying latched off.
+    crate::platforms::twitch_users::clear_follower_denied();
     Ok(identity)
 }
 
 pub fn logout() -> Result<()> {
     tokens::clear(KEYRING_TOKEN)?;
     tokens::clear("twitch_identity").ok();
+    crate::platforms::twitch_users::clear_follower_denied();
     Ok(())
 }
 
