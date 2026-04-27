@@ -172,6 +172,73 @@ const INIT_SCRIPT: &str = r##"
 pub struct ChaturbateAuth {
     pub logged_in_at: DateTime<Utc>,
     pub last_verified_at: DateTime<Utc>,
+    /// Best-effort scrape of the logged-in CB username from the
+    /// homepage at sign-in time. `#[serde(default)]` so older stamps
+    /// without this field keep deserialising; they'll get the username
+    /// populated on next login.
+    #[serde(default)]
+    pub username: Option<String>,
+}
+
+/// Hit chaturbate.com authenticated with the cookies already captured
+/// by the login poll, then scrape the logged-in username out of the
+/// HTML. Best-effort — returns `Ok(None)` on any HTTP/parse failure
+/// so a missing username can never block a successful sign-in.
+pub async fn fetch_username(cookie_header: &str) -> Result<Option<String>> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .redirect(reqwest::redirect::Policy::limited(5))
+        .build()
+        .context("building chaturbate fetch client")?;
+
+    let resp = client
+        .get("https://chaturbate.com/")
+        .header("Cookie", cookie_header)
+        .header(
+            "User-Agent",
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 \
+             (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+        )
+        .header("Accept-Language", "en-US,en;q=0.9")
+        .send()
+        .await
+        .context("GET chaturbate.com")?;
+
+    if !resp.status().is_success() {
+        log::warn!("CB user-info fetch returned HTTP {}", resp.status());
+        return Ok(None);
+    }
+
+    let html = resp.text().await.context("reading CB body")?;
+    Ok(parse_username_from_html(&html))
+}
+
+/// Walk a small ladder of CB HTML markers each of which carries the
+/// logged-in user's username. Returns the first match.
+fn parse_username_from_html(html: &str) -> Option<String> {
+    // 1. `data-username="..."` is what CB's user-menu element uses.
+    let p1 = "data-username=\"";
+    if let Some(start) = html.find(p1) {
+        let rest = &html[start + p1.len()..];
+        if let Some(end) = rest.find('"') {
+            let u = &rest[..end];
+            if !u.is_empty() {
+                return Some(u.to_string());
+            }
+        }
+    }
+    // 2. JSON blob: `"username":"..."` (often present in inline JS).
+    let p2 = "\"username\":\"";
+    if let Some(start) = html.find(p2) {
+        let rest = &html[start + p2.len()..];
+        if let Some(end) = rest.find('"') {
+            let u = &rest[..end];
+            if !u.is_empty() {
+                return Some(u.to_string());
+            }
+        }
+    }
+    None
 }
 
 fn stamp_path() -> Result<PathBuf> {
@@ -363,10 +430,30 @@ pub async fn login_via_webview(app: AppHandle) -> Result<ChaturbateAuth> {
                     .iter()
                     .any(|c| c.name() == "sessionid" && !c.value().is_empty());
                 if signed_in {
+                    // Build a Cookie header from the WebView's full jar
+                    // and try to scrape the username before saving the
+                    // stamp. Failure here is non-fatal — the stamp still
+                    // saves with `username = None`.
+                    let cookie_header = jar
+                        .iter()
+                        .map(|c| format!("{}={}", c.name(), c.value()))
+                        .collect::<Vec<_>>()
+                        .join("; ");
+                    let username = match fetch_username(&cookie_header).await {
+                        Ok(u) => u,
+                        Err(e) => {
+                            log::warn!("CB username scrape: {e:#}");
+                            None
+                        }
+                    };
+                    if let Some(ref u) = username {
+                        log::info!("Chaturbate username detected: {u}");
+                    }
                     let now = Utc::now();
                     let stamp = ChaturbateAuth {
                         logged_in_at: now,
                         last_verified_at: now,
+                        username,
                     };
                     save(&stamp)?;
                     let _ = window.close();
@@ -418,6 +505,7 @@ mod tests {
         let stamp = ChaturbateAuth {
             logged_in_at: chrono::Utc.with_ymd_and_hms(2026, 4, 25, 10, 0, 0).unwrap(),
             last_verified_at: chrono::Utc.with_ymd_and_hms(2026, 4, 25, 11, 30, 0).unwrap(),
+            username: None,
         };
         let json = serde_json::to_string(&stamp).unwrap();
         assert!(json.contains("2026-04-25T10:00:00Z"));

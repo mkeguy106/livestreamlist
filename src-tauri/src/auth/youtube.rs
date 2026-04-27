@@ -22,6 +22,7 @@ use super::tokens;
 use crate::config;
 
 const KEYRING_ENTRY: &str = "youtube_cookies";
+const USER_INFO_ENTRY: &str = "youtube_user_info";
 const COOKIES_FILENAME: &str = "youtube-cookies.txt";
 const REQUIRED: &[&str] = &["SID", "HSID", "SSID", "APISID", "SAPISID"];
 const LOGIN_WINDOW_LABEL: &str = "youtube-login";
@@ -92,12 +93,131 @@ pub fn load() -> Result<Option<YouTubeCookies>> {
 
 pub fn clear() -> Result<()> {
     tokens::clear(KEYRING_ENTRY).ok();
+    tokens::clear(USER_INFO_ENTRY).ok();
     if let Ok(path) = cookies_path() {
         if path.exists() {
             let _ = std::fs::remove_file(&path);
         }
     }
     Ok(())
+}
+
+/// Account-side info derived from an authenticated YouTube page —
+/// currently just the `@handle`. Cached in the keyring so the chiclet
+/// dropdown shows the user's handle immediately on launch without a
+/// network round-trip; refreshed in the background after login and on
+/// app boot.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct YouTubeUserInfo {
+    pub handle: String,
+}
+
+pub fn save_user_info(info: &YouTubeUserInfo) -> Result<()> {
+    let json = serde_json::to_string(info).context("serialising YouTube user info")?;
+    tokens::save(USER_INFO_ENTRY, &json).context("saving YouTube user info to keyring")?;
+    Ok(())
+}
+
+pub fn load_user_info() -> Result<Option<YouTubeUserInfo>> {
+    let Some(json) = tokens::load(USER_INFO_ENTRY)? else {
+        return Ok(None);
+    };
+    let info = serde_json::from_str(&json).context("parsing stored YouTube user info")?;
+    Ok(Some(info))
+}
+
+/// Hit the authenticated `/account` page with our saved cookies and
+/// scrape the logged-in user's `@handle` out of the embedded ytInitialData
+/// JSON. Best-effort — returns `Ok(None)` when no cookies are stored
+/// (browser-cookie or unauthenticated state) or when none of the
+/// known markers match (YouTube DOM change). Logs but does not error.
+pub async fn fetch_user_info(http: &reqwest::Client) -> Result<Option<YouTubeUserInfo>> {
+    let Some(cookies) = load()? else {
+        log::debug!("YouTube user-info fetch skipped: no keyring cookies");
+        return Ok(None);
+    };
+
+    let cookie_header = cookies
+        .entries()
+        .iter()
+        .map(|(k, v)| format!("{k}={v}"))
+        .collect::<Vec<_>>()
+        .join("; ");
+
+    // /account is mostly about the logged-in user — the topbar avatar
+    // dropdown and the page body both reference YOUR vanityChannelUrl
+    // first, so the first match is reliable.
+    log::info!("YouTube user-info fetch: GET /account");
+    let resp = http
+        .get("https://www.youtube.com/account")
+        .header("Cookie", cookie_header)
+        .header(
+            "User-Agent",
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 \
+             (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+        )
+        .header("Accept-Language", "en-US,en;q=0.9")
+        .send()
+        .await
+        .context("GET youtube.com/account")?;
+
+    let final_url = resp.url().clone();
+    let status = resp.status();
+    log::info!("YouTube user-info fetch: status={status} final_url={final_url}");
+
+    if !status.is_success() {
+        log::warn!("YouTube user-info fetch returned HTTP {status}");
+        return Ok(None);
+    }
+
+    if final_url.host_str() != Some("www.youtube.com") {
+        log::warn!(
+            "YouTube user-info fetch redirected to {final_url} — \
+             cookies probably expired; sign in again to re-detect"
+        );
+        return Ok(None);
+    }
+
+    let html = resp.text().await.context("reading youtube.com/account body")?;
+    let parsed = parse_handle_from_html(&html);
+    if parsed.is_none() {
+        log::warn!(
+            "YouTube /account: no handle marker matched in HTML (len = {})",
+            html.len()
+        );
+    }
+    Ok(parsed.map(|handle| YouTubeUserInfo { handle }))
+}
+
+/// Try a small ladder of YouTube HTML markers that each point at the
+/// signed-in user's `@handle`. Returns the first match. Stable enough
+/// against YouTube's churn — they keep ytInitialData around as the
+/// canonical client-side bootstrap blob.
+fn parse_handle_from_html(html: &str) -> Option<String> {
+    // 1. `vanityChannelUrl` — most reliable when present in the user's
+    //    own ownerInfo block. On /account this is YOUR URL first.
+    let vanity = "\"vanityChannelUrl\":\"http://www.youtube.com/@";
+    if let Some(start) = html.find(vanity) {
+        let rest = &html[start + vanity.len()..];
+        if let Some(end) = rest.find('"') {
+            let handle = &rest[..end];
+            if !handle.is_empty() {
+                return Some(handle.to_string());
+            }
+        }
+    }
+    // 2. `channelHandleText` — used in the channel-switcher menu.
+    let handle_text = "\"channelHandleText\":{\"runs\":[{\"text\":\"@";
+    if let Some(start) = html.find(handle_text) {
+        let rest = &html[start + handle_text.len()..];
+        if let Some(end) = rest.find('"') {
+            let handle = &rest[..end];
+            if !handle.is_empty() {
+                return Some(handle.to_string());
+            }
+        }
+    }
+    None
 }
 
 /// True iff a saved cookie set is on disk (yt-dlp consumes via `--cookies`).

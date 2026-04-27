@@ -158,7 +158,9 @@ export default function LoginButton() {
     }
   };
 
-  const ytStatusText = youtube?.browser
+  const ytStatusText = youtube?.handle
+    ? `@${youtube.handle}`
+    : youtube?.browser
     ? `Cookies from ${youtube.browser}`
     : youtube?.has_paste
     ? 'Signed in'
@@ -258,7 +260,13 @@ export default function LoginButton() {
           <AccountRow
             label="Chaturbate"
             color="var(--cb)"
-            statusText={cbSignedIn ? 'Signed in' : 'Not logged in'}
+            statusText={
+              cbSignedIn
+                ? chaturbate?.username
+                  ? chaturbate.username
+                  : 'Signed in'
+                : 'Not logged in'
+            }
             signedIn={cbSignedIn}
             busy={busyPlatform === 'chaturbate'}
             onLogin={() => doLogin('chaturbate')}

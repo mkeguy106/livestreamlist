@@ -468,6 +468,31 @@ fn broadcast_auth_changed(app: &tauri::AppHandle) {
     }
 }
 
+/// Best-effort YouTube user-info refresh — runs the keyring-cookie
+/// fetch in the background, persists the resulting `@handle` to the
+/// keyring on success, and emits `auth:changed` so the login chiclet
+/// dropdown updates without the user re-opening it. Fire-and-forget;
+/// every failure path logs and swallows.
+fn spawn_youtube_user_info_refresh(app: &tauri::AppHandle, http: reqwest::Client) {
+    let app_for_task = app.clone();
+    tauri::async_runtime::spawn(async move {
+        match auth::youtube::fetch_user_info(&http).await {
+            Ok(Some(info)) => {
+                if let Err(e) = auth::youtube::save_user_info(&info) {
+                    log::warn!("save YouTube user info: {e:#}");
+                    return;
+                }
+                log::info!("YouTube handle detected: @{}", info.handle);
+                broadcast_auth_changed(&app_for_task);
+            }
+            Ok(None) => {
+                log::debug!("YouTube user info not detectable (no cookies or no marker match)");
+            }
+            Err(e) => log::warn!("fetch YouTube user info: {e:#}"),
+        }
+    });
+}
+
 
 #[tauri::command]
 fn open_url(url: String) -> Result<(), String> {
@@ -706,12 +731,22 @@ struct YoutubeAuthStatus {
     browser: Option<String>,
     /// True when a manually-pasted cookies file is on disk.
     has_paste: bool,
+    /// Logged-in user's `@handle`, if we were able to scrape it from
+    /// an authenticated /account fetch. None when using browser-cookie
+    /// auth (no keyring cookies), when YouTube's DOM doesn't match any
+    /// of our markers, or simply before the background fetch completes
+    /// on first launch.
+    handle: Option<String>,
 }
 
 #[derive(serde::Serialize)]
 struct ChaturbateAuthStatus {
     signed_in: bool,
     last_verified_at: Option<String>, // RFC3339, None when not signed in
+    /// Logged-in CB username, scraped from chaturbate.com at login
+    /// time. None for stamps written before this field was added or
+    /// when the scrape couldn't find the marker.
+    username: Option<String>,
 }
 
 #[tauri::command]
@@ -722,20 +757,29 @@ async fn auth_status(state: State<'_, AppState>) -> Result<AuthStatus, String> {
     let kick = auth::kick::status(&state.http).await.map_err(err_string)?;
     let browser = state.settings.read().general.youtube_cookies_browser.clone();
     let has_paste = auth::youtube::cookies_file_present();
+    let yt_handle = auth::youtube::load_user_info()
+        .map_err(err_string)?
+        .map(|i| i.handle);
     let chaturbate = match auth::chaturbate::load().map_err(err_string)? {
         Some(stamp) => ChaturbateAuthStatus {
             signed_in: true,
             last_verified_at: Some(stamp.last_verified_at.to_rfc3339()),
+            username: stamp.username,
         },
         None => ChaturbateAuthStatus {
             signed_in: false,
             last_verified_at: None,
+            username: None,
         },
     };
     Ok(AuthStatus {
         twitch,
         kick,
-        youtube: YoutubeAuthStatus { browser, has_paste },
+        youtube: YoutubeAuthStatus {
+            browser,
+            has_paste,
+            handle: yt_handle,
+        },
         chaturbate,
     })
 }
@@ -803,6 +847,7 @@ async fn youtube_login(
         log::warn!("post-login cookie injection failed: {e:#}");
     }
     broadcast_auth_changed(&app);
+    spawn_youtube_user_info_refresh(&app, state.http.clone());
     Ok(true)
 }
 
@@ -819,6 +864,7 @@ fn youtube_login_paste(
         log::warn!("post-login cookie injection failed: {e:#}");
     }
     broadcast_auth_changed(&app);
+    spawn_youtube_user_info_refresh(&app, state.http.clone());
     Ok(true)
 }
 
@@ -1016,6 +1062,12 @@ pub fn run() {
             // so any /live_chat iframe in the React tree is signed in.
             if let Err(e) = auth::youtube::inject_into_main_webview(app.handle()) {
                 log::warn!("youtube cookie injection failed: {e:#}");
+            }
+            // Refresh the cached YouTube @handle in the background. Cheap
+            // single GET; populates `auth_status.youtube.handle` so the
+            // login chiclet shows it without waiting for a re-login.
+            if auth::youtube::load().ok().flatten().is_some() {
+                spawn_youtube_user_info_refresh(&app.handle(), http_for_chat.clone());
             }
             tray::build(&app.handle())?;
             window_state::register(app)?;
