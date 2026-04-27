@@ -149,6 +149,7 @@ impl ChatManager {
                     outbound: rx,
                     room_id: Mutex::new(None),
                     own_badges: Mutex::new(Vec::new()),
+                    own_display_name: Mutex::new(None),
                     last_room_state: Mutex::new(None),
                 };
                 let task = async_runtime::spawn(async move {
