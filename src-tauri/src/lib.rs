@@ -949,8 +949,19 @@ fn replay_chat_history(
         .find(|c| c.unique_key() == unique_key)
         .cloned()
         .ok_or_else(|| format!("unknown channel {unique_key}"))?;
-    chat::log_store::read_recent(channel.platform, &channel.channel_id, limit.min(1000))
-        .map_err(err_string)
+    let mut msgs = chat::log_store::read_recent(
+        channel.platform,
+        &channel.channel_id,
+        limit.min(1000),
+    )
+    .map_err(err_string)?;
+    // Transient marker — applied after deserialize, never persisted back.
+    // Lets the frontend dim log-replayed messages alongside robotty
+    // backfill so all pre-live history shares one visual treatment.
+    for m in &mut msgs {
+        m.is_log_replay = true;
+    }
+    Ok(msgs)
 }
 
 #[tauri::command]

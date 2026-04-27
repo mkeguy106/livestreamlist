@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '../hooks/useAuth.jsx';
 import { useChat } from '../hooks/useChat.js';
 import { usePreferences } from '../hooks/usePreferences.jsx';
@@ -105,6 +105,14 @@ export default function ChatView({
       }
     }
     return out;
+  }, [messages]);
+
+  // Index of the first historical message (either robotty backfill or
+  // local log replay) — anchor for the "recent chat history"
+  // separator. null when there are none.
+  const firstHistoricalIndex = useMemo(() => {
+    const idx = messages.findIndex((m) => m.is_backfill || m.is_log_replay);
+    return idx === -1 ? null : idx;
   }, [messages]);
 
   const openConversation = (userA, userB) => {
@@ -248,12 +256,11 @@ export default function ChatView({
             }}
           >
             {messages.length === 0 && <EmptyHint status={status} />}
-            {messages.map((m) =>
-              m.system ? (
-                <SystemRow key={m.id} m={m} variant={variant} />
+            {messages.map((m, i) => {
+              const row = m.system ? (
+                <SystemRow m={m} variant={variant} />
               ) : variant === 'compact' ? (
                 <CompactRow
-                  key={m.id}
                   m={m}
                   myLogin={myLogin}
                   showBadges={showBadges}
@@ -265,7 +272,6 @@ export default function ChatView({
                 />
               ) : (
                 <IrcRow
-                  key={m.id}
                   m={m}
                   myLogin={myLogin}
                   showBadges={showBadges}
@@ -277,8 +283,19 @@ export default function ChatView({
                   onUsernameContext={handleContext}
                   onUsernameHover={handleHover}
                 />
-              ),
-            )}
+              );
+              const isHistorical = m.is_backfill || m.is_log_replay;
+              return (
+                <Fragment key={m.id}>
+                  {i === firstHistoricalIndex && <BackfillSeparator />}
+                  {isHistorical ? (
+                    <div style={{ opacity: 0.65 }}>{row}</div>
+                  ) : (
+                    row
+                  )}
+                </Fragment>
+              );
+            })}
           </div>
         </div>
         {!autoScroll && (
@@ -558,6 +575,29 @@ function ReplyContextRow({ reply, compact = false, onClick }) {
  * Sub / resub / subgift / raid / announcement — rendered inline with an
  * accent stripe and purple text, matching the Qt app's convention.
  */
+function BackfillSeparator() {
+  return (
+    <div
+      role="separator"
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+        margin: '6px 12px 4px',
+        color: 'var(--zinc-500)',
+        fontFamily: 'var(--font-mono)',
+        fontSize: 9,
+        letterSpacing: '.04em',
+        textTransform: 'uppercase',
+      }}
+    >
+      <span style={{ flex: 1, height: 1, background: 'var(--zinc-800)' }} />
+      <span style={{ fontStyle: 'italic' }}>recent chat history</span>
+      <span style={{ flex: 1, height: 1, background: 'var(--zinc-800)' }} />
+    </div>
+  );
+}
+
 function SystemRow({ m, variant }) {
   const compact = variant === 'compact';
   const primary = m.system?.text?.trim() || '';

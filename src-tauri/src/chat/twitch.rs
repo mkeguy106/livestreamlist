@@ -121,7 +121,75 @@ async fn connect_and_read(cfg: &mut TwitchChatConfig) -> Result<()> {
     }
 
     let mut log = ChatLogWriter::open(Platform::Twitch, &cfg.channel_login).ok();
+
+    // Backfill ~50 recent messages from recent-messages.robotty.de so a
+    // freshly opened channel isn't an empty box for the first 30
+    // seconds. Mirrors the Qt app: serial before read_loop, 5 s
+    // timeout, silent on failure. Each historical message flows
+    // through the same persist_and_emit path with is_backfill=true so
+    // the frontend can dim them.
+    fetch_and_replay_recent_messages(cfg, log.as_mut()).await;
+
     read_loop(cfg, &mut ws, log.as_mut()).await
+}
+
+const RECENT_MESSAGES_URL: &str = "https://recent-messages.robotty.de/api/v2/recent-messages";
+const RECENT_MESSAGES_LIMIT: u32 = 50;
+const RECENT_MESSAGES_TIMEOUT_SECS: u64 = 5;
+
+#[derive(serde::Deserialize)]
+struct RecentMessagesBody {
+    #[serde(default)]
+    messages: Vec<String>,
+}
+
+async fn fetch_and_replay_recent_messages(
+    cfg: &TwitchChatConfig,
+    mut log: Option<&mut ChatLogWriter>,
+) {
+    let url = format!(
+        "{RECENT_MESSAGES_URL}/{}?limit={RECENT_MESSAGES_LIMIT}&hideModeratedMessages=true",
+        cfg.channel_login.to_ascii_lowercase()
+    );
+    let resp = match cfg
+        .http
+        .get(&url)
+        .timeout(std::time::Duration::from_secs(RECENT_MESSAGES_TIMEOUT_SECS))
+        .send()
+        .await
+    {
+        Ok(r) if r.status().is_success() => r,
+        Ok(r) => {
+            log::debug!("recent-messages HTTP {} for {}", r.status(), cfg.channel_login);
+            return;
+        }
+        Err(e) => {
+            log::debug!("recent-messages fetch failed for {}: {e:#}", cfg.channel_login);
+            return;
+        }
+    };
+    let body: RecentMessagesBody = match resp.json().await {
+        Ok(b) => b,
+        Err(e) => {
+            log::debug!("recent-messages decode failed for {}: {e:#}", cfg.channel_login);
+            return;
+        }
+    };
+    if body.messages.is_empty() {
+        return;
+    }
+    for raw in body.messages {
+        let Some(parsed) = irc::parse(&raw) else {
+            continue;
+        };
+        if parsed.command != "PRIVMSG" {
+            continue;
+        }
+        if let Some(mut msg) = build_privmsg(cfg, &parsed) {
+            msg.is_backfill = true;
+            persist_and_emit(cfg, log.as_deref_mut(), msg);
+        }
+    }
 }
 
 fn rand_suffix() -> u32 {
@@ -378,6 +446,8 @@ fn build_privmsg(cfg: &TwitchChatConfig, msg: &IrcMessage<'_>) -> Option<ChatMes
         is_first_message: msg.tags.get("first-msg").map(|v| v == "1").unwrap_or(false),
         reply_to,
         system: None,
+        is_backfill: false,
+        is_log_replay: false,
     })
 }
 
@@ -454,6 +524,8 @@ fn build_self_echo(cfg: &TwitchChatConfig, text: &str) -> Option<ChatMessage> {
         is_first_message: false,
         reply_to: None,
         system: None,
+        is_backfill: false,
+        is_log_replay: false,
     })
 }
 
@@ -547,6 +619,8 @@ fn build_usernotice(cfg: &TwitchChatConfig, msg: &IrcMessage<'_>) -> Option<Chat
             kind,
             text: system_text,
         }),
+        is_backfill: false,
+        is_log_replay: false,
     })
 }
 
