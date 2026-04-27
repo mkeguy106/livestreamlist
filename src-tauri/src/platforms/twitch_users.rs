@@ -8,8 +8,22 @@
 use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::auth;
+
+/// One-shot latch: Twitch's `/channels/followers` requires
+/// `moderator:read:followers` scope AND the caller being a mod of the
+/// broadcaster — neither is true for most users / most channels. The
+/// first 401 flips this; subsequent calls short-circuit to avoid
+/// wasted requests + log spam (every user-card open would otherwise
+/// re-fire the call). Cleared on logout via `clear_follower_denied`
+/// so a re-authenticated session starts fresh.
+static FOLLOWER_API_DENIED: AtomicBool = AtomicBool::new(false);
+
+pub fn clear_follower_denied() {
+    FOLLOWER_API_DENIED.store(false, Ordering::Relaxed);
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserProfile {
@@ -117,6 +131,9 @@ pub async fn fetch_follow(
     broadcaster_id: &str,
     viewer_id: &str,
 ) -> (Option<u64>, Option<DateTime<Utc>>) {
+    if FOLLOWER_API_DENIED.load(Ordering::Relaxed) {
+        return (None, None);
+    }
     let token = match auth::twitch::stored_token() {
         Ok(Some(t)) => t,
         _ => return (None, None),
@@ -130,6 +147,18 @@ pub async fn fetch_follow(
         .await;
     let resp = match resp {
         Ok(r) if r.status().is_success() => r,
+        Ok(r) if r.status() == reqwest::StatusCode::UNAUTHORIZED => {
+            // Helix /channels/followers needs `moderator:read:followers` +
+            // mod status on the broadcaster. Most users have neither, so
+            // every user-card open would otherwise re-fire and re-warn.
+            // Latch the denial for the rest of the session and log once.
+            if !FOLLOWER_API_DENIED.swap(true, Ordering::Relaxed) {
+                log::info!(
+                    "/channels/followers 401 — token lacks moderator:read:followers (or not a mod here); skipping follower lookups for the rest of this session"
+                );
+            }
+            return (None, None);
+        }
         Ok(r) => {
             log::warn!("/channels/followers HTTP {}", r.status());
             return (None, None);
