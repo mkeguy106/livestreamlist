@@ -2,7 +2,7 @@
  * Sidebar rail (all channels) + main pane showing the selected channel.
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import ChatView from '../components/ChatView.jsx';
 import ContextMenu from '../components/ContextMenu.jsx';
 import SocialsBanner from '../components/SocialsBanner.jsx';
@@ -75,6 +75,7 @@ export default function Command({ ctx }) {
   // Channel-list search. Ephemeral by design — restoring a stale query
   // on relaunch would surprise the user more than starting clean.
   const [query, setQuery] = useState('');
+  const searchRef = useRef(null);
 
   useEffect(() => { savePref(STORAGE_KEYS.filter, filter); }, [filter]);
   useEffect(() => { savePref(STORAGE_KEYS.sort, sort); }, [sort]);
@@ -213,20 +214,60 @@ export default function Command({ ctx }) {
             </span>
           </div>
           <div style={{ padding: '6px 10px', borderBottom: 'var(--hair)' }}>
-            <input
-              type="text"
-              className="rx-input"
-              placeholder="Search channels…"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Escape' && query) {
-                  e.stopPropagation();
-                  setQuery('');
-                }
-              }}
-              style={{ width: '100%', boxSizing: 'border-box' }}
-            />
+            <div style={{ position: 'relative' }}>
+              <input
+                ref={searchRef}
+                type="text"
+                className="rx-input"
+                placeholder="Search channels…"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Escape' && query) {
+                    e.stopPropagation();
+                    setQuery('');
+                  }
+                }}
+                style={{
+                  width: '100%',
+                  boxSizing: 'border-box',
+                  paddingRight: query ? 22 : undefined,
+                }}
+              />
+              {query && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setQuery('');
+                    searchRef.current?.focus();
+                  }}
+                  aria-label="Clear search"
+                  style={{
+                    position: 'absolute',
+                    right: 4,
+                    top: '50%',
+                    transform: 'translateY(-50%)',
+                    background: 'transparent',
+                    border: 'none',
+                    padding: 4,
+                    color: 'var(--zinc-500)',
+                    cursor: 'pointer',
+                    lineHeight: 0,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.color = 'var(--zinc-300)';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.color = 'var(--zinc-500)';
+                  }}
+                >
+                  <IconClose />
+                </button>
+              )}
+            </div>
           </div>
           <div style={{ flex: 1, overflowY: 'auto' }}>
             {filtered.length === 0 && query.trim() && (
@@ -283,6 +324,28 @@ export default function Command({ ctx }) {
                   <span className={`rx-status-dot ${ch.is_live ? 'live' : 'off'}`} />
                   <div style={{ minWidth: 0 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      {ch.favorite && (
+                        <Tooltip text="Unfavorite">
+                          <span
+                            role="button"
+                            aria-label="Unfavorite"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setFavorite(ch.unique_key, false);
+                            }}
+                            onDoubleClick={(e) => e.stopPropagation()}
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              cursor: 'pointer',
+                              color: 'var(--zinc-100)',
+                              lineHeight: 0,
+                            }}
+                          >
+                            <IconStar filled />
+                          </span>
+                        </Tooltip>
+                      )}
                       <span style={{ fontSize: 'var(--t-12)', color: 'var(--zinc-100)', fontWeight: 500 }}>
                         {ch.display_name}
                       </span>
@@ -400,11 +463,11 @@ export default function Command({ ctx }) {
           <ContextMenu.Separator />
           <ContextMenu.Item
             onClick={() => {
-              setFavorite(menu.channel.unique_key, true);
+              setFavorite(menu.channel.unique_key, !menu.channel.favorite);
               setMenu(null);
             }}
           >
-            Pin as favorite
+            {menu.channel.favorite ? 'Unpin from favorites' : 'Pin as favorite'}
           </ContextMenu.Item>
           <ContextMenu.Separator />
           <ContextMenu.Item
@@ -548,6 +611,36 @@ function IconCaret() {
   return (
     <svg width="7" height="7" viewBox="0 0 7 7" fill="none" stroke="currentColor" strokeWidth="1">
       <path d="M1.5 2.5 L3.5 4.5 L5.5 2.5" />
+    </svg>
+  );
+}
+function IconStar({ filled }) {
+  return (
+    <svg
+      width="11"
+      height="11"
+      viewBox="0 0 12 12"
+      fill={filled ? 'currentColor' : 'none'}
+      stroke="currentColor"
+      strokeWidth="1"
+      strokeLinejoin="miter"
+    >
+      <path d="M6 1.2 L7.4 4.4 L11 4.8 L8.4 7.3 L9.1 11 L6 9.2 L2.9 11 L3.6 7.3 L1 4.8 L4.6 4.4 Z" />
+    </svg>
+  );
+}
+function IconClose() {
+  return (
+    <svg
+      width="10"
+      height="10"
+      viewBox="0 0 10 10"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1"
+      strokeLinecap="square"
+    >
+      <path d="M2 2 L8 8 M8 2 L2 8" />
     </svg>
   );
 }
