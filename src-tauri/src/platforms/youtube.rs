@@ -109,18 +109,40 @@ pub fn is_uc_id(s: &str) -> bool {
 /// stream live channel, returns `streams.len() == 1`. For NASA-style
 /// multi-concurrent channels, returns `streams.len() >= 2`.
 ///
-/// Calls yt-dlp for the primary stream + scrapes `/streams` for the
-/// concurrent-list + scrapes `/watch?v=` per non-primary video for
-/// metadata. Portrait dedupe (auto-Shorts variant of the same primary
-/// feed): when the primary is portrait AND there's a landscape
-/// alternative, swap to the landscape one.
+/// Primary detection scrapes `/live` (single HTTP request) and parses
+/// `ytInitialPlayerResponse` — matches the Qt app's flow at
+/// `api/youtube.py::_get_livestream_scrape`. yt-dlp is the fallback
+/// when the scrape doesn't return a parseable player response (channel
+/// doesn't exist, geo block, etc.). Each yt-dlp invocation makes 3-5
+/// internal YouTube requests, so doing yt-dlp first was burning ~3-5×
+/// more YouTube traffic per refresh than necessary and triggering IP
+/// rate-limiting.
+///
+/// `/streams` HTML scrape + per-video `/watch` scrape (for multi-
+/// concurrent channels) and the portrait-dedupe step run on top of
+/// either primary path unchanged.
 pub async fn fetch_live(
     channel_id: &str,
     cookies_browser: Option<&str>,
     http: &reqwest::Client,
 ) -> Result<YouTubeLive> {
-    // Step 1: primary via yt-dlp.
-    let primary = fetch_primary_via_ytdlp(channel_id, cookies_browser).await?;
+    // Step 1: primary via HTML scrape (cheap), fall back to yt-dlp.
+    let primary = match fetch_primary_via_scrape(http, channel_id).await {
+        Ok(Some(yt)) => yt,
+        Ok(None) => {
+            log::debug!(
+                "YT /live scrape: no parseable player response for {channel_id}; \
+                 falling back to yt-dlp"
+            );
+            fetch_primary_via_ytdlp(channel_id, cookies_browser).await?
+        }
+        Err(e) => {
+            log::warn!(
+                "YT /live scrape failed for {channel_id}: {e:#}; falling back to yt-dlp"
+            );
+            fetch_primary_via_ytdlp(channel_id, cookies_browser).await?
+        }
+    };
 
     // Offline → empty streams.
     let primary_stream = match primary.streams.first() {
@@ -208,8 +230,70 @@ async fn find_landscape_alternative(
     None
 }
 
-/// Existing yt-dlp primary detection — extracted from the old fetch_live
-/// body so the orchestration above can layer scraping on top.
+/// Primary live-status detection via HTML scrape of `/live`. Single HTTP
+/// request; parses `ytInitialPlayerResponse` and reuses the existing
+/// `parse_player_response` (also used by the `/watch` per-video scrape
+/// for multi-stream channels).
+///
+/// Returns:
+/// - `Ok(Some(YouTubeLive))` — scrape succeeded. `streams` is one
+///   element when live, empty when offline.
+/// - `Ok(None)` — scrape returned but the page had no
+///   `ytInitialPlayerResponse` blob. Caller falls back to yt-dlp.
+/// - `Err(_)` — HTTP/network error. Caller falls back to yt-dlp.
+async fn fetch_primary_via_scrape(
+    http: &reqwest::Client,
+    channel_id: &str,
+) -> Result<Option<YouTubeLive>> {
+    let url = live_url(channel_id);
+    let mut req = http.get(&url).timeout(HTTP_TIMEOUT);
+    for (k, v) in SCRAPE_HEADERS {
+        req = req.header(*k, *v);
+    }
+    let resp = req.send().await.with_context(|| format!("GET {url}"))?;
+    if !resp.status().is_success() {
+        log::debug!(
+            "YT /live scrape: {channel_id}: HTTP {}",
+            resp.status()
+        );
+        return Ok(None);
+    }
+    let html = resp.text().await.context("reading /live body")?;
+
+    let Some(player_response) = extract_initial_data(&html, "ytInitialPlayerResponse") else {
+        return Ok(None);
+    };
+
+    // Channel display_name from videoDetails.author (the canonical
+    // friendly name; same field yt-dlp's `channel` returns).
+    let display_name = player_response
+        .pointer("/videoDetails/author")
+        .and_then(|v| v.as_str())
+        .unwrap_or(channel_id)
+        .to_string();
+
+    // parse_player_response only returns Some when isLive is true.
+    // For offline channels we return Some(YouTubeLive { streams: [] }),
+    // which the caller treats as "scrape succeeded, channel offline" —
+    // no yt-dlp fallback needed.
+    let streams = if let Some(stream) = parse_player_response(&player_response) {
+        vec![stream]
+    } else {
+        Vec::new()
+    };
+
+    Ok(Some(YouTubeLive {
+        channel_id: channel_id.to_string(),
+        display_name,
+        streams,
+    }))
+}
+
+/// Existing yt-dlp primary detection — kept as the fallback path now
+/// that scrape-first is the default. Each yt-dlp invocation makes 3-5
+/// internal YouTube requests, so we only run it when the cheaper
+/// scrape can't get an answer (channel doesn't exist, geo block,
+/// `/live` redirect oddity, etc.).
 async fn fetch_primary_via_ytdlp(
     channel_id: &str,
     cookies_browser: Option<&str>,
