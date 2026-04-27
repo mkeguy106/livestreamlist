@@ -48,6 +48,10 @@ pub struct TwitchChatConfig {
     /// Per-channel own-user badges captured from USERSTATE; used for
     /// local echo of own outgoing messages.
     pub own_badges: parking_lot::Mutex<Vec<crate::chat::models::ChatBadge>>,
+    /// Properly-cased display name from GLOBALUSERSTATE/USERSTATE. The
+    /// IRC NICK we send is forced lowercase, so without this the self-echo
+    /// would render as `angeloftheodd` instead of `AngelOfTheOdd`.
+    pub own_display_name: parking_lot::Mutex<Option<String>>,
     /// Latest parsed ROOMSTATE from IRC; used for emit-on-change logic.
     pub last_room_state: parking_lot::Mutex<Option<ChatRoomState>>,
 }
@@ -247,6 +251,9 @@ async fn handle_line(
         "USERSTATE" | "GLOBALUSERSTATE" => {
             let badges = extract_own_badges(&msg);
             *cfg.own_badges.lock() = badges;
+            if let Some(name) = extract_own_display_name(&msg) {
+                *cfg.own_display_name.lock() = Some(name);
+            }
         }
         "NOTICE" => {
             // Surface lands in Phase 4b with preferences.
@@ -405,7 +412,7 @@ fn build_self_echo(cfg: &TwitchChatConfig, text: &str) -> Option<ChatMessage> {
     // Anonymous (justinfan…) connections shouldn't echo — they can't even
     // send. Require auth to be present.
     let auth = cfg.auth.as_ref()?;
-    let login = auth.login.clone();
+    let login = auth.login.to_ascii_lowercase();
     if login.is_empty() {
         return None;
     }
@@ -418,6 +425,13 @@ fn build_self_echo(cfg: &TwitchChatConfig, text: &str) -> Option<ChatMessage> {
     // Strip /me ACTION wrapping mirroring inbound behavior.
     let (clean_text, is_action) = strip_action(text);
 
+    let display_name = cfg
+        .own_display_name
+        .lock()
+        .clone()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| login.clone());
+
     Some(ChatMessage {
         id: format!("self-{}", SELF_ECHO_SEQ.fetch_add(1, Ordering::Relaxed)),
         channel_key: cfg.channel_key.clone(),
@@ -425,8 +439,8 @@ fn build_self_echo(cfg: &TwitchChatConfig, text: &str) -> Option<ChatMessage> {
         timestamp: chrono::Utc::now(),
         user: ChatUser {
             id: None,
-            login: login.clone(),
-            display_name: login,
+            login,
+            display_name,
             color: None,
             is_mod: badges.iter().any(|b| b.id.starts_with("moderator/")),
             is_subscriber: badges.iter().any(|b| b.id.starts_with("subscriber/")),
@@ -601,6 +615,13 @@ fn extract_own_badges(msg: &crate::chat::irc::IrcMessage<'_>) -> Vec<ChatBadge> 
     parse_badges(msg.tags.get("badges").map(String::as_str).unwrap_or(""))
 }
 
+fn extract_own_display_name(msg: &crate::chat::irc::IrcMessage<'_>) -> Option<String> {
+    msg.tags
+        .get("display-name")
+        .filter(|s| !s.is_empty())
+        .cloned()
+}
+
 fn parse_badges(tag: &str) -> Vec<ChatBadge> {
     if tag.is_empty() {
         return Vec::new();
@@ -713,6 +734,30 @@ mod tests {
                 .unwrap()
                 .is_mod
         );
+    }
+
+    #[test]
+    fn extract_own_display_name_picks_cased_name() {
+        let line = "@badge-info=;badges=;color=#FF0000;display-name=AngelOfTheOdd;emote-sets=0;mod=0;subscriber=0;user-type= :tmi.twitch.tv GLOBALUSERSTATE";
+        let m = crate::chat::irc::parse(line).unwrap();
+        assert_eq!(
+            extract_own_display_name(&m),
+            Some("AngelOfTheOdd".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_own_display_name_absent_returns_none() {
+        let line = "@badges= :tmi.twitch.tv USERSTATE #shroud";
+        let m = crate::chat::irc::parse(line).unwrap();
+        assert_eq!(extract_own_display_name(&m), None);
+    }
+
+    #[test]
+    fn extract_own_display_name_empty_returns_none() {
+        let line = "@display-name=;badges= :tmi.twitch.tv USERSTATE #shroud";
+        let m = crate::chat::irc::parse(line).unwrap();
+        assert_eq!(extract_own_display_name(&m), None);
     }
 
     #[test]
