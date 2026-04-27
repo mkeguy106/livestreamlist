@@ -27,6 +27,19 @@ pub struct ChatMessage {
     /// Frontend renders these as styled system rows, not normal PRIVMSGs.
     #[serde(default)]
     pub system: Option<SystemEvent>,
+    /// True for messages replayed from the recent-messages.robotty.de
+    /// backfill on chat connect. The frontend renders these dimmed,
+    /// with a separator row above the block. Persisted in the chat
+    /// log so a future log replay can keep the marker.
+    #[serde(default)]
+    pub is_backfill: bool,
+    /// True for messages returned from `replay_chat_history` (read from
+    /// the local JSONL log on ChatView mount). Transient — set by the
+    /// IPC handler after deserialize, never persisted back. Frontend
+    /// dims the row alongside `is_backfill` so all pre-live messages
+    /// share one visual treatment.
+    #[serde(default)]
+    pub is_log_replay: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

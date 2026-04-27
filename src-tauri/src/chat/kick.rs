@@ -347,6 +347,8 @@ fn build_chat_message(cfg: &KickChatConfig, parsed: &Value) -> Option<ChatMessag
         is_first_message: false,
         reply_to: None,
         system: None,
+        is_backfill: false,
+        is_log_replay: false,
     })
 }
 

@@ -262,6 +262,8 @@ mod tests {
             is_first_message: false,
             reply_to: None,
             system: None,
+            is_backfill: false,
+            is_log_replay: false,
         }
     }
 
