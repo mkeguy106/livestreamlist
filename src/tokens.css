@@ -95,6 +95,7 @@ body { background: var(--zinc-950); }
 }
 .rx-live-dot.pulse { animation: rx-pulse 1.6s ease-in-out infinite; }
 @keyframes rx-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+@keyframes rx-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 
 .rx-status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--zinc-600); flex-shrink: 0; }
 .rx-status-dot.live { background: var(--live); box-shadow: 0 0 6px rgba(239, 68, 68, 0.55); }
