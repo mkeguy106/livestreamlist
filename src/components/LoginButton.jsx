@@ -313,7 +313,7 @@ function PlatformChiclet({ letter, color, signedIn }) {
         fontSize: 11,
         fontWeight: 700,
         color,
-        opacity: 0.7,
+        opacity: 0.45,
         lineHeight: 1,
       }}
     >
@@ -326,9 +326,10 @@ function PlatformChiclet({ letter, color, signedIn }) {
           width: 5,
           height: 5,
           borderRadius: '50%',
-          // Muted Tailwind green-700 / red-800 — sits quietly on the
-          // zinc background instead of competing with live-stream dots.
-          background: signedIn ? '#15803d' : '#991b1b',
+          // Tailwind green-900 / red-900 — chiclet should never
+          // visually compete with live-stream dots; the titlebar
+          // affordance stays in the background until clicked.
+          background: signedIn ? '#14532d' : '#7f1d1d',
           boxShadow: '0 0 0 1.5px var(--zinc-925)',
         }}
       />

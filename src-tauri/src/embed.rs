@@ -244,6 +244,24 @@ impl EmbedManager {
                 move |w: WebviewWindow, payload: PageLoadPayload<'_>| {
                     if matches!(payload.event(), PageLoadEvent::Finished) {
                         let _ = w.show();
+                        // Re-inject the platform style / DOM-isolation
+                        // script on EVERY page load. The embed window is
+                        // reused across same-platform channel switches
+                        // via `navigate()`, which wipes the JS context;
+                        // running this only at window creation left the
+                        // post-navigate page un-isolated (Chaturbate's
+                        // full site was visible instead of just chat).
+                        let style_js = match platform_for_load {
+                            Platform::Youtube => format!(
+                                "(function(){{var s=document.createElement('style');s.textContent={};document.head.appendChild(s);}})();",
+                                json_string(YT_THEME_CSS),
+                            ),
+                            Platform::Chaturbate => CB_ISOLATE_JS.to_string(),
+                            _ => String::new(),
+                        };
+                        if !style_js.is_empty() {
+                            let _ = w.eval(style_js);
+                        }
                         if platform_for_load == Platform::Chaturbate {
                             verify_chaturbate_auth(&w, &app_for_load);
                         }
@@ -284,19 +302,10 @@ impl EmbedManager {
         win.set_position(PhysicalPosition::new(x, y))
             .with_context(|| "set_position")?;
         // Note: `win.show()` deliberately NOT called here. The on_page_load
-        // hook above shows after first paint to prevent the white flash.
-
-        let style_js = match channel.platform {
-            Platform::Youtube => format!(
-                "(function(){{var s=document.createElement('style');s.textContent={};document.head.appendChild(s);}})();",
-                json_string(YT_THEME_CSS),
-            ),
-            Platform::Chaturbate => CB_ISOLATE_JS.to_string(),
-            _ => String::new(),
-        };
-        if !style_js.is_empty() {
-            let _ = win.eval(style_js);
-        }
+        // hook above shows after first paint to prevent the white flash —
+        // and also re-injects the per-platform style/DOM-isolation
+        // script so navigation (channel switches via reuse) doesn't
+        // strand the embed on an un-isolated page.
 
         {
             let mut g = self.inner.lock();
