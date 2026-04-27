@@ -50,6 +50,8 @@ function savePref(key, value) {
 export default function Command({ ctx }) {
   const {
     livestreams,
+    loading,
+    refresh,
     selectedKey,
     setSelectedKey,
     openAddDialog,
@@ -135,12 +137,18 @@ export default function Command({ ctx }) {
             flexShrink: 0,
           }}
         >
-          <div style={{ padding: '10px 12px 4px', display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div style={{ padding: '10px 12px 4px', display: 'flex', alignItems: 'center', gap: 6 }}>
             <div className="rx-chiclet">Channels</div>
             <div style={{ flex: 1 }} />
             <div className="rx-chiclet" style={{ color: 'var(--zinc-400)' }}>
               {liveCount}/{filtered.length}
             </div>
+            <IconBtn
+              title={loading ? 'Refreshing…' : 'Refresh now (F5)'}
+              onClick={() => { if (!loading) refresh(); }}
+            >
+              <IconRefresh spinning={loading} />
+            </IconBtn>
           </div>
           <div
             style={{
@@ -534,6 +542,33 @@ function IconCaret() {
   return (
     <svg width="7" height="7" viewBox="0 0 7 7" fill="none" stroke="currentColor" strokeWidth="1">
       <path d="M1.5 2.5 L3.5 4.5 L5.5 2.5" />
+    </svg>
+  );
+}
+function IconRefresh({ spinning }) {
+  // Two-arrow loop — two arcs forming most of a circle with a small
+  // gap at each side, each ending in a chunky chevron pointing into
+  // the gap. Classic browser-style refresh affordance.
+  return (
+    <svg
+      width="12"
+      height="12"
+      viewBox="0 0 12 12"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1"
+      strokeLinecap="square"
+      strokeLinejoin="miter"
+      style={
+        spinning
+          ? { animation: 'rx-spin 800ms linear infinite', transformOrigin: '50% 50%' }
+          : undefined
+      }
+    >
+      <path d="M 2.5 8 A 4 4 0 0 1 8 2.5" />
+      <path d="M 8 1.5 L 8 2.5 L 7 2.5" />
+      <path d="M 9.5 4 A 4 4 0 0 1 4 9.5" />
+      <path d="M 4 10.5 L 4 9.5 L 5 9.5" />
     </svg>
   );
 }
