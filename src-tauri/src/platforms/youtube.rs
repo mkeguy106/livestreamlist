@@ -89,11 +89,19 @@ pub struct YouTubeStream {
 }
 
 fn live_url(channel_id: &str) -> String {
-    if channel_id.starts_with("UC") && channel_id.len() == 24 {
+    if is_uc_id(channel_id) {
         format!("https://www.youtube.com/channel/{channel_id}/live")
     } else {
         format!("https://www.youtube.com/@{channel_id}/live")
     }
+}
+
+/// Matches YouTube's canonical "UC..." channel ID shape (24 chars, leads
+/// with `UC`). Used by the refresh path to detect channels that were
+/// added via UC URLs (display_name == channel_id) so the friendly name
+/// from yt-dlp can be backfilled into the persisted channel record.
+pub fn is_uc_id(s: &str) -> bool {
+    s.len() == 24 && s.starts_with("UC")
 }
 
 /// Fetch the current set of live streams for a YouTube channel. Returns
