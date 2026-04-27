@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import Tooltip from './Tooltip.jsx';
 
 /**
  * Anchored portal popover for a single chat user. Caller mounts one of these
@@ -186,7 +187,9 @@ function Header({ display, login, nameColor, avatar, platformLetter, badges = []
         {badges?.length ? (
           <div style={{ display: 'flex', gap: 4, marginTop: 4 }}>
             {badges.map(b => (
-              <img key={b.id} src={b.url} title={b.title} alt="" width={18} height={18} />
+              <Tooltip key={b.id} text={b.title}>
+                <img src={b.url} alt="" width={18} height={18} />
+              </Tooltip>
             ))}
           </div>
         ) : null}

@@ -30,7 +30,6 @@ export default function TitleBanner({ channel, compact = false }) {
           fontSize: compact ? 'var(--t-11)' : 'var(--t-12)',
           lineHeight: 1.35,
         }}
-        title={channel.title}
       >
         {channel.title}
       </div>

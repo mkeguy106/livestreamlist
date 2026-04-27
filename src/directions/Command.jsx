@@ -245,38 +245,41 @@ export default function Command({ ctx }) {
               const active = ch.unique_key === selected?.unique_key;
               const isPlaying = playing.has(ch.unique_key);
               return (
-                <button
+                <Tooltip
                   key={ch.unique_key}
-                  type="button"
-                  onClick={() => setSelectedKey(ch.unique_key)}
-                  onDoubleClick={() => {
-                    if (ch.is_live) launchStream(ch.unique_key);
-                  }}
-                  onContextMenu={(e) => {
-                    e.preventDefault();
-                    setSelectedKey(ch.unique_key);
-                    setMenu({ x: e.clientX, y: e.clientY, channel: ch });
-                  }}
-                  title={ch.is_live ? 'Double-click to play' : undefined}
-                  style={{
-                    width: '100%',
-                    textAlign: 'left',
-                    background: active ? 'var(--zinc-900)' : 'transparent',
-                    borderLeft: active ? '2px solid var(--zinc-200)' : '2px solid transparent',
-                    borderTop: 'none',
-                    borderRight: 'none',
-                    borderBottom: 'none',
-                    padding: '6px 12px',
-                    display: 'grid',
-                    gridTemplateColumns: '10px 1fr auto',
-                    columnGap: 10,
-                    alignItems: 'center',
-                    color: 'inherit',
-                    cursor: 'pointer',
-                    opacity: ch.is_live ? 1 : 0.45,
-                    fontFamily: 'inherit',
-                  }}
+                  block
+                  text={ch.is_live ? 'Double-click to play' : null}
                 >
+                  <button
+                    type="button"
+                    onClick={() => setSelectedKey(ch.unique_key)}
+                    onDoubleClick={() => {
+                      if (ch.is_live) launchStream(ch.unique_key);
+                    }}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      setSelectedKey(ch.unique_key);
+                      setMenu({ x: e.clientX, y: e.clientY, channel: ch });
+                    }}
+                    style={{
+                      width: '100%',
+                      textAlign: 'left',
+                      background: active ? 'var(--zinc-900)' : 'transparent',
+                      borderLeft: active ? '2px solid var(--zinc-200)' : '2px solid transparent',
+                      borderTop: 'none',
+                      borderRight: 'none',
+                      borderBottom: 'none',
+                      padding: '6px 12px',
+                      display: 'grid',
+                      gridTemplateColumns: '10px 1fr auto',
+                      columnGap: 10,
+                      alignItems: 'center',
+                      color: 'inherit',
+                      cursor: 'pointer',
+                      opacity: ch.is_live ? 1 : 0.45,
+                      fontFamily: 'inherit',
+                    }}
+                  >
                   <span className={`rx-status-dot ${ch.is_live ? 'live' : 'off'}`} />
                   <div style={{ minWidth: 0 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -284,16 +287,17 @@ export default function Command({ ctx }) {
                         {ch.display_name}
                       </span>
                       {isPlaying && (
-                        <span
-                          title="Playing"
-                          style={{
-                            color: 'var(--ok)',
-                            fontSize: 9,
-                            lineHeight: 1,
-                          }}
-                        >
-                          ▶
-                        </span>
+                        <Tooltip text="Playing">
+                          <span
+                            style={{
+                              color: 'var(--ok)',
+                              fontSize: 9,
+                              lineHeight: 1,
+                            }}
+                          >
+                            ▶
+                          </span>
+                        </Tooltip>
                       )}
                       <span className={`rx-plat ${ch.platform.charAt(0)}`}>{ch.platform.charAt(0).toUpperCase()}</span>
                     </div>
@@ -315,7 +319,8 @@ export default function Command({ ctx }) {
                       {ch.is_live ? formatViewers(ch.viewers) : '—'}
                     </span>
                   </div>
-                </button>
+                  </button>
+                </Tooltip>
               );
             })}
           </div>

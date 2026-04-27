@@ -5,6 +5,7 @@
 import ChatView from '../components/ChatView.jsx';
 import SocialsBanner from '../components/SocialsBanner.jsx';
 import TitleBanner from '../components/TitleBanner.jsx';
+import Tooltip from '../components/Tooltip.jsx';
 import { formatUptime, formatViewers } from '../utils/format.js';
 
 export default function Focus({ ctx }) {
@@ -188,9 +189,12 @@ function FeaturedStream({ channel, onLaunch, onOpenBrowser }) {
                 whiteSpace: 'nowrap',
                 maxWidth: 320,
               }}
-              title={channel.title}
             >
-              {channel.title}
+              <Tooltip wrap text={channel.title}>
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {channel.title}
+                </span>
+              </Tooltip>
             </span>
           </>
         )}
@@ -227,27 +231,28 @@ function FeaturedStream({ channel, onLaunch, onOpenBrowser }) {
           />
         )}
         <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <button
-            type="button"
-            onClick={channel.is_live ? onLaunch : undefined}
-            disabled={!channel.is_live}
-            style={{
-              width: 64,
-              height: 64,
-              borderRadius: '50%',
-              border: '1px solid var(--zinc-700)',
-              background: channel.is_live ? 'rgba(9,9,11,.8)' : 'rgba(9,9,11,.4)',
-              color: channel.is_live ? 'var(--zinc-100)' : 'var(--zinc-500)',
-              cursor: channel.is_live ? 'pointer' : 'not-allowed',
-              fontSize: 22,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
-            title={channel.is_live ? 'Launch via streamlink' : 'channel offline'}
-          >
-            ▶
-          </button>
+          <Tooltip text={channel.is_live ? 'Launch via streamlink' : 'channel offline'}>
+            <button
+              type="button"
+              onClick={channel.is_live ? onLaunch : undefined}
+              disabled={!channel.is_live}
+              style={{
+                width: 64,
+                height: 64,
+                borderRadius: '50%',
+                border: '1px solid var(--zinc-700)',
+                background: channel.is_live ? 'rgba(9,9,11,.8)' : 'rgba(9,9,11,.4)',
+                color: channel.is_live ? 'var(--zinc-100)' : 'var(--zinc-500)',
+                cursor: channel.is_live ? 'pointer' : 'not-allowed',
+                fontSize: 22,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
+              ▶
+            </button>
+          </Tooltip>
         </div>
       </div>
 
