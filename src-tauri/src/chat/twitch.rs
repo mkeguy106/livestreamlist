@@ -502,6 +502,17 @@ fn build_self_echo(cfg: &TwitchChatConfig, text: &str) -> Option<ChatMessage> {
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| login.clone());
 
+    // Scan for emotes by name against the channel's cache (3rd-party
+    // globals/channel + the user's Twitch sub/follower emotes loaded
+    // via emote_loader). Without this, own messages render emote
+    // codes as plain text — inbound messages get the same treatment
+    // via build_privmsg's scan_message call.
+    let initial: Vec<EmoteRange> = Vec::new();
+    let mut emote_ranges = cfg
+        .emotes
+        .scan_message(&cfg.channel_key, &clean_text, &initial);
+    emote_ranges.sort_by_key(|r| r.start);
+
     Some(ChatMessage {
         id: format!("self-{}", SELF_ECHO_SEQ.fetch_add(1, Ordering::Relaxed)),
         channel_key: cfg.channel_key.clone(),
@@ -518,7 +529,7 @@ fn build_self_echo(cfg: &TwitchChatConfig, text: &str) -> Option<ChatMessage> {
             is_turbo: badges.iter().any(|b| b.id.starts_with("turbo/")),
         },
         text: clean_text,
-        emote_ranges: Vec::new(),
+        emote_ranges,
         badges,
         is_action,
         is_first_message: false,
