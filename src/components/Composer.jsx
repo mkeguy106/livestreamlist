@@ -3,7 +3,7 @@ import { chatOpenPopout, chatSend, listEmotes } from '../ipc.js';
 import Tooltip from './Tooltip.jsx';
 
 const MAX_LEN = 500;
-const SUGGESTION_CAP = 20;
+const SUGGESTION_CAP = 75;
 
 /**
  * Chat composer with inline `:emote` and `@mention` autocomplete. Disabled
