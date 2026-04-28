@@ -67,6 +67,7 @@ export default function ChatView({
 
   const { messages, status, pauseTrim, resumeTrim } = useChat(channelKey);
   const auth = useAuth();
+  const rootRef = useRef(null);
   const listRef = useRef(null);
   const contentRef = useRef(null);
   const pauseTimerRef = useRef(null);
@@ -76,6 +77,10 @@ export default function ChatView({
   const [autoScroll, setAutoScroll] = useState(true);
   const [pauseSecondsLeft, setPauseSecondsLeft] = useState(0);
   const [conversation, setConversation] = useState(null);
+  const [findOpen, setFindOpen] = useState(false);
+  const [findQuery, setFindQuery] = useState('');
+  const [findIndex, setFindIndex] = useState(-1);
+  const findInputRef = useRef(null);
 
   const myLogin =
     (platform === 'kick' ? auth.kick?.login : auth.twitch?.login)?.toLowerCase() ?? null;
@@ -115,6 +120,105 @@ export default function ChatView({
     const idx = messages.findIndex((m) => m.is_backfill || m.is_log_replay);
     return idx === -1 ? null : idx;
   }, [messages]);
+
+  // Ctrl+F find. Matches against text + login + display_name. Returns
+  // an array of indices into `messages` for matching rows. Empty when
+  // find is closed or query is blank.
+  const findMatches = useMemo(() => {
+    if (!findOpen) return [];
+    const q = findQuery.trim().toLowerCase();
+    if (!q) return [];
+    const out = [];
+    for (let i = 0; i < messages.length; i += 1) {
+      const m = messages[i];
+      if (m.system) continue;
+      const text = (m.text || '').toLowerCase();
+      const login = (m.user?.login || '').toLowerCase();
+      const display = (m.user?.display_name || '').toLowerCase();
+      if (text.includes(q) || login.includes(q) || display.includes(q)) {
+        out.push(i);
+      }
+    }
+    return out;
+  }, [findOpen, findQuery, messages]);
+
+  // Set of matched indices for fast row-render lookup.
+  const findMatchSet = useMemo(() => new Set(findMatches), [findMatches]);
+  const findCursorMsgIndex =
+    findIndex >= 0 && findIndex < findMatches.length ? findMatches[findIndex] : -1;
+
+  // When the match list changes (new query / messages arrived), jump
+  // to the last (most-recent) match. Reset to -1 when no matches.
+  useEffect(() => {
+    if (findMatches.length === 0) {
+      setFindIndex(-1);
+    } else {
+      setFindIndex(findMatches.length - 1);
+    }
+  }, [findMatches]);
+
+  // Scroll the cursor match into view whenever it changes.
+  useEffect(() => {
+    if (findCursorMsgIndex < 0) return;
+    const el = listRef.current?.querySelector(
+      `[data-msg-index="${findCursorMsgIndex}"]`,
+    );
+    if (el?.scrollIntoView) {
+      el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    }
+  }, [findCursorMsgIndex]);
+
+  // While find is open, pause autoscroll so live messages don't shove
+  // the cursor match off-screen, and pause trim so indices stay stable.
+  useEffect(() => {
+    if (!findOpen) return;
+    setAutoScroll(false);
+    autoScrollRef.current = false;
+    pauseTrim();
+    return () => {
+      resumeTrim();
+    };
+  }, [findOpen, pauseTrim, resumeTrim]);
+
+  // Document-level Ctrl/Cmd+F handler. Per-ChatView scope: only the
+  // instance whose root contains the focused element handles the
+  // event; in Columns layout that's the column the user was just
+  // typing in. Composer focus is the dominant case so this also
+  // overrides the textarea's default behaviour.
+  useEffect(() => {
+    const onKey = (e) => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      if (e.key !== 'f' && e.key !== 'F') return;
+      const root = rootRef.current;
+      if (!root) return;
+      if (!root.contains(document.activeElement)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      setFindOpen(true);
+      requestAnimationFrame(() => {
+        findInputRef.current?.focus();
+        findInputRef.current?.select();
+      });
+    };
+    // Capture phase so a Composer onKeyDown that stops propagation can't
+    // swallow Ctrl+F before it reaches us. Composer focus is the
+    // dominant case so this matters.
+    document.addEventListener('keydown', onKey, true);
+    return () => document.removeEventListener('keydown', onKey, true);
+  }, []);
+
+  const findNext = useCallback(() => {
+    if (findMatches.length === 0) return;
+    setFindIndex((i) => (i + 1) % findMatches.length);
+  }, [findMatches.length]);
+  const findPrev = useCallback(() => {
+    if (findMatches.length === 0) return;
+    setFindIndex((i) => (i - 1 + findMatches.length) % findMatches.length);
+  }, [findMatches.length]);
+  const closeFind = useCallback(() => {
+    setFindOpen(false);
+    setFindQuery('');
+  }, []);
 
   const openConversation = (userA, userB) => {
     if (!userA || !userB || userA === userB) return;
@@ -229,6 +333,7 @@ export default function ChatView({
 
   return (
     <div
+      ref={rootRef}
       style={{
         flex: 1,
         display: 'flex',
@@ -239,6 +344,18 @@ export default function ChatView({
     >
       {header}
       <div style={{ flex: 1, position: 'relative', minHeight: 0, overflow: 'hidden' }}>
+        {findOpen && (
+          <FindBar
+            inputRef={findInputRef}
+            query={findQuery}
+            onQueryChange={setFindQuery}
+            matchCount={findMatches.length}
+            cursorPos={findIndex}
+            onNext={findNext}
+            onPrev={findPrev}
+            onClose={closeFind}
+          />
+        )}
         <div
           ref={listRef}
           onScroll={onScroll}
@@ -286,14 +403,32 @@ export default function ChatView({
                 />
               );
               const isHistorical = m.is_backfill || m.is_log_replay;
+              const isMatch = findMatchSet.has(i);
+              const isCursor = i === findCursorMsgIndex;
               return (
                 <Fragment key={m.id}>
                   {i === firstHistoricalIndex && <BackfillSeparator />}
-                  {isHistorical ? (
-                    <div style={{ opacity: 0.65 }}>{row}</div>
-                  ) : (
-                    row
-                  )}
+                  <div
+                    data-msg-index={i}
+                    style={{
+                      opacity: isHistorical ? 0.65 : undefined,
+                      background: isCursor
+                        ? 'rgba(250, 204, 21, 0.42)'
+                        : isMatch
+                          ? 'rgba(250, 204, 21, 0.18)'
+                          : undefined,
+                      borderLeft: isCursor
+                        ? '3px solid #facc15'
+                        : isMatch
+                          ? '3px solid rgba(250, 204, 21, 0.45)'
+                          : undefined,
+                      boxShadow: isCursor
+                        ? 'inset 0 0 0 1px rgba(250, 204, 21, 0.55)'
+                        : undefined,
+                    }}
+                  >
+                    {row}
+                  </div>
                 </Fragment>
               );
             })}
@@ -576,6 +711,133 @@ function ReplyContextRow({ reply, compact = false, onClick }) {
  * Sub / resub / subgift / raid / announcement — rendered inline with an
  * accent stripe and purple text, matching the Qt app's convention.
  */
+function FindBar({
+  inputRef,
+  query,
+  onQueryChange,
+  matchCount,
+  cursorPos,
+  onNext,
+  onPrev,
+  onClose,
+}) {
+  const counterText = (() => {
+    if (!query.trim()) return '';
+    if (matchCount === 0) return 'no matches';
+    return `${cursorPos + 1} / ${matchCount}`;
+  })();
+
+  return (
+    <div
+      style={{
+        position: 'absolute',
+        top: 8,
+        right: 8,
+        zIndex: 5,
+        display: 'flex',
+        alignItems: 'center',
+        gap: 4,
+        padding: '4px 4px 4px 8px',
+        background: 'var(--zinc-925)',
+        border: '1px solid var(--zinc-800)',
+        borderRadius: 4,
+        boxShadow: '0 6px 18px rgba(0,0,0,.5)',
+      }}
+    >
+      <input
+        ref={inputRef}
+        type="text"
+        value={query}
+        placeholder="Find in chat…"
+        onChange={(e) => onQueryChange(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Escape') {
+            e.stopPropagation();
+            onClose();
+          } else if (e.key === 'Enter') {
+            e.preventDefault();
+            if (e.shiftKey) onPrev();
+            else onNext();
+          } else if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            onNext();
+          } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            onPrev();
+          }
+        }}
+        style={{
+          width: 180,
+          background: 'transparent',
+          border: 'none',
+          outline: 'none',
+          color: 'var(--zinc-100)',
+          fontSize: 'var(--t-12)',
+          fontFamily: 'inherit',
+          padding: 0,
+        }}
+      />
+      <span
+        className="rx-mono"
+        style={{
+          fontSize: 10,
+          color: matchCount === 0 && query.trim() ? 'var(--warn, #f59e0b)' : 'var(--zinc-500)',
+          minWidth: 56,
+          textAlign: 'right',
+          whiteSpace: 'nowrap',
+        }}
+      >
+        {counterText}
+      </span>
+      <FindBtn aria-label="Previous match" onClick={onPrev} disabled={matchCount === 0}>
+        <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="square">
+          <path d="M2 6 L5 3 L8 6" />
+        </svg>
+      </FindBtn>
+      <FindBtn aria-label="Next match" onClick={onNext} disabled={matchCount === 0}>
+        <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="square">
+          <path d="M2 4 L5 7 L8 4" />
+        </svg>
+      </FindBtn>
+      <FindBtn aria-label="Close find" onClick={onClose}>
+        <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="square">
+          <path d="M2 2 L8 8 M8 2 L2 8" />
+        </svg>
+      </FindBtn>
+    </div>
+  );
+}
+
+function FindBtn({ children, onClick, disabled, ...rest }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      {...rest}
+      style={{
+        background: 'transparent',
+        border: 'none',
+        padding: 4,
+        color: disabled ? 'var(--zinc-700)' : 'var(--zinc-400)',
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        lineHeight: 0,
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+      }}
+      onMouseEnter={(e) => {
+        if (!disabled) e.currentTarget.style.color = 'var(--zinc-200)';
+      }}
+      onMouseLeave={(e) => {
+        if (!disabled) e.currentTarget.style.color = 'var(--zinc-400)';
+      }}
+    >
+      {children}
+    </button>
+  );
+}
+
 function BackfillSeparator() {
   return (
     <div
