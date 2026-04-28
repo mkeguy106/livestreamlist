@@ -1,4 +1,9 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+
+/// Auto-dismiss the popover after this long even if the cursor is
+/// still parked on the trigger. Without it, hover-stuck tooltips can
+/// sit on screen indefinitely.
+const AUTO_CLOSE_MS = 10_000;
 
 /**
  * Themed tooltip wrapper — replacement for the native `title=""`
@@ -28,6 +33,18 @@ export default function Tooltip({
   children,
 }) {
   const [hover, setHover] = useState(false);
+  const closeTimerRef = useRef(null);
+
+  useEffect(() => {
+    if (!hover) return;
+    closeTimerRef.current = setTimeout(() => setHover(false), AUTO_CLOSE_MS);
+    return () => {
+      if (closeTimerRef.current) {
+        clearTimeout(closeTimerRef.current);
+        closeTimerRef.current = null;
+      }
+    };
+  }, [hover]);
 
   // Horizontal anchoring. `center` (default) is fine for elements far
   // from the viewport edges. `right` anchors the popover's right edge
