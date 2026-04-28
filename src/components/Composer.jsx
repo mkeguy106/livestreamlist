@@ -3,7 +3,7 @@ import { chatOpenPopout, chatSend, listEmotes } from '../ipc.js';
 import Tooltip from './Tooltip.jsx';
 
 const MAX_LEN = 500;
-const SUGGESTION_CAP = 8;
+const SUGGESTION_CAP = 20;
 
 /**
  * Chat composer with inline `:emote` and `@mention` autocomplete. Disabled
@@ -168,7 +168,22 @@ export default function Composer({ channelKey, platform, auth, mentionCandidates
           value={text}
           onChange={onChange}
           onKeyDown={onKey}
-          onKeyUp={(e) => recomputePopup(e.currentTarget.value, e.currentTarget.selectionStart)}
+          onKeyUp={(e) => {
+            // Popup-navigation keys (↑↓ Tab Enter Esc) are handled by
+            // onKeyDown — recomputing here would clobber the index
+            // increment with a fresh `index: 0`.
+            if (
+              popup &&
+              (e.key === 'ArrowUp' ||
+                e.key === 'ArrowDown' ||
+                e.key === 'Tab' ||
+                e.key === 'Enter' ||
+                e.key === 'Escape')
+            ) {
+              return;
+            }
+            recomputePopup(e.currentTarget.value, e.currentTarget.selectionStart);
+          }}
           onClick={(e) => recomputePopup(e.currentTarget.value, e.currentTarget.selectionStart)}
           disabled={!authed || busy}
           maxLength={MAX_LEN}
@@ -201,8 +216,20 @@ export default function Composer({ channelKey, platform, auth, mentionCandidates
 }
 
 function Popup({ kind, items, index, onPick }) {
+  const containerRef = useRef(null);
+
+  // Keep the active row visible when navigating with ↑/↓ past the
+  // bottom (or top) of the visible window. `block: 'nearest'` is the
+  // right primitive — it scrolls only when the item is actually out
+  // of view, so already-visible rows don't jump.
+  useEffect(() => {
+    const el = containerRef.current?.querySelector(`[data-popup-index="${index}"]`);
+    el?.scrollIntoView?.({ block: 'nearest' });
+  }, [index]);
+
   return (
     <div
+      ref={containerRef}
       style={{
         position: 'absolute',
         bottom: 'calc(100% - 1px)',
@@ -226,6 +253,7 @@ function Popup({ kind, items, index, onPick }) {
           <button
             key={key}
             type="button"
+            data-popup-index={i}
             onMouseDown={(e) => { e.preventDefault(); onPick(item); }}
             style={{
               display: 'flex',
