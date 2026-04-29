@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useAuth } from '../hooks/useAuth.jsx';
 
 /**
- * Renders inside ChatView's embed branch above <EmbeddedChat>. Shows a
+ * Renders inside ChatView's embed branch above <EmbedSlot>. Shows a
  * thin banner when the user is on a Chaturbate channel and not signed in,
  * with a one-click recovery path. Returns null when signed in.
  */
