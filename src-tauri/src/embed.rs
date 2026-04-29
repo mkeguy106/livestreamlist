@@ -415,7 +415,7 @@ pub(crate) mod build_linux {
     /// PageLoadEvent::Finished + injects per-platform CSS/JS + verifies
     /// Chaturbate auth.
     pub(crate) fn build_child(host_inner: &Inner, spec: BuildSpec) -> Result<Arc<wry::WebView>> {
-        use std::sync::OnceLock;
+        use std::sync::{OnceLock, Weak};
 
         let fixed = host_inner
             .fixed
@@ -431,7 +431,18 @@ pub(crate) mod build_linux {
         // OnceLock so the on_page_load closure can reach the WebView post-build.
         // The wry 0.54 with_on_page_load_handler callback signature does not
         // include a WebView reference — we have to thread one in ourselves.
-        let cell: Arc<OnceLock<Arc<wry::WebView>>> = Arc::new(OnceLock::new());
+        //
+        // CRITICAL: store a `Weak<wry::WebView>` here, not `Arc<wry::WebView>`.
+        // The closure is held by the WebView's internal callback registry, so
+        // capturing a strong Arc into the closure creates a cycle:
+        //   wry::WebView → closure → Arc<OnceLock<Arc<wry::WebView>>> → same WebView
+        // The cycle prevents the strong count from ever reaching 0 when the
+        // owner (ChildInner) drops, and `InnerWebView::drop` calls
+        // `webview.destroy()` (wry-0.54.4/src/webkitgtk/mod.rs:96-99) — which
+        // is what removes the GtkWidget from its parent Fixed. Without proper
+        // drop, switching from a YT/CB channel to a Twitch one leaves the
+        // previous embed visible because its widget never detaches.
+        let cell: Arc<OnceLock<Weak<wry::WebView>>> = Arc::new(OnceLock::new());
         let cell_for_handler = cell.clone();
         let platform = spec.platform;
         let app = spec.app.clone();
@@ -440,15 +451,19 @@ pub(crate) mod build_linux {
             if !matches!(event, wry::PageLoadEvent::Finished) {
                 return;
             }
-            let Some(wv) = cell_for_handler.get() else {
+            let Some(weak) = cell_for_handler.get() else {
                 return;
             };
+            // Upgrade Weak → Arc only for the duration of this callback. If
+            // the WebView is already being dropped, upgrade returns None and
+            // we silently skip; no risk of resurrecting a dead webview.
+            let Some(wv) = weak.upgrade() else { return; };
             let _ = wv.set_visible(true);
             if let Some(js) = super::injection_for(platform) {
                 let _ = wv.evaluate_script(&js);
             }
             if platform == Platform::Chaturbate {
-                super::verify_chaturbate_auth_linux(wv, &app);
+                super::verify_chaturbate_auth_linux(&wv, &app);
             }
         };
 
@@ -466,7 +481,7 @@ pub(crate) mod build_linux {
             .build_gtk(&fixed.0)
             .map_err(|e| anyhow::anyhow!("build_gtk failed: {e}"))?;
         let webview_arc = Arc::new(webview);
-        let _ = cell.set(webview_arc.clone());
+        let _ = cell.set(Arc::downgrade(&webview_arc));
         Ok(webview_arc)
     }
 }
