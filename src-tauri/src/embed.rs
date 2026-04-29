@@ -225,6 +225,82 @@ pub(crate) mod linux {
 #[cfg(target_os = "linux")]
 pub(crate) use linux::FixedHandle;
 
+#[cfg(target_os = "linux")]
+pub(crate) struct ChildInner(pub(crate) std::sync::Arc<wry::WebView>);
+
+#[cfg(not(target_os = "linux"))]
+#[allow(dead_code)] // Phase 4 wires this up
+pub(crate) struct ChildInner;
+
+#[cfg(target_os = "linux")]
+pub(crate) mod build_linux {
+    use super::*;
+    use anyhow::{Context, Result};
+    use std::path::PathBuf;
+    use wry::dpi::{LogicalPosition, LogicalSize};
+    use wry::{Rect as WryRect, WebContext, WebViewBuilder, WebViewBuilderExtUnix};
+
+    pub(crate) struct BuildSpec {
+        pub url: String,
+        pub profile_dir: PathBuf,
+        pub bounds: Rect,
+        pub init_script: Option<String>,
+        pub background: (u8, u8, u8, u8),
+    }
+
+    /// Convert a physical-pixel Rect to a logical-pixel `wry::Rect`
+    /// using the GTK scale factor.
+    pub(crate) fn physical_to_logical(bounds: Rect, scale_factor: f64) -> WryRect {
+        let s = scale_factor.max(1.0);
+        WryRect {
+            position: LogicalPosition::new(bounds.x / s, bounds.y / s).into(),
+            size: LogicalSize::new((bounds.w / s).max(1.0), (bounds.h / s).max(1.0)).into(),
+        }
+    }
+
+    /// Build a wry::WebView parented into the EmbedHost's `gtk::Fixed`.
+    /// Caller must hold the host's inner mutex (we borrow it as a reference
+    /// to access `fixed`).
+    ///
+    /// **WebContext lifetime**: wry 0.54 requires `WebViewBuilder::new_with_web_context`
+    /// taking `&'a mut WebContext`. The smoke / Phase 3 path leaks the
+    /// WebContext via `Box::leak` (paired with the `mem::forget(webview)`
+    /// in the smoke command — both live as long as the gtk::Fixed). Phase 5
+    /// will design proper per-child WebContext ownership.
+    ///
+    /// On_page_load + visibility wiring is intentionally NOT done here —
+    /// Phase 6 wires it up. For now `with_visible(true)` so the smoke shows
+    /// immediately. Phase 6 changes to `false` + show on PageLoadEvent::Finished.
+    pub(crate) fn build_child(host_inner: &Inner, spec: BuildSpec) -> Result<wry::WebView> {
+        let fixed = host_inner
+            .fixed
+            .as_ref()
+            .context("install_overlay was not called yet — gtk::Fixed missing")?;
+
+        // Use scale factor of 1 for the smoke (we're calling at known-physical
+        // coords; for Phase 5 / 7 we'll thread the real scale factor through).
+        let wry_rect = physical_to_logical(spec.bounds, 1.0);
+
+        // Leaked WebContext — see doc comment above.
+        let ctx: &'static mut WebContext =
+            Box::leak(Box::new(WebContext::new(Some(spec.profile_dir))));
+
+        let mut builder = WebViewBuilder::new_with_web_context(ctx)
+            .with_url(&spec.url)
+            .with_background_color(spec.background)
+            .with_visible(true)
+            .with_bounds(wry_rect);
+        if let Some(init) = spec.init_script {
+            builder = builder.with_initialization_script(&init);
+        }
+
+        let webview = builder
+            .build_gtk(&fixed.0)
+            .map_err(|e| anyhow::anyhow!("build_gtk failed: {e}"))?;
+        Ok(webview)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
