@@ -106,34 +106,50 @@ impl EmbedHost {
     }
 }
 
-// Temporary stubs for Phase 1 testing. Real implementation in Phase 3/4.
-// lib.rs still references the old EmbedManager API; these stubs allow the
-// crate to compile so we can test the new types. Phase 7 removes lib.rs
-// references and deletes these stubs.
-pub struct EmbedManager;
-impl EmbedManager {
-    pub fn new() -> Arc<Self> {
-        Arc::new(EmbedManager)
-    }
-    #[allow(unused)]
-    pub fn mount(&self, _: &impl std::any::Any, _: &impl std::any::Any, _: &str, _: f64, _: f64, _: f64, _: f64) -> Result<bool, Box<dyn std::error::Error>> {
-        Ok(false)
-    }
-    #[allow(unused)]
-    pub fn position(&self, _: &str, _: f64, _: f64, _: f64, _: f64) -> Result<(), Box<dyn std::error::Error>> {
-        Ok(())
-    }
-    #[allow(unused)]
-    pub fn unmount(&self, _: &str) {}
-    #[allow(unused)]
-    pub fn unmount_platform(&self, _: Platform) {}
-    #[allow(unused)]
-    pub fn set_visible_all(&self, _: bool) {}
-}
-
+/// Set `_NET_WM_BYPASS_COMPOSITOR=1` on the X11 window so KWin skips ALL
+/// compositor effects (wobbly, blur, minimize/restore animations, …) for
+/// this specific window. Effective immediately, no restart needed.
+///
+/// Used by `login_popup.rs` for the auth flow popups. The new child-webview
+/// embeds (Phase 3+) don't need this because they live inside the main
+/// window's surface — only top-level X11 windows benefit.
 #[cfg(target_os = "linux")]
-#[allow(unused)]
-pub fn set_bypass_compositor(_: &impl std::any::Any) {}
+pub(crate) fn set_bypass_compositor(gdk_win: &gtk::gdk::Window) {
+    use gtk::glib::Cast;
+    use std::ffi::CString;
+
+    let x11_win = match gdk_win.clone().downcast::<gdkx11::X11Window>() {
+        Ok(w) => w,
+        Err(_) => return,
+    };
+    let xwindow = x11_win.xid();
+
+    unsafe {
+        let display_ptr = x11::xlib::XOpenDisplay(std::ptr::null());
+        if display_ptr.is_null() {
+            return;
+        }
+        let prop_name = CString::new("_NET_WM_BYPASS_COMPOSITOR").unwrap();
+        let prop_atom = x11::xlib::XInternAtom(display_ptr, prop_name.as_ptr(), 0);
+        if prop_atom == 0 {
+            x11::xlib::XCloseDisplay(display_ptr);
+            return;
+        }
+        let value: u32 = 1;
+        x11::xlib::XChangeProperty(
+            display_ptr,
+            xwindow as x11::xlib::Window,
+            prop_atom,
+            x11::xlib::XA_CARDINAL,
+            32,
+            x11::xlib::PropModeReplace,
+            &value as *const u32 as *const u8,
+            1,
+        );
+        x11::xlib::XFlush(display_ptr);
+        x11::xlib::XCloseDisplay(display_ptr);
+    }
+}
 
 #[cfg(test)]
 mod tests {

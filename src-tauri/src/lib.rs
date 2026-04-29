@@ -413,44 +413,41 @@ fn slugify(s: &str) -> String {
         .collect()
 }
 
+// Phase 1 stubs — real implementations land in Phase 7.
 #[tauri::command]
 fn embed_mount(
-    app: tauri::AppHandle,
-    state: State<'_, AppState>,
-    embeds: State<'_, Arc<embed::EmbedManager>>,
-    unique_key: String,
-    x: f64,
-    y: f64,
-    width: f64,
-    height: f64,
+    _app: tauri::AppHandle,
+    _state: State<'_, AppState>,
+    _embeds: State<'_, Arc<embed::EmbedHost>>,
+    _unique_key: String,
+    _x: f64,
+    _y: f64,
+    _width: f64,
+    _height: f64,
 ) -> Result<bool, String> {
-    embeds
-        .mount(&app, &state.store, &unique_key, x, y, width, height)
-        .map_err(err_string)
+    Ok(false)
 }
 
 #[tauri::command]
 fn embed_position(
-    embeds: State<'_, Arc<embed::EmbedManager>>,
-    unique_key: String,
-    x: f64,
-    y: f64,
-    width: f64,
-    height: f64,
+    _embeds: State<'_, Arc<embed::EmbedHost>>,
+    _unique_key: String,
+    _x: f64,
+    _y: f64,
+    _width: f64,
+    _height: f64,
 ) -> Result<(), String> {
-    embeds
-        .position(&unique_key, x, y, width, height)
-        .map_err(err_string)
+    Ok(())
 }
 
 #[tauri::command]
-fn embed_unmount(embeds: State<'_, Arc<embed::EmbedManager>>, unique_key: String) {
+fn embed_unmount(embeds: State<'_, Arc<embed::EmbedHost>>, unique_key: String) {
     embeds.unmount(&unique_key);
 }
 
 #[tauri::command]
-fn embed_set_visible(embeds: State<'_, Arc<embed::EmbedManager>>, visible: bool) {
-    embeds.set_visible_all(visible);
+fn embed_set_visible(_embeds: State<'_, Arc<embed::EmbedHost>>, _visible: bool) {
+    // Stub — Phase 7 wires per-key set_visible.
 }
 
 #[tauri::command]
@@ -910,7 +907,7 @@ async fn chaturbate_login(app: tauri::AppHandle) -> Result<bool, String> {
 #[tauri::command]
 fn chaturbate_logout(
     app: tauri::AppHandle,
-    embeds: State<'_, Arc<embed::EmbedManager>>,
+    embeds: State<'_, Arc<embed::EmbedHost>>,
 ) -> Result<(), String> {
     embeds.unmount_platform(Platform::Chaturbate);
     auth::chaturbate::clear().map_err(err_string)?;
@@ -1080,7 +1077,7 @@ pub fn run() {
             app.manage(chat_mgr);
             let player_mgr = Arc::new(PlayerManager::new(app.handle().clone()));
             app.manage(player_mgr);
-            let embed_mgr = embed::EmbedManager::new();
+            let embed_mgr = embed::EmbedHost::new();
             app.manage(embed_mgr);
             let login_popup_mgr = login_popup::LoginPopupManager::new();
             app.manage(login_popup_mgr);
