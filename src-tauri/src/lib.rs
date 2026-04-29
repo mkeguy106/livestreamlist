@@ -1078,7 +1078,23 @@ pub fn run() {
             let player_mgr = Arc::new(PlayerManager::new(app.handle().clone()));
             app.manage(player_mgr);
             let embed_mgr = embed::EmbedHost::new();
-            app.manage(embed_mgr);
+            app.manage(embed_mgr.clone());
+            #[cfg(target_os = "linux")]
+            {
+                let main = app
+                    .get_webview_window("main")
+                    .expect("main window must exist by setup time");
+                let host_for_setup = embed_mgr.clone();
+                let main_for_closure = main.clone();
+                main.run_on_main_thread(move || {
+                    if let Ok(gtk_window) = main_for_closure.gtk_window() {
+                        match embed::linux::install_overlay(&gtk_window) {
+                            Ok(fixed) => host_for_setup.install_fixed(fixed),
+                            Err(e) => log::error!("install_overlay failed: {e:#}"),
+                        }
+                    }
+                })?;
+            }
             let login_popup_mgr = login_popup::LoginPopupManager::new();
             app.manage(login_popup_mgr);
             // No focus-tracking hide: `transient_for(main)` makes the WM
