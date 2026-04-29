@@ -9,6 +9,7 @@
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::sync::Arc;
+use url::Url;
 
 use crate::platforms::Platform;
 
@@ -31,6 +32,13 @@ impl Rect {
             h: h.max(1.0),
         }
     }
+}
+
+#[derive(Clone, Debug)]
+#[allow(dead_code)] // used by Phase 6 chaturbate auth-drift hook
+pub struct CookieView {
+    pub name: String,
+    pub value: String,
 }
 
 pub struct EmbedHost {
@@ -125,6 +133,30 @@ impl ChildEmbed {
         }
         self.visible = visible;
         Ok(())
+    }
+
+    pub(crate) fn eval(&self, js: &str) -> anyhow::Result<()> {
+        #[cfg(target_os = "linux")]
+        {
+            self.inner
+                .0
+                .evaluate_script(js)
+                .map_err(|e| anyhow::anyhow!("evaluate_script: {e}"))?;
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = js;
+        }
+        Ok(())
+    }
+
+    #[allow(dead_code)] // Phase 6 wires Chaturbate auth-drift hook
+    pub(crate) fn cookies_for_url(&self, url: &Url) -> anyhow::Result<Vec<CookieView>> {
+        // Phase 6's verify_chaturbate_auth hook lands the real implementation
+        // once we know which API path (wry direct vs webkit2gtk::CookieManager)
+        // wry 0.54.4 actually supports. For Phase 3 this is a stub.
+        let _ = url;
+        Ok(Vec::new())
     }
 }
 
