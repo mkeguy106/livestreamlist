@@ -187,11 +187,6 @@ impl EmbedHost {
             .map(|(k, _)| k.clone())
             .collect()
     }
-
-    #[cfg(target_os = "linux")]
-    pub(crate) fn inner_for_smoke(&self) -> &Mutex<Inner> {
-        &self.inner
-    }
 }
 
 /// Set `_NET_WM_BYPASS_COMPOSITOR=1` on the X11 window so KWin skips ALL

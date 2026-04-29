@@ -450,32 +450,6 @@ fn embed_set_visible(_embeds: State<'_, Arc<embed::EmbedHost>>, _visible: bool) 
     // Stub — Phase 7 wires per-key set_visible.
 }
 
-#[cfg(target_os = "linux")]
-#[tauri::command]
-fn embed_smoke(embeds: State<'_, Arc<embed::EmbedHost>>) -> Result<(), String> {
-    let g = embeds.inner_for_smoke().lock();
-    let spec = embed::build_linux::BuildSpec {
-        url: "https://www.youtube.com/live_chat?is_popout=1&dark_theme=1&v=jfKfPfyJRdk"
-            .to_string(),
-        profile_dir: std::env::temp_dir().join("livestreamlist-smoke"),
-        bounds: embed::Rect::new(400.0, 200.0, 400.0, 600.0),
-        init_script: None,
-        background: (9, 9, 11, 255),
-    };
-    let webview = embed::build_linux::build_child(&g, spec).map_err(|e| e.to_string())?;
-    log::info!("[SMOKE] embed_smoke: built wry::WebView at (400, 200, 400, 600)");
-    // Leak the webview — it lives as long as the gtk::Fixed (i.e. the main
-    // window). Don't drop it here; that would tear down the WebKitWebProcess.
-    std::mem::forget(webview);
-    Ok(())
-}
-
-#[cfg(not(target_os = "linux"))]
-#[tauri::command]
-fn embed_smoke() -> Result<(), String> {
-    Err("smoke is Linux-only — Phase 4 adds non-Linux".into())
-}
-
 #[tauri::command]
 fn login_popup_open(
     app: tauri::AppHandle,
@@ -1165,7 +1139,6 @@ pub fn run() {
             embed_position,
             embed_unmount,
             embed_set_visible,
-            embed_smoke,
             login_popup_open,
             login_popup_close,
             login_popup_resize,
