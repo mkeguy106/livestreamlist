@@ -359,6 +359,8 @@ pub(crate) mod build_linux {
         pub scale_factor: f64,
         pub init_script: Option<String>,
         pub background: (u8, u8, u8, u8),
+        pub platform: Platform,
+        pub app: tauri::AppHandle,
     }
 
     /// Convert a physical-pixel Rect to a logical-pixel `wry::Rect`
@@ -381,10 +383,12 @@ pub(crate) mod build_linux {
     /// in the smoke command — both live as long as the gtk::Fixed). Phase 5
     /// will design proper per-child WebContext ownership.
     ///
-    /// On_page_load + visibility wiring is intentionally NOT done here —
-    /// Phase 6 wires it up. For now `with_visible(true)` so the smoke shows
-    /// immediately. Phase 6 changes to `false` + show on PageLoadEvent::Finished.
-    pub(crate) fn build_child(host_inner: &Inner, spec: BuildSpec) -> Result<wry::WebView> {
+    /// Phase 6: created hidden, the on_page_load handler shows it on
+    /// PageLoadEvent::Finished + injects per-platform CSS/JS + verifies
+    /// Chaturbate auth.
+    pub(crate) fn build_child(host_inner: &Inner, spec: BuildSpec) -> Result<Arc<wry::WebView>> {
+        use std::sync::OnceLock;
+
         let fixed = host_inner
             .fixed
             .as_ref()
@@ -396,11 +400,36 @@ pub(crate) mod build_linux {
         let ctx: &'static mut WebContext =
             Box::leak(Box::new(WebContext::new(Some(spec.profile_dir))));
 
+        // OnceLock so the on_page_load closure can reach the WebView post-build.
+        // The wry 0.54 with_on_page_load_handler callback signature does not
+        // include a WebView reference — we have to thread one in ourselves.
+        let cell: Arc<OnceLock<Arc<wry::WebView>>> = Arc::new(OnceLock::new());
+        let cell_for_handler = cell.clone();
+        let platform = spec.platform;
+        let app = spec.app.clone();
+
+        let handler = move |event: wry::PageLoadEvent, _url: String| {
+            if !matches!(event, wry::PageLoadEvent::Finished) {
+                return;
+            }
+            let Some(wv) = cell_for_handler.get() else {
+                return;
+            };
+            let _ = wv.set_visible(true);
+            if let Some(js) = super::injection_for(platform) {
+                let _ = wv.evaluate_script(&js);
+            }
+            if platform == Platform::Chaturbate {
+                super::verify_chaturbate_auth_linux(wv, &app);
+            }
+        };
+
         let mut builder = WebViewBuilder::new_with_web_context(ctx)
             .with_url(&spec.url)
             .with_background_color(spec.background)
-            .with_visible(true)
-            .with_bounds(wry_rect);
+            .with_visible(false) // shown by handler on PageLoadEvent::Finished
+            .with_bounds(wry_rect)
+            .with_on_page_load_handler(handler);
         if let Some(init) = spec.init_script {
             builder = builder.with_initialization_script(&init);
         }
@@ -408,7 +437,9 @@ pub(crate) mod build_linux {
         let webview = builder
             .build_gtk(&fixed.0)
             .map_err(|e| anyhow::anyhow!("build_gtk failed: {e}"))?;
-        Ok(webview)
+        let webview_arc = Arc::new(webview);
+        let _ = cell.set(webview_arc.clone());
+        Ok(webview_arc)
     }
 }
 
@@ -428,16 +459,17 @@ pub(crate) mod build_other {
         pub bounds: Rect,
         pub init_script: Option<String>,
         pub background: (u8, u8, u8, u8),
-        pub on_page_load: Option<Box<dyn Fn(Webview, PageLoadEvent) + Send + Sync>>,
+        pub platform: Platform,
+        pub app: AppHandle,
     }
 
     /// Build a child webview parented into the main window via
     /// `Window::add_child` (Tauri's `unstable` feature). Returns the
     /// `Webview` handle for storage in `ChildInner`.
     ///
-    /// Phase 6 will switch `visible(false)` + show on
-    /// `PageLoadEvent::Finished` here too — for now we mirror Linux's
-    /// "create then immediately position" pattern.
+    /// Created hidden — the on_page_load handler shows on
+    /// PageLoadEvent::Finished + injects per-platform CSS/JS + verifies
+    /// Chaturbate auth.
     pub(crate) fn build_child(app: &AppHandle, spec: BuildSpec) -> Result<Webview> {
         // `add_child` lives on Window<R>, not WebviewWindow<R>; pull the
         // raw window via Manager::get_window.
@@ -452,16 +484,25 @@ pub(crate) mod build_other {
         );
         let url = spec.url.parse::<url::Url>().context("parsing embed URL")?;
 
+        let platform = spec.platform;
+        let app_for_handler = spec.app.clone();
+
         let mut builder = WebviewBuilder::new(&spec.label, WebviewUrl::External(url))
             .data_directory(spec.profile_dir)
-            .background_color(bg);
+            .background_color(bg)
+            .on_page_load(move |w, payload| {
+                if matches!(payload.event(), PageLoadEvent::Finished) {
+                    let _ = w.show();
+                    if let Some(js) = super::injection_for(platform) {
+                        let _ = w.eval(&js);
+                    }
+                    if platform == Platform::Chaturbate {
+                        super::verify_chaturbate_auth_other(&w, &app_for_handler);
+                    }
+                }
+            });
         if let Some(s) = spec.init_script {
             builder = builder.initialization_script(&s);
-        }
-        if let Some(handler) = spec.on_page_load {
-            builder = builder.on_page_load(move |w, payload| {
-                handler(w, payload.event());
-            });
         }
 
         let position = PhysicalPosition::new(spec.bounds.x, spec.bounds.y);
@@ -469,9 +510,8 @@ pub(crate) mod build_other {
         let webview = main
             .add_child(builder, position, size)
             .map_err(|e| anyhow::anyhow!("add_child: {e}"))?;
-        // Hide immediately — Phase 6 will show on PageLoadEvent::Finished.
-        // We can't request `visible(false)` on the builder (no such
-        // method on Tauri's WebviewBuilder), so we hide post-create.
+        // Tauri's WebviewBuilder has no `visible(false)`; hide post-create.
+        // The on_page_load handler calls `show()` on PageLoadEvent::Finished.
         let _ = webview.hide();
         Ok(webview)
     }
@@ -564,11 +604,13 @@ impl EmbedHost {
                 profile_dir: pdir,
                 bounds,
                 scale_factor,
-                init_script: None, // Phase 6
+                init_script: None,
                 background: ZINC_950,
+                platform: channel.platform,
+                app: app.clone(),
             };
-            let webview = build_linux::build_child(&g, spec)?;
-            ChildInner(std::sync::Arc::new(webview))
+            let webview_arc = build_linux::build_child(&g, spec)?;
+            ChildInner(webview_arc)
         };
 
         #[cfg(not(target_os = "linux"))]
@@ -585,7 +627,8 @@ impl EmbedHost {
                 bounds,
                 init_script: None,
                 background: ZINC_950,
-                on_page_load: None,
+                platform: channel.platform,
+                app: app.clone(),
             };
             ChildInner(build_other::build_child(app, spec)?)
         };
@@ -695,6 +738,16 @@ fn injection_for(platform: Platform) -> Option<String> {
         Platform::Chaturbate => Some(CB_ISOLATE_JS.to_string()),
         _ => None,
     }
+}
+
+#[cfg(target_os = "linux")]
+fn verify_chaturbate_auth_linux(_webview: &Arc<wry::WebView>, _app: &tauri::AppHandle) {
+    // Phase 6.3 wires this up.
+}
+
+#[cfg(not(target_os = "linux"))]
+fn verify_chaturbate_auth_other(_webview: &tauri::webview::Webview, _app: &tauri::AppHandle) {
+    // Phase 6.3 wires this up.
 }
 
 fn yt_video_id_from_thumb(thumbnail_url: &str) -> Option<String> {
