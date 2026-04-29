@@ -54,24 +54,22 @@ export function useCommandTabs({ livestreams }) {
   }, [livestreams]);
 
   // ── Public handlers ────────────────────────────────────────────────────
+  // We compute next state from the current closure values and dispatch each
+  // setter independently. React 18 batches the calls within the same
+  // synchronous handler, so promotion stays atomic from React's POV without
+  // calling other setters from inside an updater function (which Strict
+  // Mode would invoke twice, doubling those side-effects).
   const openOrFocusTab = useCallback((channelKey) => {
-    setTabKeys((prev) => {
-      const [next] = openOrFocusReducer(prev, activeTabKey, channelKey);
-      return next;
-    });
-    setActiveTabKey(channelKey);
-  }, [activeTabKey]);
+    const [nextTabs] = openOrFocusReducer(tabKeys, activeTabKey, channelKey);
+    if (nextTabs !== tabKeys) setTabKeys(nextTabs);
+    if (channelKey !== activeTabKey) setActiveTabKey(channelKey);
+  }, [tabKeys, activeTabKey]);
 
   const closeTab = useCallback((channelKey) => {
-    setTabKeys((prev) => {
-      const [nextTabs, nextActive] = closeTabReducer(prev, activeTabKey, channelKey);
-      // We need to update activeTabKey from inside this updater to keep the
-      // promotion synchronous with the tab list change. setActiveTabKey is
-      // fine to call here — React batches both updates together.
-      if (nextActive !== activeTabKey) setActiveTabKey(nextActive);
-      return nextTabs;
-    });
-  }, [activeTabKey]);
+    const [nextTabs, nextActive] = closeTabReducer(tabKeys, activeTabKey, channelKey);
+    if (nextTabs !== tabKeys) setTabKeys(nextTabs);
+    if (nextActive !== activeTabKey) setActiveTabKey(nextActive);
+  }, [tabKeys, activeTabKey]);
 
   const reorderTabs = useCallback((fromKey, toKey) => {
     setTabKeys((prev) => reorderTabsReducer(prev, fromKey, toKey));
