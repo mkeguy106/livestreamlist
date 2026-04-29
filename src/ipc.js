@@ -30,10 +30,11 @@ export const chatSend = (uniqueKey, text) => invoke('chat_send', { uniqueKey, te
 export const chatOpenPopout = (uniqueKey) => invoke('chat_open_popout', { uniqueKey });
 export const embedMount = (uniqueKey, x, y, width, height) =>
   invoke('embed_mount', { uniqueKey, x, y, width, height });
-export const embedPosition = (uniqueKey, x, y, width, height) =>
-  invoke('embed_position', { uniqueKey, x, y, width, height });
+export const embedBounds = (uniqueKey, x, y, width, height) =>
+  invoke('embed_bounds', { uniqueKey, x, y, width, height });
+export const embedSetVisible = (uniqueKey, visible) =>
+  invoke('embed_set_visible', { uniqueKey, visible });
 export const embedUnmount = (uniqueKey) => invoke('embed_unmount', { uniqueKey });
-export const embedSetVisible = (visible) => invoke('embed_set_visible', { visible });
 export const loginPopupOpen = (x, y, width, height) =>
   invoke('login_popup_open', { x, y, width, height });
 export const loginPopupClose = () => invoke('login_popup_close');
@@ -395,6 +396,12 @@ async function mockInvoke(name, args) {
           updated_at: new Date().toISOString(),
         },
       ];
+    case 'embed_mount':
+    case 'embed_bounds':
+    case 'embed_set_visible':
+    case 'embed_unmount':
+      // Browser-dev: no native embeds — accept the call and no-op.
+      return name === 'embed_mount' ? false : null;
     default:
       throw new Error(`[mock] unknown invoke ${name}`);
   }
