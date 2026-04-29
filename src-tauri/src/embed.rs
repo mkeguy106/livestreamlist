@@ -479,6 +479,42 @@ pub(crate) mod build_other {
     }
 }
 
+fn yt_video_id_from_thumb(thumbnail_url: &str) -> Option<String> {
+    let trim = thumbnail_url.trim();
+    let marker = "/vi/";
+    let start = trim.find(marker)? + marker.len();
+    let rest = &trim[start..];
+    let end = rest.find('/').unwrap_or(rest.len());
+    let id = &rest[..end];
+    if id.is_empty() {
+        None
+    } else {
+        Some(id.to_string())
+    }
+}
+
+fn build_url_for(
+    platform: Platform,
+    channel_id: &str,
+    livestream: Option<&crate::channels::Livestream>,
+) -> Option<String> {
+    match platform {
+        Platform::Youtube => {
+            let ls = livestream.filter(|l| l.is_live)?;
+            let video_id = ls.video_id.clone().or_else(|| {
+                ls.thumbnail_url
+                    .as_deref()
+                    .and_then(yt_video_id_from_thumb)
+            })?;
+            Some(format!(
+                "https://www.youtube.com/live_chat?is_popout=1&dark_theme=1&v={video_id}"
+            ))
+        }
+        Platform::Chaturbate => Some(format!("https://chaturbate.com/{channel_id}/")),
+        Platform::Twitch | Platform::Kick => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -538,5 +574,54 @@ mod tests {
         let cb = host.keys_for_platform(Platform::Chaturbate);
         assert_eq!(yt, vec!["youtube:UC1".to_string()]);
         assert_eq!(cb, vec!["chaturbate:bob".to_string()]);
+    }
+
+    #[test]
+    fn yt_video_id_from_thumb_extracts_id() {
+        assert_eq!(
+            yt_video_id_from_thumb("https://i.ytimg.com/vi/abc123/maxresdefault.jpg"),
+            Some("abc123".to_string())
+        );
+        assert_eq!(yt_video_id_from_thumb(""), None);
+        assert_eq!(yt_video_id_from_thumb("https://nope.example/"), None);
+    }
+
+    #[test]
+    fn build_url_chaturbate_uses_channel_id() {
+        let url = build_url_for(Platform::Chaturbate, "alice", None);
+        assert_eq!(url, Some("https://chaturbate.com/alice/".to_string()));
+    }
+
+    #[test]
+    fn build_url_twitch_kick_returns_none() {
+        assert_eq!(build_url_for(Platform::Twitch, "anyone", None), None);
+        assert_eq!(build_url_for(Platform::Kick, "anyone", None), None);
+    }
+
+    #[test]
+    fn build_url_youtube_uses_video_id() {
+        let ls = crate::channels::Livestream {
+            is_live: true,
+            video_id: Some("abc123".to_string()),
+            ..Default::default()
+        };
+        let url = build_url_for(Platform::Youtube, "UC1", Some(&ls));
+        assert_eq!(
+            url,
+            Some(
+                "https://www.youtube.com/live_chat?is_popout=1&dark_theme=1&v=abc123".to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn build_url_youtube_offline_returns_none() {
+        let ls = crate::channels::Livestream {
+            is_live: false,
+            video_id: Some("abc123".to_string()),
+            ..Default::default()
+        };
+        let url = build_url_for(Platform::Youtube, "UC1", Some(&ls));
+        assert!(url.is_none());
     }
 }
