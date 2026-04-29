@@ -170,13 +170,40 @@ impl ChildEmbed {
         Ok(())
     }
 
-    #[allow(dead_code)] // Phase 6 wires Chaturbate auth-drift hook
+    #[allow(dead_code)] // exposed for future callers; Chaturbate auth-drift uses
+                        // its own platform-specific helpers (verify_chaturbate_auth_*)
+                        // since they need the raw WebView reference, not just cookies.
     pub(crate) fn cookies_for_url(&self, url: &Url) -> anyhow::Result<Vec<CookieView>> {
-        // Phase 6's verify_chaturbate_auth hook lands the real implementation
-        // once we know which API path (wry direct vs webkit2gtk::CookieManager)
-        // wry 0.54.4 actually supports. For Phase 3 this is a stub.
-        let _ = url;
-        Ok(Vec::new())
+        #[cfg(target_os = "linux")]
+        {
+            let cookies = self
+                .inner
+                .0
+                .cookies_for_url(url.as_str())
+                .map_err(|e| anyhow::anyhow!("cookies_for_url: {e}"))?;
+            Ok(cookies
+                .into_iter()
+                .map(|c| CookieView {
+                    name: c.name().to_string(),
+                    value: c.value().to_string(),
+                })
+                .collect())
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let cookies = self
+                .inner
+                .0
+                .cookies_for_url(url.clone())
+                .map_err(|e| anyhow::anyhow!("cookies_for_url: {e}"))?;
+            Ok(cookies
+                .into_iter()
+                .map(|c| CookieView {
+                    name: c.name().to_string(),
+                    value: c.value().to_string(),
+                })
+                .collect())
+        }
     }
 }
 
@@ -740,14 +767,79 @@ fn injection_for(platform: Platform) -> Option<String> {
     }
 }
 
+#[derive(Clone, serde::Serialize)]
+struct ChaturbateAuthEvent {
+    signed_in: bool,
+    /// "ok" | "session_expired" | "not_logged_in"
+    reason: &'static str,
+}
+
+fn classify_chaturbate_auth(signed_in: bool, stamp_present: bool) -> &'static str {
+    if signed_in {
+        "ok"
+    } else if stamp_present {
+        "session_expired"
+    } else {
+        "not_logged_in"
+    }
+}
+
+/// Common tail for both platform variants of `verify_chaturbate_auth_*`:
+/// touch the stamp on success, clear-stamp-only on drift, then emit the
+/// `chat:auth:chaturbate` event.
+fn handle_chaturbate_auth_outcome(app: &tauri::AppHandle, signed_in: bool) {
+    use tauri::Emitter as _;
+    let stamp_present = matches!(crate::auth::chaturbate::load(), Ok(Some(_)));
+    let reason = classify_chaturbate_auth(signed_in, stamp_present);
+    if signed_in {
+        if let Err(e) = crate::auth::chaturbate::touch_verified() {
+            log::warn!("touch_verified failed: {e:#}");
+        }
+    } else if stamp_present {
+        // Drift: server cleared the session but our stamp says signed-in.
+        // Clear ONLY the stamp — the embed webview is still alive against
+        // the profile dir at this exact moment, so a full clear() would
+        // remove_dir_all under WebKit's feet.
+        if let Err(e) = crate::auth::chaturbate::clear_stamp_only() {
+            log::warn!("clear_stamp_only (drift) failed: {e:#}");
+        }
+    }
+    let payload = ChaturbateAuthEvent { signed_in, reason };
+    if let Err(e) = app.emit("chat:auth:chaturbate", payload) {
+        log::warn!("emit chat:auth:chaturbate: {e:#}");
+    }
+}
+
 #[cfg(target_os = "linux")]
-fn verify_chaturbate_auth_linux(_webview: &Arc<wry::WebView>, _app: &tauri::AppHandle) {
-    // Phase 6.3 wires this up.
+fn verify_chaturbate_auth_linux(webview: &Arc<wry::WebView>, app: &tauri::AppHandle) {
+    let signed_in = match webview.cookies_for_url("https://chaturbate.com/") {
+        Ok(jar) => jar
+            .iter()
+            .any(|c| c.name() == "sessionid" && !c.value().is_empty()),
+        Err(e) => {
+            log::warn!("verify_chaturbate_auth cookies_for_url: {e:#}");
+            return; // transient — don't flap the UI
+        }
+    };
+    handle_chaturbate_auth_outcome(app, signed_in);
 }
 
 #[cfg(not(target_os = "linux"))]
-fn verify_chaturbate_auth_other(_webview: &tauri::webview::Webview, _app: &tauri::AppHandle) {
-    // Phase 6.3 wires this up.
+fn verify_chaturbate_auth_other(webview: &tauri::webview::Webview, app: &tauri::AppHandle) {
+    let site: url::Url = match "https://chaturbate.com/".parse() {
+        Ok(u) => u,
+        Err(_) => return,
+    };
+    let signed_in = match webview.cookies_for_url(site) {
+        Ok(jar) => jar
+            .iter()
+            .any(|c| c.name() == "sessionid" && !c.value().is_empty()),
+        Err(e) => {
+            log::warn!("verify_chaturbate_auth cookies_for_url: {e:#}");
+            return;
+        }
+    };
+    handle_chaturbate_auth_outcome(app, signed_in);
 }
 
 fn yt_video_id_from_thumb(thumbnail_url: &str) -> Option<String> {
@@ -894,5 +986,21 @@ mod tests {
         };
         let url = build_url_for(Platform::Youtube, "UC1", Some(&ls));
         assert!(url.is_none());
+    }
+
+    #[test]
+    fn classify_ok_when_signed_in() {
+        assert_eq!(classify_chaturbate_auth(true, true), "ok");
+        assert_eq!(classify_chaturbate_auth(true, false), "ok");
+    }
+
+    #[test]
+    fn classify_session_expired_when_stamp_lies() {
+        assert_eq!(classify_chaturbate_auth(false, true), "session_expired");
+    }
+
+    #[test]
+    fn classify_not_logged_in_when_neither() {
+        assert_eq!(classify_chaturbate_auth(false, false), "not_logged_in");
     }
 }
