@@ -221,6 +221,20 @@ Today the Columns layout auto-populates from every live channel in the store. Th
 
 ---
 
+## Phase 7 — Embed rewrite (foundation)  ✓ shipped (PR #72)
+
+Foundational rework of how YouTube and Chaturbate chats are embedded. The pre-rewrite approach spawned a borderless top-level `WebviewWindow` and parked it over the React chat pane, chasing the main window with `set_position`/`set_size` IPC — felt like a fake overlay (floaty lag, modal occlusion fights, single-embed ceiling). The rewrite paints child webviews into the main window's surface, mirroring the Qt predecessor's `QWebEngineView`-as-child-widget model.
+
+- [x] **Embed architecture rewrite** (PR #72) — `EmbedHost` + `ChildEmbed` Rust types backed by `HashMap<EmbedKey, ChildEmbed>` (multi-embed by construction, unblocks Columns layout and the upcoming chat-tabs work). Linux: `GtkOverlay` + `gtk::Fixed` sandwich at startup, child webviews via `wry::WebViewBuilder::build_gtk(&fixed)` (bypasses Tauri's broken `add_child` on Linux per [tauri#9611](https://github.com/tauri-apps/tauri/issues/9611)). macOS / Windows: Tauri's `Window::add_child` directly. Frontend: global `<EmbedLayer>` registry + `<EmbedSlot>` placeholder; old `<EmbeddedChat>` deleted along with its main-window-chase listeners. Per-platform profile dirs and existing auth flows (login popups, Chaturbate drift detection) preserved unchanged. CLAUDE.md gained a full "Embed architecture" subsection plus six new Known Pitfalls entries documenting the gotchas (pass-through input on overlay Fixed, `Weak<wry::WebView>` to break the Arc cycle in `on_page_load`, `wry 0.54` moving `data_directory` to `WebContext`, Tauri `add_child` Linux bug, etc.).
+
+### What this unblocks
+
+- **Columns layout (Phase 6)** — pre-rewrite the layout silently showed zero YT/CB chats due to the single-`Option<CurrentEmbed>` ceiling. Now N concurrent embeds render natively.
+- **Chat-tabs (deferred work on `docs/spec-command-chat-tabs`)** — the hidden-tab embed lifetime requires per-key visibility control, which the new `embed_set_visible(uniqueKey, bool)` IPC + `EmbedLayer` registry provide.
+- **Native Wayland (eventually)** — child webviews don't need absolute screen coords, so the embed-side blocker is gone. Still on Xwayland for the main window because `tauri-plugin-window-state` needs it for position persistence.
+
+---
+
 ## Deferred / out of scope
 
 - Marketing website (intentionally: the Qt app doesn't have one either)
