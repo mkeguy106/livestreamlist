@@ -413,7 +413,32 @@ fn slugify(s: &str) -> String {
         .collect()
 }
 
-// Phase 1 stubs — real implementations land in Phase 7.
+// Real handlers delegate to EmbedHost. EmbedHost::mount / set_bounds / set_visible
+// are themselves cfg(not(test))-gated (they touch ChildEmbed::inner which only
+// exists in real builds), so each handler exists in two cfg-gated variants.
+#[cfg(not(test))]
+#[tauri::command]
+fn embed_mount(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    embeds: State<'_, Arc<embed::EmbedHost>>,
+    unique_key: String,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+) -> Result<bool, String> {
+    embeds
+        .mount(
+            &app,
+            &state.store,
+            &unique_key,
+            embed::Rect::new(x, y, width, height),
+        )
+        .map_err(err_string)
+}
+
+#[cfg(test)]
 #[tauri::command]
 fn embed_mount(
     _app: tauri::AppHandle,
@@ -428,8 +453,26 @@ fn embed_mount(
     Ok(false)
 }
 
+#[cfg(not(test))]
 #[tauri::command]
-fn embed_position(
+fn embed_bounds(
+    app: tauri::AppHandle,
+    embeds: State<'_, Arc<embed::EmbedHost>>,
+    unique_key: String,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+) -> Result<(), String> {
+    embeds
+        .set_bounds(&app, &unique_key, embed::Rect::new(x, y, width, height))
+        .map_err(err_string)
+}
+
+#[cfg(test)]
+#[tauri::command]
+fn embed_bounds(
+    _app: tauri::AppHandle,
     _embeds: State<'_, Arc<embed::EmbedHost>>,
     _unique_key: String,
     _x: f64,
@@ -440,14 +483,36 @@ fn embed_position(
     Ok(())
 }
 
+#[cfg(not(test))]
+#[tauri::command]
+fn embed_set_visible(
+    embeds: State<'_, Arc<embed::EmbedHost>>,
+    unique_key: String,
+    visible: bool,
+) -> Result<(), String> {
+    embeds.set_visible(&unique_key, visible).map_err(err_string)
+}
+
+#[cfg(test)]
+#[tauri::command]
+fn embed_set_visible(
+    _embeds: State<'_, Arc<embed::EmbedHost>>,
+    _unique_key: String,
+    _visible: bool,
+) -> Result<(), String> {
+    Ok(())
+}
+
+#[cfg(not(test))]
 #[tauri::command]
 fn embed_unmount(embeds: State<'_, Arc<embed::EmbedHost>>, unique_key: String) {
     embeds.unmount(&unique_key);
 }
 
+#[cfg(test)]
 #[tauri::command]
-fn embed_set_visible(_embeds: State<'_, Arc<embed::EmbedHost>>, _visible: bool) {
-    // Stub — Phase 7 wires per-key set_visible.
+fn embed_unmount(_embeds: State<'_, Arc<embed::EmbedHost>>, _unique_key: String) {
+    // noop in test build
 }
 
 #[tauri::command]
@@ -1136,7 +1201,7 @@ pub fn run() {
             chat_send,
             chat_open_popout,
             embed_mount,
-            embed_position,
+            embed_bounds,
             embed_unmount,
             embed_set_visible,
             login_popup_open,
