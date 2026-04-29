@@ -356,6 +356,7 @@ pub(crate) mod build_linux {
         pub url: String,
         pub profile_dir: PathBuf,
         pub bounds: Rect,
+        pub scale_factor: f64,
         pub init_script: Option<String>,
         pub background: (u8, u8, u8, u8),
     }
@@ -389,9 +390,7 @@ pub(crate) mod build_linux {
             .as_ref()
             .context("install_overlay was not called yet — gtk::Fixed missing")?;
 
-        // Use scale factor of 1 for the smoke (we're calling at known-physical
-        // coords; for Phase 5 / 7 we'll thread the real scale factor through).
-        let wry_rect = physical_to_logical(spec.bounds, 1.0);
+        let wry_rect = physical_to_logical(spec.bounds, spec.scale_factor);
 
         // Leaked WebContext — see doc comment above.
         let ctx: &'static mut WebContext =
@@ -414,7 +413,6 @@ pub(crate) mod build_linux {
 }
 
 #[cfg(not(target_os = "linux"))]
-#[allow(dead_code)] // Phase 5 wires the call sites up
 pub(crate) mod build_other {
     use super::*;
     use anyhow::{Context, Result};
@@ -476,6 +474,131 @@ pub(crate) mod build_other {
         // method on Tauri's WebviewBuilder), so we hide post-create.
         let _ = webview.hide();
         Ok(webview)
+    }
+}
+
+fn profile_dir(platform: Platform) -> anyhow::Result<std::path::PathBuf> {
+    match platform {
+        Platform::Youtube => crate::auth::youtube::webview_profile_dir(),
+        Platform::Chaturbate => crate::auth::chaturbate::webview_profile_dir(),
+        Platform::Twitch | Platform::Kick => {
+            anyhow::bail!("no webview profile dir for {:?}", platform)
+        }
+    }
+}
+
+const ZINC_950: (u8, u8, u8, u8) = (9, 9, 11, 255);
+
+#[cfg(not(target_os = "linux"))]
+fn platform_label(p: Platform) -> &'static str {
+    match p {
+        Platform::Youtube => "youtube",
+        Platform::Chaturbate => "chaturbate",
+        _ => "other",
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn slugify_other(s: &str) -> String {
+    s.chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect()
+}
+
+#[cfg(not(test))]
+impl EmbedHost {
+    pub fn mount(
+        &self,
+        app: &tauri::AppHandle,
+        store: &crate::channels::SharedStore,
+        unique_key: &str,
+        bounds: Rect,
+    ) -> anyhow::Result<bool> {
+        let scale_factor = {
+            use tauri::Manager as _;
+            app.get_webview_window("main")
+                .and_then(|w| w.scale_factor().ok())
+                .unwrap_or(1.0)
+        };
+
+        // Resolve platform + URL
+        let (channel, livestream) = {
+            let g = store.lock();
+            let channel_key = crate::channels::channel_key_of(unique_key);
+            let ch = g
+                .channels()
+                .iter()
+                .find(|c| c.unique_key() == channel_key)
+                .cloned();
+            let ls = g
+                .snapshot()
+                .into_iter()
+                .find(|l| l.unique_key == unique_key);
+            (ch, ls)
+        };
+        let Some(channel) = channel else {
+            anyhow::bail!("unknown channel {unique_key}");
+        };
+        let Some(url) =
+            build_url_for(channel.platform, &channel.channel_id, livestream.as_ref())
+        else {
+            return Ok(false); // offline
+        };
+
+        // Idempotent: if already mounted, just resize.
+        {
+            let mut g = self.inner.lock();
+            if let Some(existing) = g.children.get_mut(unique_key) {
+                existing.set_bounds(bounds, scale_factor)?;
+                return Ok(true);
+            }
+        }
+
+        let pdir = profile_dir(channel.platform)?;
+
+        #[cfg(target_os = "linux")]
+        let inner = {
+            let g = self.inner.lock();
+            let spec = build_linux::BuildSpec {
+                url,
+                profile_dir: pdir,
+                bounds,
+                scale_factor,
+                init_script: None, // Phase 6
+                background: ZINC_950,
+            };
+            let webview = build_linux::build_child(&g, spec)?;
+            ChildInner(std::sync::Arc::new(webview))
+        };
+
+        #[cfg(not(target_os = "linux"))]
+        let inner = {
+            let label = format!(
+                "embed-{}-{}",
+                platform_label(channel.platform),
+                slugify_other(unique_key)
+            );
+            let spec = build_other::BuildSpec {
+                label,
+                url,
+                profile_dir: pdir,
+                bounds,
+                init_script: None,
+                background: ZINC_950,
+                on_page_load: None,
+            };
+            ChildInner(build_other::build_child(app, spec)?)
+        };
+
+        let child = ChildEmbed {
+            platform: channel.platform,
+            bounds,
+            visible: true,
+            inner,
+        };
+        let mut g = self.inner.lock();
+        g.children.insert(unique_key.to_string(), child);
+        Ok(true)
     }
 }
 
