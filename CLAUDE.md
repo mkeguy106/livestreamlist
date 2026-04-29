@@ -128,6 +128,11 @@ Declared in `src-tauri/src/lib.rs` via `#[tauri::command]`, registered in `tauri
 | `open_in_browser` | `uniqueKey` | `xdg-open` / `open` / `start` on the channel URL |
 | `chat_connect` | `uniqueKey` | Start per-channel chat task |
 | `chat_disconnect` | `uniqueKey` | Abort that task |
+| `embed_mount` | `uniqueKey, x, y, width, height` | Mount a YT/CB child webview at given physical-pixel rect; idempotent (resize if already mounted). Returns `false` if channel offline |
+| `embed_bounds` | `uniqueKey, x, y, width, height` | Reflow an existing embed (e.g. on layout change) |
+| `embed_set_visible` | `uniqueKey, visible: bool` | Hide/show one embed (used for modal occlusion) |
+| `embed_unmount` | `uniqueKey` | Drop the child webview; the underlying GtkWidget destroys via `wry::WebView::Drop` |
+| `chaturbate_login` / `chaturbate_logout` | — | Open the CB login popup / wipe profile dir + clear stamp |
 
 ### IPC — event topics
 
@@ -137,6 +142,7 @@ The Rust side emits events that React subscribes to via `listenEvent(name, handl
 |---|---|---|
 | `chat:message:{uniqueKey}` | `ChatMessage` | `chat/twitch.rs` per PRIVMSG |
 | `chat:status:{uniqueKey}` | `ChatStatusEvent` | `chat/twitch.rs` on connect/disconnect/error |
+| `chat:auth:chaturbate` | `{ signed_in, reason }` | `embed.rs::handle_chaturbate_auth_outcome` on every CB embed page-load — broadcasts auth-drift status |
 
 Events are strictly one-way (Rust → UI). UI never emits events; it calls invoke commands.
 
@@ -167,6 +173,89 @@ Per-channel flow:
 3. Task emits `chat:status:Connecting` → connects WebSocket → emits `Connected` → reads lines
 4. Each `PRIVMSG` → `build_privmsg` → `ChatMessage` with `emote_ranges` populated from both Twitch tags and 3rd-party word scanning → emit
 5. On disconnect, task emits `Closed`. Frontend tears down on unmount.
+
+### Embed architecture (YouTube / Chaturbate chat)
+
+Twitch and Kick have native IRC / Pusher clients (`chat/`). YouTube and Chaturbate don't expose a usable real-time API to anonymous clients, so their chats are **embedded as third-party webviews living inside the main window's surface** — like Qt's `QWebEngineView` as a child widget.
+
+The pre-rewrite approach (parked borderless top-level `WebviewWindow` chased with `set_position` IPC) is gone — see commit history if you need it. Today's model:
+
+**Linux topology** (`src-tauri/src/embed.rs::linux::install_overlay`, runs once at startup):
+
+```
+GtkApplicationWindow
+└── default_vbox (gtk::Box)
+    └── GtkOverlay  (set_overlay_pass_through(fixed, true))
+        ├── (base) WebKitWebView           ← React app, fills the overlay
+        └── (overlay) gtk::Fixed           ← embed_host.fixed — child webviews go here
+```
+
+The pass-through bit is critical: without `set_overlay_pass_through(&fixed, true)`, the empty `gtk::Fixed` (sized to fill the overlay) intercepts every mouse event and the React UI stops accepting clicks. Pass-through forwards events on the Fixed itself to the React webview underneath; webviews placed *inside* the Fixed still capture their own input via their own GdkWindow.
+
+**macOS / Windows topology**: Tauri's `WebviewWindow::add_child` (specifically `Window::add_child` — the method is on `Window`, not `WebviewWindow`) just works — no overlay setup needed.
+
+**Rust types** (`src-tauri/src/embed.rs`):
+
+- `EmbedHost` — singleton in app state, owns `Mutex<HashMap<EmbedKey, ChildEmbed>>` plus (Linux only) the `gtk::Fixed` from `install_overlay`. Public methods: `mount`, `set_bounds`, `set_visible`, `unmount`, `unmount_platform`.
+- `ChildEmbed` — per-key entry. Fields: `platform, bounds, visible`, plus `inner: ChildInner` (gated `#[cfg(not(test))]` so HashMap-arbitration unit tests don't need GTK). Methods that touch `inner` are `#[cfg(not(test))]`.
+- `ChildInner` — Linux: `Arc<wry::WebView>`. Non-Linux: `tauri::webview::Webview`. `unsafe impl Send + Sync` on the Linux variant — GTK access is gated to the main thread by call sites; the Mutex serializes lookups.
+- `EmbedKey` = the same `unique_key` flowing through chat IPC (with the optional YT `:video_id` suffix from the multi-stream scraper).
+
+**Construction (Linux)** — `build_linux::build_child`:
+- Per-platform `data_directory` via `wry::WebContext::new(Some(profile_dir))` then `WebViewBuilder::new_with_web_context(ctx)`. `wry 0.54` moved data_directory off the builder onto WebContext — this is non-obvious. The `WebContext` is `Box::leak`'d for the lifetime of the main window (the on-disk profile dir is the persistence; the in-memory WebContext leaking is a small constant per mount).
+- `with_visible(false)` on the builder; the on_page_load handler shows on `PageLoadEvent::Finished`. Same dark-first-paint discipline as the rest of the app (PR #70 lesson).
+- `with_background_color((9, 9, 11, 255))` — zinc-950, so any in-flight repaint stays dark.
+- `WebViewBuilderExtUnix::build_gtk(&fixed)` is the Linux-only build path. Tauri's own `add_child` is broken on Linux (it parents into `default_vbox()`, a `gtk::Box`, which ignores `set_position`/`set_size` — see [tauri#9611](https://github.com/tauri-apps/tauri/issues/9611)) so we go around it.
+
+**On-page-load wiring**:
+
+The wry 0.54 `with_on_page_load_handler` callback signature is `Fn(PageLoadEvent, String) + Send + Sync` — it does NOT receive the WebView reference. To call methods on the webview from inside the callback (show, eval CSS injection, run auth-drift verifier), we thread a `Weak<wry::WebView>` through an `Arc<OnceLock<...>>`:
+
+```rust
+let cell: Arc<OnceLock<Weak<wry::WebView>>> = Arc::new(OnceLock::new());
+let cell_for_handler = cell.clone();
+let handler = move |event, _url| {
+    if !matches!(event, PageLoadEvent::Finished) { return; }
+    let Some(weak) = cell_for_handler.get() else { return; };
+    let Some(wv) = weak.upgrade() else { return; };
+    let _ = wv.set_visible(true);
+    if let Some(js) = injection_for(platform) { let _ = wv.evaluate_script(&js); }
+    if platform == Platform::Chaturbate { verify_chaturbate_auth_linux(&wv, &app); }
+};
+let webview = builder.with_on_page_load_handler(handler).build_gtk(&fixed.0)?;
+let webview_arc = Arc::new(webview);
+let _ = cell.set(Arc::downgrade(&webview_arc));
+```
+
+**The Weak is critical**. A strong `Arc<OnceLock<Arc<wry::WebView>>>` would create a cycle (`WebView → callback registry → closure → Arc → same WebView`) — strong count would never reach zero on unmount, `InnerWebView::drop`'s `webview.destroy()` (wry's `webkitgtk/mod.rs:96-99`, which detaches the GtkWidget from the Fixed) would never run, and the embed would visually persist after the React side correctly called `embed_unmount`.
+
+**CSS / DOM injection** (`embed.rs::injection_for`):
+- YouTube: `YT_THEME_CSS` — a `<style>` tag forcing zinc-950 backgrounds + custom scrollbar styling on `yt-live-chat-renderer` etc.
+- Chaturbate: `CB_ISOLATE_JS` — finds the chat container (`#ChatTabContainer` / `#defchat` / fallback `.chat-holder`), tags ancestors `data-lsl-path`, injects a CSS rule that hides every `body>*` except the chat path. Re-injected on every page load (navigations wipe the JS context).
+
+**Chaturbate auth-drift** (`verify_chaturbate_auth_linux` / `_other`):
+
+After every Chaturbate embed `PageLoadEvent::Finished`, read the `sessionid` cookie via `WebView::cookies_for_url("https://chaturbate.com/")`. Three outcomes:
+- Cookie present → `auth::chaturbate::touch_verified()`, emit `chat:auth:chaturbate { signed_in: true, reason: "ok" }`
+- Missing + stamp present → drift; `clear_stamp_only()` (NOT full `clear()` — the embed window is mid-load against the profile dir, full wipe would `remove_dir_all` under WebKit's feet). Emit `{ signed_in: false, reason: "session_expired" }`
+- Missing + no stamp → emit `{ signed_in: false, reason: "not_logged_in" }`
+
+`classify_chaturbate_auth` is the pure helper; it's the only part with unit tests (`embed.rs::classify_*` tests).
+
+**Frontend** (`src/components/EmbedLayer.jsx` + `src/components/EmbedSlot.jsx`):
+
+- `<EmbedLayer modalOpen={anyDialogOpen}>` is mounted once at App.jsx scope. It's the **only** component that calls `embed_*` IPC. Owns a `Map<EmbedKey, { refs: Map<slotId, {ref, active}> }>` registry.
+- `<EmbedSlot channelKey isLive active>` is mounted by `ChatView` for YT/CB platforms. Renders a placeholder `<div>` with `position: relative; overflow: hidden`, registers itself with the layer via `EmbedLayerContext`. A `ResizeObserver` chain on the placeholder's ancestors triggers reflow on layout changes.
+- The layer arbitrates: for each `EmbedKey`, it picks the active slot's `getBoundingClientRect()` as canonical and dispatches `embed_mount` / `embed_bounds`. When no slot for a key is active, `embed_set_visible(key, false)`. When the last slot for a key unregisters, `embed_unmount(key)`.
+- App-level modal state (`addOpen || prefsOpen || nickDlg.open || ...`, OR-ed into one `anyDialogOpen` boolean) flows in via the `modalOpen` prop. The layer's `useEffect(modalOpen)` flips visibility on every mounted embed. This replaces the old singleton `embedSetVisibleAll(false)` API.
+
+**Per-platform profile isolation** is preserved verbatim from the Qt predecessor:
+- `~/.local/share/livestreamlist/webviews/youtube/` for the YT profile (cookies, cache, IndexedDB)
+- `~/.local/share/livestreamlist/webviews/chaturbate/` for the CB profile
+- Login popups (`auth/youtube.rs::login_via_webview`, `auth/chaturbate.rs::login_via_webview`) use the same `data_directory` as the embeds → cookies persist on disk and the embed picks them up automatically.
+- Logout (`auth::*::clear()`) calls `EmbedHost::unmount_platform(platform)` first, THEN `remove_dir_all(profile_dir)`. This ordering matters — wiping the dir while an embed is still loading against it crashes WebKit. The Chaturbate flow has a `clear_stamp_only()` variant for the auth-drift case where the embed is mid-load and we just want to flip the stamp without touching the profile dir.
+
+**Multi-embed**: the HashMap-keyed model means N concurrent embeds is a first-class feature, not a workaround. The Columns layout shows one embed per visible YT/CB column, all rendering simultaneously. The pre-rewrite single-`Option<CurrentEmbed>` ceiling is gone.
 
 ### The three layouts
 
@@ -220,6 +309,11 @@ Files:
 | `#[derive(Default)]` on a Rust enum requires `#[default]` on the chosen variant | Platform enum marks `Twitch` as default (arbitrary but overwritten everywhere it matters) |
 | App launched from a long-running terminal session may not raise on KDE Wayland | `lib.rs::run` stages `set_always_on_top(true)` before `show()` and clears it via a deferred (~150 ms) tokio task in `window_state::raise_to_front_deferred`. Maps the window in the topmost layer, beating focus-stealing prevention. If a launch still loads behind, set "Focus Stealing Prevention: None" in KWin settings |
 | Native Wayland clients cannot read or set absolute window position | The protocol does not expose global coordinates to clients, so `outer_position` always returns `(0, 0)` and `set_position` is ignored. `tauri-plugin-window-state` cannot persist or restore position on a native Wayland session. `lib.rs::apply_linux_webkit_workarounds` sets `GDK_BACKEND=x11` (if the user hasn't already overridden it) so the app runs on Xwayland, where position persistence works correctly. To run native-Wayland anyway, set `GDK_BACKEND=wayland` — but accept that window position resets to compositor-chosen placement on every launch |
+| Tauri's `WebviewWindow::add_child` is broken on Linux | Parents into `default_vbox()` (a `gtk::Box` that ignores `set_position` / `set_size` / `bounds`). Maintainer parked the issue ([tauri#9611](https://github.com/tauri-apps/tauri/issues/9611), Apr 2025). On Linux we bypass `add_child` entirely and use wry directly — `WebViewBuilderExtUnix::build_gtk(&fixed)` into a `gtk::Fixed` we own (see `embed.rs::install_overlay`). macOS / Windows `add_child` works; only Linux needs the workaround. Note `add_child` is on `Window<R>`, not `WebviewWindow<R>` — `app.get_window("main")` returns the right type |
+| Empty `gtk::Fixed` overlaid on the React webview swallows all input | `gtk::Fixed` (sized by the parent `GtkOverlay` to fill the overlay area) intercepts every mouse event, breaking right-click, the custom titlebar drag region, and every UI click. Fix: `overlay.set_overlay_pass_through(&fixed, true)` — events landing on the empty Fixed forward to the React webview. Webviews placed *inside* the Fixed still get input via their own GdkWindow |
+| Strong `Arc<wry::WebView>` captured by `with_on_page_load_handler` closure creates an Arc cycle | The closure is held by the WebView's internal callback registry. `WebView → closure → Arc → same WebView` keeps strong count at ≥1 forever; `InnerWebView::Drop` (which calls `webview.destroy()` and detaches the GtkWidget from the Fixed) never runs. Symptom: switching from a YT/CB channel to Twitch leaves the old embed visible. Fix: store `Weak<wry::WebView>` in the OnceLock and `Arc::downgrade(&webview_arc)` after `build_gtk`; upgrade inside the callback for the brief lifetime of the call |
+| `wry 0.54` moved `data_directory` from `WebViewBuilder` to `WebContext` | `WebViewBuilder::with_data_directory(...)` no longer compiles. Use `WebContext::new(Some(profile_dir))` then `WebViewBuilder::new_with_web_context(&mut ctx)`. WebContext borrows for the builder's lifetime — `Box::leak(Box::new(ctx))` is the simple fix when the WebView outlives the builder anyway |
+| `webview.destroy()` requires the wry strong count to actually reach zero | `InnerWebView::Drop` (`wry-0.54.4/src/webkitgtk/mod.rs:96-99`) is what removes the GtkWidget from its parent — there's no public API to do it manually short of reaching for the underlying webkit2gtk widget. So any structural change that introduces an Arc cycle on a `wry::WebView` will manifest as "the embed visually stays after I call unmount." Audit Arc/Weak relationships carefully when wiring callback closures around WebViews |
 
 ## Git workflow
 
