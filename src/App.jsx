@@ -13,11 +13,12 @@ import WindowControls from './components/WindowControls.jsx';
 import PreferencesDialog from './components/PreferencesDialog.jsx';
 import ResizeHandles from './components/ResizeHandles.jsx';
 import Tooltip from './components/Tooltip.jsx';
+import EmbedLayer from './components/EmbedLayer.jsx';
 import { useDragHandler } from './hooks/useDragRegion.js';
 import { useLivestreams } from './hooks/useLivestreams.js';
 import { usePreferences } from './hooks/usePreferences.jsx';
 import { useUserCard } from './hooks/useUserCard.js';
-import { embedSetVisible, getUserMetadata, launchStream, listenEvent, openInBrowser, removeChannel, setFavorite, setUserMetadata } from './ipc.js';
+import { getUserMetadata, launchStream, listenEvent, openInBrowser, removeChannel, setFavorite, setUserMetadata } from './ipc.js';
 
 const LAYOUTS = [
   { id: 'command', label: 'Command', letter: 'A', Component: Command },
@@ -271,12 +272,10 @@ export default function App() {
 
   // Native child webviews (YouTube/Chaturbate inline chat) sit above the HTML
   // layer on Linux/Wayland — anything that overlaps them gets occluded. Hide
-  // every embed while a full-window modal is up; restore on close.
+  // every embed while a full-window modal is up; the EmbedLayer derives this
+  // from the modalOpen prop and dispatches per-key embed_set_visible.
   const anyDialogOpen = addOpen || prefsOpen || nickDlg.open || noteDlg.open
     || historyDlg.open || userCtx.open || card.open;
-  useEffect(() => {
-    embedSetVisible(!anyDialogOpen).catch(() => {});
-  }, [anyDialogOpen]);
 
   const ctx = useMemo(() => ({
     livestreams,
@@ -313,6 +312,7 @@ export default function App() {
     : `${liveCount} live · ${totalCount} channels`;
 
   return (
+    <EmbedLayer modalOpen={anyDialogOpen}>
     <div className="rx-root">
       <ResizeHandles />
       <div className="rx-titlebar" data-tauri-drag-region onMouseDown={onTitlebarMouseDown}>
@@ -483,6 +483,7 @@ export default function App() {
         }}
       />
     </div>
+    </EmbedLayer>
   );
 }
 

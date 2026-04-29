@@ -153,7 +153,12 @@ async fn refresh_all(
     let store = Arc::clone(&state.store);
     let client = state.http.clone();
     let notifier = Arc::clone(&state.notifier);
-    let yt_browser = state.settings.read().general.youtube_cookies_browser.clone();
+    let yt_browser = state
+        .settings
+        .read()
+        .general
+        .youtube_cookies_browser
+        .clone();
     let snapshot = refresh::refresh_all(store, client, yt_browser)
         .await
         .map_err(err_string)?;
@@ -413,11 +418,15 @@ fn slugify(s: &str) -> String {
         .collect()
 }
 
+// Real handlers delegate to EmbedHost. EmbedHost::mount / set_bounds / set_visible
+// are themselves cfg(not(test))-gated (they touch ChildEmbed::inner which only
+// exists in real builds), so each handler exists in two cfg-gated variants.
+#[cfg(not(test))]
 #[tauri::command]
 fn embed_mount(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
-    embeds: State<'_, Arc<embed::EmbedManager>>,
+    embeds: State<'_, Arc<embed::EmbedHost>>,
     unique_key: String,
     x: f64,
     y: f64,
@@ -425,13 +434,35 @@ fn embed_mount(
     height: f64,
 ) -> Result<bool, String> {
     embeds
-        .mount(&app, &state.store, &unique_key, x, y, width, height)
+        .mount(
+            &app,
+            &state.store,
+            &unique_key,
+            embed::Rect::new(x, y, width, height),
+        )
         .map_err(err_string)
 }
 
+#[cfg(test)]
 #[tauri::command]
-fn embed_position(
-    embeds: State<'_, Arc<embed::EmbedManager>>,
+fn embed_mount(
+    _app: tauri::AppHandle,
+    _state: State<'_, AppState>,
+    _embeds: State<'_, Arc<embed::EmbedHost>>,
+    _unique_key: String,
+    _x: f64,
+    _y: f64,
+    _width: f64,
+    _height: f64,
+) -> Result<bool, String> {
+    Ok(false)
+}
+
+#[cfg(not(test))]
+#[tauri::command]
+fn embed_bounds(
+    app: tauri::AppHandle,
+    embeds: State<'_, Arc<embed::EmbedHost>>,
     unique_key: String,
     x: f64,
     y: f64,
@@ -439,18 +470,54 @@ fn embed_position(
     height: f64,
 ) -> Result<(), String> {
     embeds
-        .position(&unique_key, x, y, width, height)
+        .set_bounds(&app, &unique_key, embed::Rect::new(x, y, width, height))
         .map_err(err_string)
 }
 
+#[cfg(test)]
 #[tauri::command]
-fn embed_unmount(embeds: State<'_, Arc<embed::EmbedManager>>, unique_key: String) {
+fn embed_bounds(
+    _app: tauri::AppHandle,
+    _embeds: State<'_, Arc<embed::EmbedHost>>,
+    _unique_key: String,
+    _x: f64,
+    _y: f64,
+    _width: f64,
+    _height: f64,
+) -> Result<(), String> {
+    Ok(())
+}
+
+#[cfg(not(test))]
+#[tauri::command]
+fn embed_set_visible(
+    embeds: State<'_, Arc<embed::EmbedHost>>,
+    unique_key: String,
+    visible: bool,
+) -> Result<(), String> {
+    embeds.set_visible(&unique_key, visible).map_err(err_string)
+}
+
+#[cfg(test)]
+#[tauri::command]
+fn embed_set_visible(
+    _embeds: State<'_, Arc<embed::EmbedHost>>,
+    _unique_key: String,
+    _visible: bool,
+) -> Result<(), String> {
+    Ok(())
+}
+
+#[cfg(not(test))]
+#[tauri::command]
+fn embed_unmount(embeds: State<'_, Arc<embed::EmbedHost>>, unique_key: String) {
     embeds.unmount(&unique_key);
 }
 
+#[cfg(test)]
 #[tauri::command]
-fn embed_set_visible(embeds: State<'_, Arc<embed::EmbedManager>>, visible: bool) {
-    embeds.set_visible_all(visible);
+fn embed_unmount(_embeds: State<'_, Arc<embed::EmbedHost>>, _unique_key: String) {
+    // noop in test build
 }
 
 #[tauri::command]
@@ -511,7 +578,6 @@ fn spawn_youtube_user_info_refresh(app: &tauri::AppHandle, http: reqwest::Client
         }
     });
 }
-
 
 #[tauri::command]
 fn open_url(url: String) -> Result<(), String> {
@@ -774,7 +840,12 @@ async fn auth_status(state: State<'_, AppState>) -> Result<AuthStatus, String> {
         .await
         .map_err(err_string)?;
     let kick = auth::kick::status(&state.http).await.map_err(err_string)?;
-    let browser = state.settings.read().general.youtube_cookies_browser.clone();
+    let browser = state
+        .settings
+        .read()
+        .general
+        .youtube_cookies_browser
+        .clone();
     let has_paste = auth::youtube::cookies_file_present();
     let yt_handle = auth::youtube::load_user_info()
         .map_err(err_string)?
@@ -854,10 +925,7 @@ fn kick_logout(
 }
 
 #[tauri::command]
-async fn youtube_login(
-    app: tauri::AppHandle,
-    state: State<'_, AppState>,
-) -> Result<bool, String> {
+async fn youtube_login(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<bool, String> {
     auth::youtube::login_via_webview(app.clone())
         .await
         .map_err(err_string)?;
@@ -888,10 +956,7 @@ fn youtube_login_paste(
 }
 
 #[tauri::command]
-fn youtube_logout(
-    app: tauri::AppHandle,
-    state: State<'_, AppState>,
-) -> Result<(), String> {
+fn youtube_logout(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     auth::youtube::clear().map_err(err_string)?;
     clear_youtube_browser_pref(&state);
     broadcast_auth_changed(&app);
@@ -910,7 +975,7 @@ async fn chaturbate_login(app: tauri::AppHandle) -> Result<bool, String> {
 #[tauri::command]
 fn chaturbate_logout(
     app: tauri::AppHandle,
-    embeds: State<'_, Arc<embed::EmbedManager>>,
+    embeds: State<'_, Arc<embed::EmbedHost>>,
 ) -> Result<(), String> {
     embeds.unmount_platform(Platform::Chaturbate);
     auth::chaturbate::clear().map_err(err_string)?;
@@ -949,12 +1014,9 @@ fn replay_chat_history(
         .find(|c| c.unique_key() == unique_key)
         .cloned()
         .ok_or_else(|| format!("unknown channel {unique_key}"))?;
-    let mut msgs = chat::log_store::read_recent(
-        channel.platform,
-        &channel.channel_id,
-        limit.min(1000),
-    )
-    .map_err(err_string)?;
+    let mut msgs =
+        chat::log_store::read_recent(channel.platform, &channel.channel_id, limit.min(1000))
+            .map_err(err_string)?;
     // Transient marker — applied after deserialize, never persisted back.
     // Lets the frontend dim log-replayed messages alongside robotty
     // backfill so all pre-live history shares one visual treatment.
@@ -1080,8 +1142,24 @@ pub fn run() {
             app.manage(chat_mgr);
             let player_mgr = Arc::new(PlayerManager::new(app.handle().clone()));
             app.manage(player_mgr);
-            let embed_mgr = embed::EmbedManager::new();
-            app.manage(embed_mgr);
+            let embed_mgr = embed::EmbedHost::new();
+            app.manage(embed_mgr.clone());
+            #[cfg(target_os = "linux")]
+            {
+                let main = app
+                    .get_webview_window("main")
+                    .expect("main window must exist by setup time");
+                let host_for_setup = embed_mgr.clone();
+                let main_for_closure = main.clone();
+                main.run_on_main_thread(move || {
+                    if let Ok(gtk_window) = main_for_closure.gtk_window() {
+                        match embed::linux::install_overlay(&gtk_window) {
+                            Ok(fixed) => host_for_setup.install_fixed(fixed),
+                            Err(e) => log::error!("install_overlay failed: {e:#}"),
+                        }
+                    }
+                })?;
+            }
             let login_popup_mgr = login_popup::LoginPopupManager::new();
             app.manage(login_popup_mgr);
             // No focus-tracking hide: `transient_for(main)` makes the WM
@@ -1123,7 +1201,7 @@ pub fn run() {
             chat_send,
             chat_open_popout,
             embed_mount,
-            embed_position,
+            embed_bounds,
             embed_unmount,
             embed_set_visible,
             login_popup_open,

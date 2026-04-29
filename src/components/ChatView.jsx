@@ -7,7 +7,7 @@ import ChaturbateAuthBanner from './ChaturbateAuthBanner.jsx';
 import ChatModeBanner from './ChatModeBanner.jsx';
 import Composer from './Composer.jsx';
 import ConversationDialog from './ConversationDialog.jsx';
-import EmbeddedChat from './EmbeddedChat.jsx';
+import EmbedSlot from './EmbedSlot.jsx';
 import EmoteText from './EmoteText.jsx';
 import Tooltip from './Tooltip.jsx';
 import UserBadges from './UserBadges.jsx';
@@ -55,9 +55,11 @@ export default function ChatView({
         {header}
         {platform === 'chaturbate' && <ChaturbateAuthBanner />}
         <div style={{ flex: 1, position: 'relative', minHeight: 0, overflow: 'hidden' }}>
-          <EmbeddedChat
+          <EmbedSlot
             channelKey={channelKey}
             isLive={isLive}
+            active={true /* ChatView only renders for the active channel today;
+                            chat-tabs work later replaces this with isActiveTab */}
             placeholderText="Channel isn't live — chat will appear here when it goes live."
           />
         </div>
