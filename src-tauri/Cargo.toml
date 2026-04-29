@@ -48,6 +48,8 @@ libc = "0.2"
 gtk = "0.18"
 gdkx11 = "0.18"
 x11 = { version = "2", features = ["xlib"] }
+webkit2gtk = "2.0"
+wry = "0.54"
 
 [profile.release]
 lto = true

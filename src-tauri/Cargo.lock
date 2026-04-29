@@ -2382,6 +2382,8 @@ dependencies = [
  "tokio",
  "tokio-tungstenite",
  "url",
+ "webkit2gtk",
+ "wry",
  "x11",
 ]
 
