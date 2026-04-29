@@ -43,11 +43,13 @@ pub(crate) struct Inner {
     pub(crate) fixed: Option<FixedHandle>,
 }
 
-#[allow(dead_code)] // populated in Phase 3 / 4
+#[allow(dead_code)] // platform/bounds/visible used in lifecycle ops; inner used by methods
 pub(crate) struct ChildEmbed {
     pub(crate) platform: Platform,
     pub(crate) bounds: Rect,
     pub(crate) visible: bool,
+    #[cfg(not(test))]
+    pub(crate) inner: ChildInner,
 }
 
 impl EmbedHost {
@@ -83,6 +85,28 @@ impl ChildEmbed {
             bounds: Rect::new(0.0, 0.0, 100.0, 100.0),
             visible: true,
         }
+    }
+}
+
+#[cfg(not(test))]
+impl ChildEmbed {
+    pub(crate) fn set_bounds(&mut self, bounds: Rect, scale_factor: f64) -> anyhow::Result<()> {
+        #[cfg(target_os = "linux")]
+        {
+            let wry_rect = build_linux::physical_to_logical(bounds, scale_factor);
+            self.inner
+                .0
+                .set_bounds(wry_rect)
+                .map_err(|e| anyhow::anyhow!("set_bounds: {e}"))?;
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            // Non-Linux ChildInner is a stub today; Phase 4 will add a real
+            // tauri::webview::Webview wrapper. For now this branch is a no-op.
+            let _ = (bounds, scale_factor);
+        }
+        self.bounds = bounds;
+        Ok(())
     }
 }
 
@@ -241,6 +265,16 @@ pub(crate) use linux::FixedHandle;
 
 #[cfg(target_os = "linux")]
 pub(crate) struct ChildInner(pub(crate) std::sync::Arc<wry::WebView>);
+
+// SAFETY: like `FixedHandle`, the wry::WebView wraps GTK pointers that are
+// not thread-safe. All access happens behind the EmbedHost's parking_lot
+// Mutex on the GTK main thread (invoke commands and lifecycle hooks all
+// route through `glib::MainContext::default().invoke` or run on the main
+// thread already). We never touch the WebView off the main thread.
+#[cfg(target_os = "linux")]
+unsafe impl Send for ChildInner {}
+#[cfg(target_os = "linux")]
+unsafe impl Sync for ChildInner {}
 
 #[cfg(not(target_os = "linux"))]
 #[allow(dead_code)] // Phase 4 wires this up
