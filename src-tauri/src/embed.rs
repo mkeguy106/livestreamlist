@@ -629,6 +629,74 @@ impl EmbedHost {
     }
 }
 
+const YT_THEME_CSS: &str = r#"
+html, body { background: #09090b !important; }
+yt-live-chat-renderer, yt-live-chat-app { background: #09090b !important; }
+yt-live-chat-header-renderer { background: #09090b !important; border: 0 !important; }
+::-webkit-scrollbar { width: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #27272a; border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: #3f3f46; }
+"#;
+
+const CB_ISOLATE_JS: &str = r#"
+(function() {
+  function apply() {
+    try {
+      var oldStyle = document.getElementById('lsl-chat-iso');
+      if (oldStyle) oldStyle.remove();
+      var prio = ['#ChatTabContainer', '#defchat'];
+      var fall = ['.chat-holder', '#chat-box', '.chat-container'];
+      var chatEl = null;
+      for (var i = 0; i < prio.length && !chatEl; i++) chatEl = document.querySelector(prio[i]);
+      if (!chatEl) {
+        for (var i = 0; i < fall.length && !chatEl; i++) {
+          var el = document.querySelector(fall[i]);
+          if (el && el.offsetHeight > 50) chatEl = el;
+        }
+      }
+      if (!chatEl) return false;
+      var anc = chatEl.parentElement;
+      while (anc && anc !== document.documentElement) {
+        anc.setAttribute('data-lsl-path', '');
+        anc = anc.parentElement;
+      }
+      chatEl.setAttribute('data-lsl-chat', '');
+      var s = document.createElement('style');
+      s.id = 'lsl-chat-iso';
+      s.textContent = [
+        'html,body{margin:0!important;padding:0!important;overflow:hidden!important;background:#09090b!important}',
+        'body>*:not([data-lsl-path]):not([data-lsl-chat]){display:none!important}',
+        '[data-lsl-path]>*:not([data-lsl-path]):not([data-lsl-chat]){display:none!important}',
+        '[data-lsl-path]{display:block!important;position:static!important;margin:0!important;padding:0!important;width:100%!important;height:100%!important}',
+        '[data-lsl-chat]{display:flex!important;flex-direction:column!important;position:fixed!important;top:0!important;left:0!important;right:0!important;bottom:0!important;width:100%!important;height:100%!important;z-index:1!important}',
+      ].join('');
+      document.head.appendChild(s);
+      return true;
+    } catch (e) { return false; }
+  }
+  if (apply()) return;
+  var tries = 0;
+  var iv = setInterval(function() { tries++; if (apply() || tries > 80) clearInterval(iv); }, 250);
+})();
+"#;
+
+fn json_string(s: &str) -> String {
+    serde_json::to_string(s).unwrap_or_else(|_| "''".to_string())
+}
+
+/// JS the embed should run after every page load.
+fn injection_for(platform: Platform) -> Option<String> {
+    match platform {
+        Platform::Youtube => Some(format!(
+            "(function(){{var s=document.createElement('style');s.textContent={};document.head.appendChild(s);}})();",
+            json_string(YT_THEME_CSS),
+        )),
+        Platform::Chaturbate => Some(CB_ISOLATE_JS.to_string()),
+        _ => None,
+    }
+}
+
 fn yt_video_id_from_thumb(thumbnail_url: &str) -> Option<String> {
     let trim = thumbnail_url.trim();
     let marker = "/vi/";
