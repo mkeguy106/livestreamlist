@@ -600,6 +600,33 @@ impl EmbedHost {
         g.children.insert(unique_key.to_string(), child);
         Ok(true)
     }
+
+    pub fn set_bounds(
+        &self,
+        app: &tauri::AppHandle,
+        key: &str,
+        bounds: Rect,
+    ) -> anyhow::Result<()> {
+        let scale_factor = {
+            use tauri::Manager as _;
+            app.get_webview_window("main")
+                .and_then(|w| w.scale_factor().ok())
+                .unwrap_or(1.0)
+        };
+        let mut g = self.inner.lock();
+        if let Some(child) = g.children.get_mut(key) {
+            child.set_bounds(bounds, scale_factor)?;
+        }
+        Ok(())
+    }
+
+    pub fn set_visible(&self, key: &str, visible: bool) -> anyhow::Result<()> {
+        let mut g = self.inner.lock();
+        if let Some(child) = g.children.get_mut(key) {
+            child.set_visible(visible)?;
+        }
+        Ok(())
+    }
 }
 
 fn yt_video_id_from_thumb(thumbnail_url: &str) -> Option<String> {
