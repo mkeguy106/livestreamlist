@@ -214,6 +214,15 @@ pub(crate) mod linux {
         // overlay child — our Fixed, also fills (children inside it are
         // positioned absolutely with `put`)
         overlay.add_overlay(&fixed);
+        // CRITICAL: without this, the empty Fixed (which fills the entire
+        // overlay area by default) intercepts every mouse event — the React
+        // webview underneath stops receiving clicks, drag-region mousedowns,
+        // right-click for context menu, etc. Pass-through forwards events
+        // landing on Fixed to the next widget in the overlay child list
+        // (the React WebKitWebView). Webviews placed INSIDE the Fixed still
+        // capture their own input via their own GdkWindow; pass-through is
+        // about the Fixed widget itself, not its descendants.
+        overlay.set_overlay_pass_through(&fixed, true);
 
         // Pack the overlay where the webview used to live. Greedy fill so
         // it fills the vbox exactly like the webview did.
