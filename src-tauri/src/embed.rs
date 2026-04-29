@@ -39,6 +39,8 @@ pub struct EmbedHost {
 
 struct Inner {
     children: HashMap<EmbedKey, ChildEmbed>,
+    #[cfg(target_os = "linux")]
+    fixed: Option<FixedHandle>,
 }
 
 #[allow(dead_code)] // populated in Phase 3 / 4
@@ -53,8 +55,15 @@ impl EmbedHost {
         Arc::new(Self {
             inner: Mutex::new(Inner {
                 children: HashMap::new(),
+                #[cfg(target_os = "linux")]
+                fixed: None,
             }),
         })
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) fn install_fixed(&self, fixed: FixedHandle) {
+        self.inner.lock().fixed = Some(fixed);
     }
 
     pub fn has(&self, key: &str) -> bool {
@@ -150,6 +159,71 @@ pub(crate) fn set_bypass_compositor(gdk_win: &gtk::gdk::Window) {
         x11::xlib::XCloseDisplay(display_ptr);
     }
 }
+
+#[cfg(target_os = "linux")]
+pub(crate) mod linux {
+    use super::*;
+    use anyhow::Context;
+    use gtk::prelude::*;
+    use gtk::{Box as GtkBox, Fixed, Overlay};
+
+    /// Wraps `gtk::Fixed` in a Send-marker so we can stash it inside
+    /// `EmbedHost` (locked by parking_lot's Mutex). All GTK access is
+    /// gated by `glib::MainContext::default().invoke` in real call
+    /// sites, so the unsafe Send is sound — we never touch the widget
+    /// off the main thread.
+    pub(crate) struct FixedHandle(pub Fixed);
+    unsafe impl Send for FixedHandle {}
+
+    /// Build the `GtkOverlay` sandwich on top of the main React webview
+    /// and return the `gtk::Fixed` we'll add child webviews into.
+    ///
+    /// Topology before:
+    ///   GtkApplicationWindow > default_vbox(GtkBox) > [WebKitWebView]
+    ///
+    /// Topology after:
+    ///   GtkApplicationWindow > default_vbox(GtkBox) > [Overlay]
+    ///                                                  ├── (base) WebKitWebView
+    ///                                                  └── (overlay) Fixed
+    pub(crate) fn install_overlay(
+        gtk_window: &gtk::ApplicationWindow,
+    ) -> anyhow::Result<FixedHandle> {
+        let vbox: GtkBox = gtk_window
+            .child()
+            .and_then(|w| w.downcast::<GtkBox>().ok())
+            .context("main window child is not a GtkBox")?;
+        let webview = vbox
+            .children()
+            .into_iter()
+            .find(|c| c.type_().name() == "WebKitWebView")
+            .context("no WebKitWebView found in default_vbox")?;
+
+        // Detach the React webview from the vbox, drop it into a new Overlay
+        // as the base child, and pack the Overlay back into the vbox.
+        vbox.remove(&webview);
+
+        let overlay = Overlay::new();
+        let fixed = Fixed::new();
+        // base child — the React webview, fills the overlay
+        overlay.add(&webview);
+        // overlay child — our Fixed, also fills (children inside it are
+        // positioned absolutely with `put`)
+        overlay.add_overlay(&fixed);
+
+        // Pack the overlay where the webview used to live. Greedy fill so
+        // it fills the vbox exactly like the webview did.
+        vbox.pack_start(&overlay, true, true, 0);
+        overlay.show_all();
+        // The overlay's overlay-child is `fixed`; ensure it's visible too
+        // (show_all will have done it, but be explicit).
+        fixed.set_visible(true);
+
+        Ok(FixedHandle(fixed))
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) use linux::FixedHandle;
 
 #[cfg(test)]
 mod tests {
