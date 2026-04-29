@@ -27,7 +27,7 @@ export const openInBrowser = (uniqueKey) => invoke('open_in_browser', { uniqueKe
 export const chatConnect = (uniqueKey) => invoke('chat_connect', { uniqueKey });
 export const chatDisconnect = (uniqueKey) => invoke('chat_disconnect', { uniqueKey });
 export const chatSend = (uniqueKey, text) => invoke('chat_send', { uniqueKey, text });
-export const chatOpenPopout = (uniqueKey) => invoke('chat_open_popout', { uniqueKey });
+export const chatOpenInBrowser = (uniqueKey) => invoke('chat_open_in_browser', { uniqueKey });
 export const embedMount = (uniqueKey, x, y, width, height) =>
   invoke('embed_mount', { uniqueKey, x, y, width, height });
 export const embedBounds = (uniqueKey, x, y, width, height) =>
@@ -205,7 +205,7 @@ async function mockInvoke(name, args) {
     case 'chat_disconnect':
       stopMockChat(args.uniqueKey);
       return null;
-    case 'chat_open_popout':
+    case 'chat_open_in_browser':
       window.open('https://example.com', '_blank', 'noopener');
       return null;
     case 'replay_chat_history':
