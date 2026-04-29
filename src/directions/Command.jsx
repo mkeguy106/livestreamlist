@@ -6,8 +6,10 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import ChatView from '../components/ChatView.jsx';
 import ContextMenu from '../components/ContextMenu.jsx';
 import SocialsBanner from '../components/SocialsBanner.jsx';
+import TabStrip from '../components/TabStrip.jsx';
 import TitleBanner from '../components/TitleBanner.jsx';
 import Tooltip from '../components/Tooltip.jsx';
+import { useCommandTabs } from '../hooks/useCommandTabs.js';
 import { usePlayerState } from '../hooks/usePlayerState.js';
 import { stopStream } from '../ipc.js';
 import { formatUptime, formatViewers } from '../utils/format.js';
@@ -53,8 +55,6 @@ export default function Command({ ctx }) {
     livestreams,
     loading,
     refresh,
-    selectedKey,
-    setSelectedKey,
     openAddDialog,
     launchStream,
     openInBrowser,
@@ -64,6 +64,18 @@ export default function Command({ ctx }) {
     onUsernameContext,
     onUsernameHover,
   } = ctx;
+
+  // Tab state — owned by Command. Focus and Columns continue to consume
+  // ctx.selectedKey unchanged.
+  const {
+    tabKeys,
+    detachedKeys,                                                       // eslint-disable-line no-unused-vars
+    activeTabKey,
+    openOrFocusTab,
+    closeTab,
+    reorderTabs,                                                        // eslint-disable-line no-unused-vars
+    setActiveTabKey,
+  } = useCommandTabs({ livestreams });
 
   const playing = usePlayerState();
   const [menu, setMenu] = useState(null); // { x, y, channel }
@@ -114,13 +126,6 @@ export default function Command({ ctx }) {
   }, [livestreams, filter, sort, hideOffline, playing, query]);
 
   const liveCount = filtered.filter((l) => l.is_live).length;
-  // Resolve the selected channel from the FULL list, not the filtered
-  // one. Otherwise typing in the search box (which filters the rail)
-  // would yank the chat panel onto whatever happens to top the
-  // filtered list. Selection only changes when the user explicitly
-  // clicks another channel.
-  const selected =
-    livestreams.find((l) => l.unique_key === selectedKey) ?? filtered[0];
   const filterLabel = FILTER_OPTS.find((o) => o.k === filter)?.l ?? 'All';
   const sortLabel = SORT_OPTS.find((o) => o.k === sort)?.l ?? 'Viewers';
 
@@ -283,7 +288,7 @@ export default function Command({ ctx }) {
               </div>
             )}
             {filtered.map((ch) => {
-              const active = ch.unique_key === selected?.unique_key;
+              const active = ch.unique_key === activeTabKey;
               const isPlaying = playing.has(ch.unique_key);
               return (
                 <Tooltip
@@ -293,13 +298,13 @@ export default function Command({ ctx }) {
                 >
                   <button
                     type="button"
-                    onClick={() => setSelectedKey(ch.unique_key)}
+                    onClick={() => openOrFocusTab(ch.unique_key)}
                     onDoubleClick={() => {
                       if (ch.is_live) launchStream(ch.unique_key);
                     }}
                     onContextMenu={(e) => {
                       e.preventDefault();
-                      setSelectedKey(ch.unique_key);
+                      openOrFocusTab(ch.unique_key);
                       setMenu({ x: e.clientX, y: e.clientY, channel: ch });
                     }}
                     style={{
@@ -411,21 +416,53 @@ export default function Command({ ctx }) {
 
         {/* Main */}
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-          {selected ? (
-            <SelectedPane
-              channel={selected}
-              onLaunch={() => launchStream(selected.unique_key)}
-              onOpenBrowser={() => openInBrowser(selected.unique_key)}
-              onFavorite={() => setFavorite(selected.unique_key, true)}
-              onUsernameOpen={onUsernameOpen}
-              onUsernameContext={onUsernameContext}
-              onUsernameHover={onUsernameHover}
-            />
-          ) : (
-            <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--zinc-500)' }}>
-              no channels
-            </div>
-          )}
+          <TabStrip
+            tabs={tabKeys}
+            activeKey={activeTabKey}
+            livestreams={livestreams}
+            onActivate={setActiveTabKey}
+            onClose={closeTab}
+            onDetach={() => { /* PR 4 */ }}
+          />
+          <div style={{ flex: 1, position: 'relative', minWidth: 0 }}>
+            {tabKeys.length === 0 && (
+              <div
+                style={{
+                  position: 'absolute', inset: 0,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  color: 'var(--zinc-500)', fontSize: 'var(--t-12)',
+                  textAlign: 'center', padding: '0 24px',
+                }}
+              >
+                No chat selected — click a channel on the left to open it.
+              </div>
+            )}
+            {tabKeys.map((k) => {
+              const channel = livestreams.find((l) => l.unique_key === k);
+              if (!channel) return null;
+              return (
+                <div
+                  key={k}
+                  style={{
+                    position: 'absolute', inset: 0,
+                    display: k === activeTabKey ? 'flex' : 'none',
+                    flexDirection: 'column',
+                  }}
+                >
+                  <SelectedPane
+                    channel={channel}
+                    isActiveTab={k === activeTabKey}
+                    onLaunch={() => launchStream(k)}
+                    onOpenBrowser={() => openInBrowser(k)}
+                    onFavorite={() => setFavorite(k, !channel.favorite)}
+                    onUsernameOpen={onUsernameOpen}
+                    onUsernameContext={onUsernameContext}
+                    onUsernameHover={onUsernameHover}
+                  />
+                </div>
+              );
+            })}
+          </div>
         </div>
       </div>
       {menu && (
@@ -485,7 +522,7 @@ export default function Command({ ctx }) {
   );
 }
 
-function SelectedPane({ channel, onLaunch, onOpenBrowser, onUsernameOpen, onUsernameContext, onUsernameHover }) {
+function SelectedPane({ channel, isActiveTab, onLaunch, onOpenBrowser, onUsernameOpen, onUsernameContext, onUsernameHover }) {
   return (
     <>
       <div
@@ -536,6 +573,7 @@ function SelectedPane({ channel, onLaunch, onOpenBrowser, onUsernameOpen, onUser
         channelKey={channel.unique_key}
         variant="irc"
         isLive={Boolean(channel.is_live)}
+        isActiveTab={isActiveTab !== false}
         header={
           <>
             <TitleBanner channel={channel} />

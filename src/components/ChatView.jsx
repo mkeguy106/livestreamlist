@@ -33,9 +33,10 @@ export default function ChatView({
   header = null,
   footer = null,
   isLive = true,
-  onUsernameOpen,      // (user, anchorRect, channelKey) — left-click
-  onUsernameContext,   // (user, point, channelKey)      — right-click
-  onUsernameHover,     // (user | null, anchorRect | null, channelKey) — entering=true|false implicit via user!=null
+  isActiveTab = true,
+  onUsernameOpen,
+  onUsernameContext,
+  onUsernameHover,
 }) {
   // YouTube and Chaturbate don't have a built-in chat client — we mount the
   // platform's own /live_chat (or room) page as a child webview overlaid on
@@ -58,8 +59,7 @@ export default function ChatView({
           <EmbedSlot
             channelKey={channelKey}
             isLive={isLive}
-            active={true /* ChatView only renders for the active channel today;
-                            chat-tabs work later replaces this with isActiveTab */}
+            active={isActiveTab}
             placeholderText="Channel isn't live — chat will appear here when it goes live."
           />
         </div>
