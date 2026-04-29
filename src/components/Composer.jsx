@@ -23,7 +23,7 @@ export default function Composer({ channelKey, platform, auth, mentionCandidates
   const placeholder = !authed
     ? platform === 'twitch' || platform === 'kick'
       ? `Log in to ${platform[0].toUpperCase()}${platform.slice(1)} to chat`
-      : 'This platform chats via the native popout — click Open popout ↗'
+      : 'This platform chats on its own site — click Browser ↗ to open it'
     : 'Send a message…  —  `:` for emotes, `@` for mentions';
 
   // Cache emotes per-channel
