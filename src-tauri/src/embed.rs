@@ -213,7 +213,8 @@ impl EmbedHost {
     #[cfg(test)]
     pub(crate) fn insert_fake(&self, key: &str, platform: Platform) {
         let mut g = self.inner.lock();
-        g.children.insert(key.to_string(), ChildEmbed::fake(platform));
+        g.children
+            .insert(key.to_string(), ChildEmbed::fake(platform));
     }
 
     pub fn unmount(&self, key: &str) {
@@ -500,9 +501,7 @@ pub(crate) mod build_other {
     pub(crate) fn build_child(app: &AppHandle, spec: BuildSpec) -> Result<Webview> {
         // `add_child` lives on Window<R>, not WebviewWindow<R>; pull the
         // raw window via Manager::get_window.
-        let main = app
-            .get_window("main")
-            .context("main window unavailable")?;
+        let main = app.get_window("main").context("main window unavailable")?;
         let bg = Color(
             spec.background.0,
             spec.background.1,
@@ -606,8 +605,7 @@ impl EmbedHost {
         let Some(channel) = channel else {
             anyhow::bail!("unknown channel {unique_key}");
         };
-        let Some(url) =
-            build_url_for(channel.platform, &channel.channel_id, livestream.as_ref())
+        let Some(url) = build_url_for(channel.platform, &channel.channel_id, livestream.as_ref())
         else {
             return Ok(false); // offline
         };
@@ -864,11 +862,10 @@ fn build_url_for(
     match platform {
         Platform::Youtube => {
             let ls = livestream.filter(|l| l.is_live)?;
-            let video_id = ls.video_id.clone().or_else(|| {
-                ls.thumbnail_url
-                    .as_deref()
-                    .and_then(yt_video_id_from_thumb)
-            })?;
+            let video_id = ls
+                .video_id
+                .clone()
+                .or_else(|| ls.thumbnail_url.as_deref().and_then(yt_video_id_from_thumb))?;
             Some(format!(
                 "https://www.youtube.com/live_chat?is_popout=1&dark_theme=1&v={video_id}"
             ))
@@ -971,9 +968,7 @@ mod tests {
         let url = build_url_for(Platform::Youtube, "UC1", Some(&ls));
         assert_eq!(
             url,
-            Some(
-                "https://www.youtube.com/live_chat?is_popout=1&dark_theme=1&v=abc123".to_string()
-            )
+            Some("https://www.youtube.com/live_chat?is_popout=1&dark_theme=1&v=abc123".to_string())
         );
     }
 

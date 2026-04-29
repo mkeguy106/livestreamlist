@@ -153,7 +153,12 @@ async fn refresh_all(
     let store = Arc::clone(&state.store);
     let client = state.http.clone();
     let notifier = Arc::clone(&state.notifier);
-    let yt_browser = state.settings.read().general.youtube_cookies_browser.clone();
+    let yt_browser = state
+        .settings
+        .read()
+        .general
+        .youtube_cookies_browser
+        .clone();
     let snapshot = refresh::refresh_all(store, client, yt_browser)
         .await
         .map_err(err_string)?;
@@ -574,7 +579,6 @@ fn spawn_youtube_user_info_refresh(app: &tauri::AppHandle, http: reqwest::Client
     });
 }
 
-
 #[tauri::command]
 fn open_url(url: String) -> Result<(), String> {
     // Only http(s) — don't let the renderer hand us file:// or javascript: URIs.
@@ -836,7 +840,12 @@ async fn auth_status(state: State<'_, AppState>) -> Result<AuthStatus, String> {
         .await
         .map_err(err_string)?;
     let kick = auth::kick::status(&state.http).await.map_err(err_string)?;
-    let browser = state.settings.read().general.youtube_cookies_browser.clone();
+    let browser = state
+        .settings
+        .read()
+        .general
+        .youtube_cookies_browser
+        .clone();
     let has_paste = auth::youtube::cookies_file_present();
     let yt_handle = auth::youtube::load_user_info()
         .map_err(err_string)?
@@ -916,10 +925,7 @@ fn kick_logout(
 }
 
 #[tauri::command]
-async fn youtube_login(
-    app: tauri::AppHandle,
-    state: State<'_, AppState>,
-) -> Result<bool, String> {
+async fn youtube_login(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<bool, String> {
     auth::youtube::login_via_webview(app.clone())
         .await
         .map_err(err_string)?;
@@ -950,10 +956,7 @@ fn youtube_login_paste(
 }
 
 #[tauri::command]
-fn youtube_logout(
-    app: tauri::AppHandle,
-    state: State<'_, AppState>,
-) -> Result<(), String> {
+fn youtube_logout(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     auth::youtube::clear().map_err(err_string)?;
     clear_youtube_browser_pref(&state);
     broadcast_auth_changed(&app);
@@ -1011,12 +1014,9 @@ fn replay_chat_history(
         .find(|c| c.unique_key() == unique_key)
         .cloned()
         .ok_or_else(|| format!("unknown channel {unique_key}"))?;
-    let mut msgs = chat::log_store::read_recent(
-        channel.platform,
-        &channel.channel_id,
-        limit.min(1000),
-    )
-    .map_err(err_string)?;
+    let mut msgs =
+        chat::log_store::read_recent(channel.platform, &channel.channel_id, limit.min(1000))
+            .map_err(err_string)?;
     // Transient marker — applied after deserialize, never persisted back.
     // Lets the frontend dim log-replayed messages alongside robotty
     // backfill so all pre-live history shares one visual treatment.
