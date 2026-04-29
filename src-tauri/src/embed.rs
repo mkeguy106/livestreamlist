@@ -108,6 +108,24 @@ impl ChildEmbed {
         self.bounds = bounds;
         Ok(())
     }
+
+    pub(crate) fn set_visible(&mut self, visible: bool) -> anyhow::Result<()> {
+        #[cfg(target_os = "linux")]
+        {
+            // wry 0.54.4 exposes WebView::set_visible directly; no WidgetExt
+            // detour needed.
+            self.inner
+                .0
+                .set_visible(visible)
+                .map_err(|e| anyhow::anyhow!("set_visible: {e}"))?;
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = visible; // Phase 4 wires this up
+        }
+        self.visible = visible;
+        Ok(())
+    }
 }
 
 impl EmbedHost {
