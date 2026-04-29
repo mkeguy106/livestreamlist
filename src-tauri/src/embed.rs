@@ -66,6 +66,46 @@ impl EmbedHost {
     }
 }
 
+impl ChildEmbed {
+    #[cfg(test)]
+    fn fake(platform: Platform) -> Self {
+        Self {
+            platform,
+            bounds: Rect::new(0.0, 0.0, 100.0, 100.0),
+            visible: true,
+        }
+    }
+}
+
+impl EmbedHost {
+    /// Mark a key as mounted with a fake child. Test-only — real mounts
+    /// go through the platform-specific build path in Phase 3/4.
+    #[cfg(test)]
+    pub(crate) fn insert_fake(&self, key: &str, platform: Platform) {
+        let mut g = self.inner.lock();
+        g.children.insert(key.to_string(), ChildEmbed::fake(platform));
+    }
+
+    pub fn unmount(&self, key: &str) {
+        self.inner.lock().children.remove(key);
+    }
+
+    pub fn unmount_platform(&self, platform: Platform) {
+        let mut g = self.inner.lock();
+        g.children.retain(|_, c| c.platform != platform);
+    }
+
+    pub fn keys_for_platform(&self, platform: Platform) -> Vec<EmbedKey> {
+        self.inner
+            .lock()
+            .children
+            .iter()
+            .filter(|(_, c)| c.platform == platform)
+            .map(|(k, _)| k.clone())
+            .collect()
+    }
+}
+
 // Temporary stubs for Phase 1 testing. Real implementation in Phase 3/4.
 // lib.rs still references the old EmbedManager API; these stubs allow the
 // crate to compile so we can test the new types. Phase 7 removes lib.rs
@@ -113,5 +153,46 @@ mod tests {
         let host = EmbedHost::new();
         assert!(!host.has("youtube:UC123"));
         assert!(host.keys().is_empty());
+    }
+
+    #[test]
+    fn unmount_removes_only_target_key() {
+        let host = EmbedHost::new();
+        host.insert_fake("youtube:UC1", Platform::Youtube);
+        host.insert_fake("youtube:UC2", Platform::Youtube);
+        host.unmount("youtube:UC1");
+        assert!(!host.has("youtube:UC1"));
+        assert!(host.has("youtube:UC2"));
+    }
+
+    #[test]
+    fn unmount_unknown_key_is_noop() {
+        let host = EmbedHost::new();
+        host.insert_fake("youtube:UC1", Platform::Youtube);
+        host.unmount("bogus");
+        assert!(host.has("youtube:UC1"));
+    }
+
+    #[test]
+    fn unmount_platform_drops_all_of_platform() {
+        let host = EmbedHost::new();
+        host.insert_fake("youtube:UC1", Platform::Youtube);
+        host.insert_fake("youtube:UC2", Platform::Youtube);
+        host.insert_fake("chaturbate:bob", Platform::Chaturbate);
+        host.unmount_platform(Platform::Youtube);
+        assert!(!host.has("youtube:UC1"));
+        assert!(!host.has("youtube:UC2"));
+        assert!(host.has("chaturbate:bob"));
+    }
+
+    #[test]
+    fn keys_for_platform_filters() {
+        let host = EmbedHost::new();
+        host.insert_fake("youtube:UC1", Platform::Youtube);
+        host.insert_fake("chaturbate:bob", Platform::Chaturbate);
+        let yt = host.keys_for_platform(Platform::Youtube);
+        let cb = host.keys_for_platform(Platform::Chaturbate);
+        assert_eq!(yt, vec!["youtube:UC1".to_string()]);
+        assert_eq!(cb, vec!["chaturbate:bob".to_string()]);
     }
 }
