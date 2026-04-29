@@ -72,9 +72,7 @@ function Tab({
   onActivate,
   onClose,
   onDetach,
-  // onReorder is consumed in PR 3 — accepting the prop here so the
-  // signature is stable across PRs.
-  onReorder,                                                            // eslint-disable-line no-unused-vars
+  onReorder,
 }) {
   const isBlinking = mention && mention.blinkUntil > Date.now();
   const hasDot = mention?.hasUnseenMention === true;
@@ -83,6 +81,24 @@ function Tab({
   return (
     <div
       onClick={onActivate}
+      draggable
+      onDragStart={(e) => {
+        e.dataTransfer.setData('application/x-livestreamlist-tab', channelKey);
+        e.dataTransfer.effectAllowed = 'move';
+      }}
+      onDragOver={(e) => {
+        if (Array.from(e.dataTransfer.types).includes('application/x-livestreamlist-tab')) {
+          e.preventDefault();
+          e.dataTransfer.dropEffect = 'move';
+        }
+      }}
+      onDrop={(e) => {
+        const fromKey = e.dataTransfer.getData('application/x-livestreamlist-tab');
+        if (fromKey && fromKey !== channelKey && onReorder) {
+          e.preventDefault();
+          onReorder(fromKey, channelKey);
+        }
+      }}
       className={isBlinking ? 'rx-tab rx-tab-flashing' : 'rx-tab'}
       style={{
         flex: '0 0 auto',

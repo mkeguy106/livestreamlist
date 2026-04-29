@@ -73,7 +73,7 @@ export default function Command({ ctx }) {
     activeTabKey,
     openOrFocusTab,
     closeTab,
-    reorderTabs,                                                        // eslint-disable-line no-unused-vars
+    reorderTabs,
     setActiveTabKey,
   } = useCommandTabs({ livestreams });
 
@@ -422,6 +422,8 @@ export default function Command({ ctx }) {
             livestreams={livestreams}
             onActivate={setActiveTabKey}
             onClose={closeTab}
+            onReorder={reorderTabs}
+            // PR 4 wires onDetach; PR 5 passes mentions.
             onDetach={() => { /* PR 4 */ }}
           />
           <div style={{ flex: 1, position: 'relative', minWidth: 0 }}>
