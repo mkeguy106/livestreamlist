@@ -37,10 +37,10 @@ pub struct EmbedHost {
     inner: Mutex<Inner>,
 }
 
-struct Inner {
-    children: HashMap<EmbedKey, ChildEmbed>,
+pub(crate) struct Inner {
+    pub(crate) children: HashMap<EmbedKey, ChildEmbed>,
     #[cfg(target_os = "linux")]
-    fixed: Option<FixedHandle>,
+    pub(crate) fixed: Option<FixedHandle>,
 }
 
 #[allow(dead_code)] // populated in Phase 3 / 4
@@ -112,6 +112,11 @@ impl EmbedHost {
             .filter(|(_, c)| c.platform == platform)
             .map(|(k, _)| k.clone())
             .collect()
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) fn inner_for_smoke(&self) -> &Mutex<Inner> {
+        &self.inner
     }
 }
 
