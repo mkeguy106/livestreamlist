@@ -4,10 +4,10 @@
 // when a row fills, the next tab wraps onto a new row. flex-wrap does the
 // math Qt's _FlowTabBar._relayout() does manually.
 //
-// Drag-to-reorder lands in PR 3 (onReorder prop is forwarded but not yet
-// consumed). Detach + Re-dock land in PR 4 (the ⤓ icon button is placed
-// but its onClick is a no-op until then). Mention flash + sticky dot land
-// in PR 5.
+// Detach + Re-dock land in a follow-up PR (the ⤓ icon button is placed but
+// its onClick is a no-op until then). Mention flash + sticky dot also land
+// later — the rx-tab-flashing class is applied conditionally but the
+// @keyframes lands with that work.
 
 import { formatViewers } from '../utils/format.js';
 
@@ -17,9 +17,9 @@ export default function TabStrip({
   livestreams,           // Livestream[]
   onActivate,            // (channelKey) => void
   onClose,               // (channelKey) => void
-  onDetach,              // (channelKey) => void   — placeholder until PR 4
-  onReorder,             // (fromKey, toKey) => void — placeholder until PR 3
-  mentions,              // Map<channelKey, MentionState> — undefined until PR 5
+  onDetach,              // (channelKey) => void   — placeholder until detach lands
+  onReorder,             // (fromKey, toKey) => void
+  mentions,              // Map<channelKey, MentionState> — undefined until mention flash lands
 }) {
   return (
     <div
