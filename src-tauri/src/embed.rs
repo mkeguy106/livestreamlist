@@ -109,9 +109,16 @@ impl ChildEmbed {
         }
         #[cfg(not(target_os = "linux"))]
         {
-            // Non-Linux ChildInner is a stub today; Phase 4 will add a real
-            // tauri::webview::Webview wrapper. For now this branch is a no-op.
-            let _ = (bounds, scale_factor);
+            use tauri::{PhysicalPosition, PhysicalSize};
+            self.inner
+                .0
+                .set_position(PhysicalPosition::new(bounds.x, bounds.y))
+                .map_err(|e| anyhow::anyhow!("set_position: {e}"))?;
+            self.inner
+                .0
+                .set_size(PhysicalSize::new(bounds.w as u32, bounds.h as u32))
+                .map_err(|e| anyhow::anyhow!("set_size: {e}"))?;
+            let _ = scale_factor; // Tauri uses physical units directly on mac/Win
         }
         self.bounds = bounds;
         Ok(())
@@ -129,7 +136,17 @@ impl ChildEmbed {
         }
         #[cfg(not(target_os = "linux"))]
         {
-            let _ = visible; // Phase 4 wires this up
+            if visible {
+                self.inner
+                    .0
+                    .show()
+                    .map_err(|e| anyhow::anyhow!("show: {e}"))?;
+            } else {
+                self.inner
+                    .0
+                    .hide()
+                    .map_err(|e| anyhow::anyhow!("hide: {e}"))?;
+            }
         }
         self.visible = visible;
         Ok(())
@@ -145,7 +162,10 @@ impl ChildEmbed {
         }
         #[cfg(not(target_os = "linux"))]
         {
-            let _ = js;
+            self.inner
+                .0
+                .eval(js)
+                .map_err(|e| anyhow::anyhow!("eval: {e}"))?;
         }
         Ok(())
     }
@@ -322,8 +342,7 @@ unsafe impl Send for ChildInner {}
 unsafe impl Sync for ChildInner {}
 
 #[cfg(not(target_os = "linux"))]
-#[allow(dead_code)] // Phase 4 wires this up
-pub(crate) struct ChildInner;
+pub(crate) struct ChildInner(pub(crate) tauri::webview::Webview);
 
 #[cfg(target_os = "linux")]
 pub(crate) mod build_linux {
@@ -390,6 +409,72 @@ pub(crate) mod build_linux {
         let webview = builder
             .build_gtk(&fixed.0)
             .map_err(|e| anyhow::anyhow!("build_gtk failed: {e}"))?;
+        Ok(webview)
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+#[allow(dead_code)] // Phase 5 wires the call sites up
+pub(crate) mod build_other {
+    use super::*;
+    use anyhow::{Context, Result};
+    use std::path::PathBuf;
+    use tauri::utils::config::Color;
+    use tauri::webview::{PageLoadEvent, Webview, WebviewBuilder, WebviewUrl};
+    use tauri::{AppHandle, Manager, PhysicalPosition, PhysicalSize};
+
+    pub(crate) struct BuildSpec {
+        pub label: String,
+        pub url: String,
+        pub profile_dir: PathBuf,
+        pub bounds: Rect,
+        pub init_script: Option<String>,
+        pub background: (u8, u8, u8, u8),
+        pub on_page_load: Option<Box<dyn Fn(Webview, PageLoadEvent) + Send + Sync>>,
+    }
+
+    /// Build a child webview parented into the main window via
+    /// `Window::add_child` (Tauri's `unstable` feature). Returns the
+    /// `Webview` handle for storage in `ChildInner`.
+    ///
+    /// Phase 6 will switch `visible(false)` + show on
+    /// `PageLoadEvent::Finished` here too — for now we mirror Linux's
+    /// "create then immediately position" pattern.
+    pub(crate) fn build_child(app: &AppHandle, spec: BuildSpec) -> Result<Webview> {
+        // `add_child` lives on Window<R>, not WebviewWindow<R>; pull the
+        // raw window via Manager::get_window.
+        let main = app
+            .get_window("main")
+            .context("main window unavailable")?;
+        let bg = Color(
+            spec.background.0,
+            spec.background.1,
+            spec.background.2,
+            spec.background.3,
+        );
+        let url = spec.url.parse::<url::Url>().context("parsing embed URL")?;
+
+        let mut builder = WebviewBuilder::new(&spec.label, WebviewUrl::External(url))
+            .data_directory(spec.profile_dir)
+            .background_color(bg);
+        if let Some(s) = spec.init_script {
+            builder = builder.initialization_script(&s);
+        }
+        if let Some(handler) = spec.on_page_load {
+            builder = builder.on_page_load(move |w, payload| {
+                handler(w, payload.event());
+            });
+        }
+
+        let position = PhysicalPosition::new(spec.bounds.x, spec.bounds.y);
+        let size = PhysicalSize::new(spec.bounds.w as u32, spec.bounds.h as u32);
+        let webview = main
+            .add_child(builder, position, size)
+            .map_err(|e| anyhow::anyhow!("add_child: {e}"))?;
+        // Hide immediately — Phase 6 will show on PageLoadEvent::Finished.
+        // We can't request `visible(false)` on the builder (no such
+        // method on Tauri's WebviewBuilder), so we hide post-create.
+        let _ = webview.hide();
         Ok(webview)
     }
 }
