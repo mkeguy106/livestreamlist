@@ -311,7 +311,7 @@ async fn list_socials(
 }
 
 #[tauri::command]
-fn chat_open_popout(
+fn chat_open_in_browser(
     unique_key: String,
     app: tauri::AppHandle,
     state: State<'_, AppState>,
@@ -1199,7 +1199,7 @@ pub fn run() {
             chat_connect,
             chat_disconnect,
             chat_send,
-            chat_open_popout,
+            chat_open_in_browser,
             embed_mount,
             embed_bounds,
             embed_unmount,

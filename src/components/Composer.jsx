@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { chatOpenPopout, chatSend, listEmotes } from '../ipc.js';
+import { chatOpenInBrowser, chatSend, listEmotes } from '../ipc.js';
 import Tooltip from './Tooltip.jsx';
 
 const MAX_LEN = 500;
@@ -20,11 +20,10 @@ export default function Composer({ channelKey, platform, auth, mentionCandidates
   const platformAuth =
     platform === 'twitch' ? auth?.twitch : platform === 'kick' ? auth?.kick : null;
   const authed = Boolean(platformAuth);
-  const embedOnly = platform === 'youtube' || platform === 'chaturbate';
   const placeholder = !authed
     ? platform === 'twitch' || platform === 'kick'
       ? `Log in to ${platform[0].toUpperCase()}${platform.slice(1)} to chat`
-      : 'This platform chats via the native popout — click Open popout ↗'
+      : 'This platform chats on its own site — click Browser ↗ to open it'
     : 'Send a message…  —  `:` for emotes, `@` for mentions';
 
   // Cache emotes per-channel
@@ -192,15 +191,15 @@ export default function Composer({ channelKey, platform, auth, mentionCandidates
           <Tooltip
             placement="top"
             align="right"
-            text={embedOnly ? "Open the platform's native popout chat" : 'Open popout chat in a separate window'}
+            text="Open chat in browser"
           >
             <button
               type="button"
               className="rx-btn rx-btn-ghost"
-              onClick={() => chatOpenPopout(channelKey).catch((e) => setError(String(e?.message ?? e)))}
+              onClick={() => chatOpenInBrowser(channelKey).catch((e) => setError(String(e?.message ?? e)))}
               style={{ padding: '2px 6px', fontSize: 10 }}
             >
-              Popout ↗
+              Browser ↗
             </button>
           </Tooltip>
         )}
