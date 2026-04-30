@@ -14,6 +14,7 @@
 
 import { useEffect } from 'react';
 import ChatView from './ChatView.jsx';
+import ResizeHandles from './ResizeHandles.jsx';
 import SocialsBanner from './SocialsBanner.jsx';
 import TitleBanner from './TitleBanner.jsx';
 import WindowControls from './WindowControls.jsx';
@@ -45,8 +46,10 @@ export default function DetachedChatRoot({ channelKey }) {
         display: 'flex',
         flexDirection: 'column',
         background: 'var(--zinc-950)',
+        position: 'relative',  // anchor for ResizeHandles' absolute children
       }}
     >
+      <ResizeHandles />
       <div
         onMouseDown={onTitlebarMouseDown}
         style={{
