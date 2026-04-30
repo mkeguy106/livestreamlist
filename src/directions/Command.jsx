@@ -71,11 +71,13 @@ export default function Command({ ctx }) {
     tabKeys,
     detachedKeys,
     activeTabKey,
+    mentions,
     closeTab,
     reorderTabs,
     setActiveTabKey,
     detachTab,
     rowClickHandler,
+    notifyMention,
   } = useCommandTabs({ livestreams });
 
   const playing = usePlayerState();
@@ -426,10 +428,10 @@ export default function Command({ ctx }) {
             tabs={tabKeys}
             activeKey={activeTabKey}
             livestreams={livestreams}
+            mentions={mentions}
             onActivate={setActiveTabKey}
             onClose={closeTab}
             onReorder={reorderTabs}
-            // PR 5 passes mentions.
             onDetach={detachTab}
           />
           <div style={{ flex: 1, position: 'relative', minWidth: 0 }}>
@@ -460,6 +462,7 @@ export default function Command({ ctx }) {
                   <SelectedPane
                     channel={channel}
                     isActiveTab={k === activeTabKey}
+                    onMention={notifyMention}
                     onLaunch={() => launchStream(k)}
                     onOpenBrowser={() => openInBrowser(k)}
                     onFavorite={() => setFavorite(k, !channel.favorite)}
@@ -530,7 +533,7 @@ export default function Command({ ctx }) {
   );
 }
 
-function SelectedPane({ channel, isActiveTab, onLaunch, onOpenBrowser, onUsernameOpen, onUsernameContext, onUsernameHover }) {
+function SelectedPane({ channel, isActiveTab, onMention, onLaunch, onOpenBrowser, onUsernameOpen, onUsernameContext, onUsernameHover }) {
   return (
     <>
       <div
@@ -582,6 +585,7 @@ function SelectedPane({ channel, isActiveTab, onLaunch, onOpenBrowser, onUsernam
         variant="irc"
         isLive={Boolean(channel.is_live)}
         isActiveTab={isActiveTab !== false}
+        onMention={onMention}
         header={
           <>
             <TitleBanner channel={channel} />

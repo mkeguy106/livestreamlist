@@ -179,3 +179,18 @@ body { background: var(--zinc-950); }
   0%, 100% { opacity: 0.35; }
   50%      { opacity: 0.55; }
 }
+
+/* Mention flash for Command tabs.
+ *
+ * 500 ms binary toggle (steps(2, end)) so the tab background snaps between
+ * transparent and a red wash — same visual feel as Qt's QTimer + setBackground.
+ * Auto-stop after 10 s is enforced by useCommandTabs flipping blinkUntil to 0,
+ * which removes the .rx-tab-flashing class from the tab. */
+@keyframes rx-flash-mention {
+  0%, 100% { background-color: transparent; }
+  50%      { background-color: rgba(239, 68, 68, 0.25); }
+}
+
+.rx-tab-flashing {
+  animation: rx-flash-mention 500ms steps(2, end) infinite;
+}
