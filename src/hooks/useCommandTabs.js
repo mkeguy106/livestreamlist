@@ -158,18 +158,20 @@ export function useCommandTabs({ livestreams }) {
       return;
     }
     // Move from tabKeys → detachedKeys. Promote the active tab if needed.
-    setTabKeys((prev) => {
-      const [nextTabs, nextActive] = closeTabReducer(prev, activeTabKey, channelKey);
-      if (nextActive !== activeTabKey) setActiveTabKey(nextActive);
-      return nextTabs;
-    });
+    // Compute next state from closure values and dispatch each setter
+    // independently — same pattern as closeTab/openOrFocusTab. Calling
+    // setActiveTabKey from inside a setTabKeys updater would double-fire
+    // under React StrictMode. (See commit 19324dc for context.)
+    const [nextTabs, nextActive] = closeTabReducer(tabKeys, activeTabKey, channelKey);
+    if (nextTabs !== tabKeys) setTabKeys(nextTabs);
+    if (nextActive !== activeTabKey) setActiveTabKey(nextActive);
     setDetachedKeys((prev) => {
       if (prev.has(channelKey)) return prev;
       const next = new Set(prev);
       next.add(channelKey);
       return next;
     });
-  }, [activeTabKey]);
+  }, [tabKeys, activeTabKey]);
 
   // Smart row click for the rail: if the channel is currently detached, raise
   // its window. Otherwise open as a tab.

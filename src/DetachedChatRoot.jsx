@@ -5,6 +5,12 @@
 // chat_reattach IPC; close button (X in the titlebar) is the system close
 // = dismiss path. Closing emits chat-detach:closed which the main window
 // uses to drop the channel from detachedKeys.
+//
+// Username interactions (left-click for user-card, right-click for context
+// menu, hover for preview) are stubbed in this window. The full UserCard +
+// supporting dialogs (history, nickname, note) live in App.jsx; replicating
+// them here would mean duplicating ~150 lines of dialog wiring. Re-dock if
+// you need to interact with a user — main-window flow is unchanged.
 
 import { useEffect } from 'react';
 import ChatView from './components/ChatView.jsx';
@@ -13,14 +19,13 @@ import TitleBanner from './components/TitleBanner.jsx';
 import WindowControls from './components/WindowControls.jsx';
 import { useDragHandler } from './hooks/useDragRegion.js';
 import { useLivestreams } from './hooks/useLivestreams.js';
-import { useUserCard } from './hooks/useUserCard.js';
 import { chatReattach } from './ipc.js';
 
 export default function DetachedChatRoot({ channelKey }) {
   const { livestreams } = useLivestreams();
   const onTitlebarMouseDown = useDragHandler();
-  const card = useUserCard();
   const channel = livestreams.find((l) => l.unique_key === channelKey);
+  const platform = channel?.platform ?? channelKey.split(':')[0];
 
   // Re-set window title when channel display name resolves.
   useEffect(() => {
@@ -69,10 +74,10 @@ export default function DetachedChatRoot({ channelKey }) {
           {channel?.display_name ?? channelKey}
         </span>
         <span
-          className={`rx-plat ${(channel?.platform ?? channelKey.split(':')[0]).charAt(0)}`}
+          className={`rx-plat ${platform.charAt(0)}`}
           style={{ pointerEvents: 'none' }}
         >
-          {(channel?.platform ?? channelKey.split(':')[0]).charAt(0).toUpperCase()}
+          {platform.charAt(0).toUpperCase()}
         </span>
         <div style={{ flex: 1 }} />
         <button
@@ -99,7 +104,7 @@ export default function DetachedChatRoot({ channelKey }) {
                 <SocialsBanner channelKey={channelKey} />
               </>
             }
-            onUsernameOpen={card.openFor}
+            onUsernameOpen={() => {}}
             onUsernameContext={() => {}}
             onUsernameHover={() => {}}
           />
