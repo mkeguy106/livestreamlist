@@ -98,6 +98,17 @@ export function useCommandTabs({ livestreams }) {
       if (!prev) return prev;
       return livestreams.some((l) => l.unique_key === prev) ? prev : null;
     });
+    setMentions((prev) => {
+      let mutated = false;
+      const next = new Map(prev);
+      for (const k of next.keys()) {
+        if (!livestreams.some((l) => l.unique_key === k)) {
+          next.delete(k);
+          mutated = true;
+        }
+      }
+      return mutated ? next : prev;
+    });
   }, [livestreams]);
 
   // Listen for the detach window's :closed event (fires for both close-button
