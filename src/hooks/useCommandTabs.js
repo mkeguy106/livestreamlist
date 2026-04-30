@@ -1,9 +1,10 @@
 // src/hooks/useCommandTabs.js
 //
-// Owns the Command layout's tab + detach state. Persists each piece to
-// localStorage. Cleans up tabs whose channel was deleted. Listens for
-// chat-detach lifecycle events from Rust. The mention map and chat-detach
-// IPC wiring land in PR 4 / PR 5 — this PR ships only the tab pieces.
+// Owns the Command layout's tab + detach + mention state. Persists each
+// piece to localStorage. Cleans up tabs whose channel was deleted. Listens
+// for chat-detach lifecycle events from Rust (chat-detach:closed and
+// chat-detach:redock). Tracks mentions per-channel so inactive tabs can
+// blink in the strip when an @-mention arrives.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -96,6 +97,17 @@ export function useCommandTabs({ livestreams }) {
     setActiveTabKey((prev) => {
       if (!prev) return prev;
       return livestreams.some((l) => l.unique_key === prev) ? prev : null;
+    });
+    setMentions((prev) => {
+      let mutated = false;
+      const next = new Map(prev);
+      for (const k of next.keys()) {
+        if (!livestreams.some((l) => l.unique_key === k)) {
+          next.delete(k);
+          mutated = true;
+        }
+      }
+      return mutated ? next : prev;
     });
   }, [livestreams]);
 

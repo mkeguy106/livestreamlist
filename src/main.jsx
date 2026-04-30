@@ -1,7 +1,7 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App.jsx';
-import DetachedChatRoot from './DetachedChatRoot.jsx';
+import DetachedChatRoot from './components/DetachedChatRoot.jsx';
 import LoginPopupRoot from './components/LoginPopupRoot.jsx';
 import { AuthProvider } from './hooks/useAuth.jsx';
 import { PreferencesProvider } from './hooks/usePreferences.jsx';

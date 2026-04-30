@@ -1,4 +1,4 @@
-// src/DetachedChatRoot.jsx
+// src/components/DetachedChatRoot.jsx
 //
 // Mounted by main.jsx when the URL fragment is #chat-detach=<key>. Renders
 // a single ChatView with a thin titlebar above it. Re-dock button calls
@@ -13,16 +13,17 @@
 // you need to interact with a user — main-window flow is unchanged.
 
 import { useEffect } from 'react';
-import ChatView from './components/ChatView.jsx';
-import SocialsBanner from './components/SocialsBanner.jsx';
-import TitleBanner from './components/TitleBanner.jsx';
-import WindowControls from './components/WindowControls.jsx';
-import { useDragHandler } from './hooks/useDragRegion.js';
-import { useLivestreams } from './hooks/useLivestreams.js';
-import { chatReattach } from './ipc.js';
+import ChatView from './ChatView.jsx';
+import ResizeHandles from './ResizeHandles.jsx';
+import SocialsBanner from './SocialsBanner.jsx';
+import TitleBanner from './TitleBanner.jsx';
+import WindowControls from './WindowControls.jsx';
+import { useDragHandler } from '../hooks/useDragRegion.js';
+import { useLivestreams } from '../hooks/useLivestreams.js';
+import { chatReattach } from '../ipc.js';
 
 export default function DetachedChatRoot({ channelKey }) {
-  const { livestreams } = useLivestreams();
+  const { livestreams, loading } = useLivestreams();
   const onTitlebarMouseDown = useDragHandler();
   const channel = livestreams.find((l) => l.unique_key === channelKey);
   const platform = channel?.platform ?? channelKey.split(':')[0];
@@ -45,8 +46,10 @@ export default function DetachedChatRoot({ channelKey }) {
         display: 'flex',
         flexDirection: 'column',
         background: 'var(--zinc-950)',
+        position: 'relative',  // anchor for ResizeHandles' absolute children
       }}
     >
+      <ResizeHandles />
       <div
         onMouseDown={onTitlebarMouseDown}
         style={{
@@ -108,6 +111,15 @@ export default function DetachedChatRoot({ channelKey }) {
             onUsernameContext={() => {}}
             onUsernameHover={() => {}}
           />
+        ) : loading ? (
+          <div
+            style={{
+              flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
+              color: 'var(--zinc-600)', fontSize: 'var(--t-12)',
+            }}
+          >
+            Loading…
+          </div>
         ) : (
           <div
             style={{
