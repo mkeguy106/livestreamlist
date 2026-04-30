@@ -418,6 +418,34 @@ fn slugify(s: &str) -> String {
         .collect()
 }
 
+#[cfg(test)]
+mod chat_detach_tests {
+    use super::*;
+
+    #[test]
+    fn slug_for_twitch_yields_valid_label() {
+        let slug = slugify("twitch:shroud");
+        let label = format!("chat-detach-{slug}");
+        assert_eq!(label, "chat-detach-twitch-shroud");
+        // Tauri labels must match ^[a-zA-Z0-9 _-]+$ — verify our slug does.
+        assert!(label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == ' '));
+    }
+
+    #[test]
+    fn slug_for_youtube_multi_stream_yields_valid_label() {
+        let slug = slugify("youtube:UCnasa:isst1");
+        let label = format!("chat-detach-{slug}");
+        assert_eq!(label, "chat-detach-youtube-UCnasa-isst1");
+    }
+
+    #[test]
+    fn slug_strips_non_alphanumeric() {
+        let slug = slugify("kick:trainwrecks!");
+        let label = format!("chat-detach-{slug}");
+        assert_eq!(label, "chat-detach-kick-trainwrecks-");
+    }
+}
+
 // Real handlers delegate to EmbedHost. EmbedHost::mount / set_bounds / set_visible
 // are themselves cfg(not(test))-gated (they touch ChildEmbed::inner which only
 // exists in real builds), so each handler exists in two cfg-gated variants.
