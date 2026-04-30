@@ -396,6 +396,83 @@ fn chat_open_in_browser(
     Ok(())
 }
 
+#[tauri::command]
+async fn chat_detach(app: tauri::AppHandle, unique_key: String) -> Result<(), String> {
+    use tauri::WebviewUrl;
+
+    let label = format!("chat-detach-{}", slugify(&unique_key));
+
+    // Idempotent: focus existing window if already open.
+    if let Some(existing) = app.get_webview_window(&label) {
+        let _ = existing.show();
+        let _ = existing.unminimize();
+        let _ = existing.set_focus();
+        return Ok(());
+    }
+
+    // URL fragment tells main.jsx to mount DetachedChatRoot.
+    let path = format!(
+        "index.html#chat-detach={}",
+        urlencoding::encode(&unique_key),
+    );
+    let url = WebviewUrl::App(path.into());
+
+    let mut builder = tauri::WebviewWindowBuilder::new(&app, &label, url)
+        .title(format!("Chat — {unique_key}"))
+        .inner_size(460.0, 700.0)
+        .min_inner_size(320.0, 480.0)
+        .decorations(false)
+        .resizable(true)
+        .visible(false)              // dark-first-paint discipline (PR #70 lesson)
+        .background_color(tauri::webview::Color(0x09, 0x09, 0x0b, 0xff));
+
+    // Linux: parent to main so KWin keeps the detached window stacked correctly
+    // (matches the pattern in login_popup.rs).
+    if let Some(main) = app.get_webview_window("main") {
+        builder = builder.transient_for(&main).map_err(err_string)?;
+    }
+
+    let window = builder.build().map_err(err_string)?;
+
+    // Emit chat-detach:closed when the detached window is destroyed so the
+    // main window can update its detachedKeys set.
+    let app_for_close = app.clone();
+    let key_for_close = unique_key.clone();
+    window.on_window_event(move |event| {
+        if matches!(event, tauri::WindowEvent::Destroyed) {
+            let _ = app_for_close.emit("chat-detach:closed", &key_for_close);
+        }
+    });
+
+    window.show().map_err(err_string)?;
+    Ok(())
+}
+
+#[tauri::command]
+async fn chat_reattach(app: tauri::AppHandle, unique_key: String) -> Result<(), String> {
+    // Emit redock first so main has the channel back in tabKeys before the
+    // window's :closed event fires (the :closed handler is idempotent and
+    // tolerates either ordering).
+    let _ = app.emit("chat-detach:redock", &unique_key);
+
+    let label = format!("chat-detach-{}", slugify(&unique_key));
+    if let Some(window) = app.get_webview_window(&label) {
+        let _ = window.close();
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn chat_focus_detached(app: tauri::AppHandle, unique_key: String) -> Result<(), String> {
+    let label = format!("chat-detach-{}", slugify(&unique_key));
+    if let Some(window) = app.get_webview_window(&label) {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+    Ok(())
+}
+
 fn yt_id_from_thumbnail(url: &str) -> Option<String> {
     // YouTube live thumbnails look like
     // `https://i.ytimg.com/vi/{video_id}/hqdefault_live.jpg?…`.
@@ -1228,6 +1305,9 @@ pub fn run() {
             chat_disconnect,
             chat_send,
             chat_open_in_browser,
+            chat_detach,
+            chat_reattach,
+            chat_focus_detached,
             embed_mount,
             embed_bounds,
             embed_unmount,
