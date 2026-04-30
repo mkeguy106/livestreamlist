@@ -4,12 +4,22 @@
 // when a row fills, the next tab wraps onto a new row. flex-wrap does the
 // math Qt's _FlowTabBar._relayout() does manually.
 //
+// Reorder is implemented with mouse events, not HTML5 drag-and-drop. The
+// wry/WebKitGTK webview on Linux doesn't propagate dragenter/dragover/drop
+// to JS — only dragstart/dragend fire — which makes HTML5 dnd a no-go.
+// Mouse-tracked drag works uniformly across Linux, macOS, and Windows.
+//
 // Detach + Re-dock land in a follow-up PR (the ⤓ icon button is placed but
 // its onClick is a no-op until then). Mention flash + sticky dot also land
 // later — the rx-tab-flashing class is applied conditionally but the
 // @keyframes lands with that work.
 
+import { useEffect, useRef, useState } from 'react';
 import { formatViewers } from '../utils/format.js';
+
+// Pixels of mouse movement after mousedown before we treat the gesture as
+// a drag (vs. a click). Below this, the click-to-activate path wins.
+const DRAG_THRESHOLD_PX = 5;
 
 export default function TabStrip({
   tabs,                  // string[]
@@ -21,29 +31,81 @@ export default function TabStrip({
   onReorder,             // (fromKey, toKey) => void
   mentions,              // Map<channelKey, MentionState> — undefined until mention flash lands
 }) {
-  // Drag handlers live on the outer container (event delegation) rather
-  // than on each Tab, because WebKitGTK only checks preventDefault on
-  // the event target (not the propagation chain). With handlers on the
-  // strip, dragover/drop always fire here regardless of which inner
-  // element (span, button, svg) was the immediate target.
-  const onContainerDragOver = (e) => {
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'move';
+  // Drag state: null = idle. Once a tab's mousedown is captured, we store
+  // the source key and the start coordinates. The drag transitions from
+  // "armed" to "active" only after DRAG_THRESHOLD_PX of movement, which
+  // distinguishes a click from a drag and prevents accidental reorders
+  // when the user just clicks to activate a tab.
+  const [drag, setDrag] = useState(null); // { sourceKey, startX, startY, active, targetKey }
+  // Latches when a drag actually moved, so the trailing onClick (which
+  // fires after mouseup) knows to suppress activation. Cleared on the next
+  // mousedown.
+  const suppressClickRef = useRef(false);
+
+  const onTabMouseDown = (e, channelKey) => {
+    // Left button only; ignore mousedowns landing on the icon buttons (Detach, Close).
+    if (e.button !== 0) return;
+    if (e.target.closest('button')) return;
+    suppressClickRef.current = false;
+    setDrag({
+      sourceKey: channelKey,
+      startX: e.clientX,
+      startY: e.clientY,
+      active: false,
+      targetKey: null,
+    });
   };
-  const onContainerDragEnter = (e) => {
-    // Some WebKit versions need preventDefault here too — without it,
-    // dragover never fires on the container.
-    e.preventDefault();
-  };
-  const onContainerDrop = (e) => {
-    const fromKey = e.dataTransfer.getData('application/x-livestreamlist-tab');
-    if (!fromKey) return;            // not our drag — let browser default
-    e.preventDefault();
-    // Find which Tab the drop landed on by walking up from e.target.
-    const targetEl = e.target.closest && e.target.closest('[data-tab-key]');
-    const toKey = targetEl ? targetEl.getAttribute('data-tab-key') : null;
-    if (toKey && fromKey !== toKey && onReorder) onReorder(fromKey, toKey);
-  };
+
+  // Document-level mousemove + mouseup so the drag survives the cursor
+  // leaving the source tab (and the strip entirely).
+  useEffect(() => {
+    if (!drag) return;
+
+    const onMove = (e) => {
+      const dx = Math.abs(e.clientX - drag.startX);
+      const dy = Math.abs(e.clientY - drag.startY);
+      const moved = dx + dy >= DRAG_THRESHOLD_PX;
+      // Find the tab under the cursor (if any) so we can highlight it.
+      const el = document.elementFromPoint(e.clientX, e.clientY);
+      const targetEl = el && el.closest && el.closest('[data-tab-key]');
+      const targetKey = targetEl ? targetEl.getAttribute('data-tab-key') : null;
+      setDrag((prev) =>
+        prev
+          ? { ...prev, active: prev.active || moved, targetKey }
+          : prev,
+      );
+    };
+
+    const onUp = () => {
+      setDrag((prev) => {
+        if (!prev) return null;
+        if (prev.active) {
+          // Real drag — apply reorder if the target is a different tab.
+          suppressClickRef.current = true;
+          if (prev.targetKey && prev.targetKey !== prev.sourceKey && onReorder) {
+            onReorder(prev.sourceKey, prev.targetKey);
+          }
+        }
+        return null;
+      });
+    };
+
+    const onKey = (e) => {
+      if (e.key === 'Escape') {
+        suppressClickRef.current = true;
+        setDrag(null);
+      }
+    };
+
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [drag, onReorder]);
 
   return (
     <div
@@ -56,9 +118,6 @@ export default function TabStrip({
         background: 'var(--zinc-950)',
         flexShrink: 0,
       }}
-      onDragEnter={onContainerDragEnter}
-      onDragOver={onContainerDragOver}
-      onDrop={onContainerDrop}
     >
       {tabs.map((key) => {
         const ch = livestreams.find((l) => l.unique_key === key);
@@ -67,6 +126,10 @@ export default function TabStrip({
         const isLive = Boolean(ch?.is_live);
         const active = key === activeKey;
         const mention = mentions ? mentions.get(key) : null;
+        // Drag visual state for this specific tab.
+        const isDragSource = drag?.active && drag.sourceKey === key;
+        const isDragTarget =
+          drag?.active && drag.targetKey === key && drag.sourceKey !== key;
         return (
           <Tab
             key={key}
@@ -77,7 +140,16 @@ export default function TabStrip({
             viewers={ch?.viewers}
             active={active}
             mention={mention}
-            onActivate={() => onActivate(key)}
+            isDragSource={isDragSource}
+            isDragTarget={isDragTarget}
+            onMouseDown={(e) => onTabMouseDown(e, key)}
+            onActivate={() => {
+              if (suppressClickRef.current) {
+                suppressClickRef.current = false;
+                return;
+              }
+              onActivate(key);
+            }}
             onClose={() => onClose(key)}
             onDetach={() => onDetach && onDetach(key)}
           />
@@ -95,6 +167,9 @@ function Tab({
   viewers,
   active,
   mention,
+  isDragSource,
+  isDragTarget,
+  onMouseDown,
   onActivate,
   onClose,
   onDetach,
@@ -106,16 +181,8 @@ function Tab({
   return (
     <div
       onClick={onActivate}
-      draggable
+      onMouseDown={onMouseDown}
       data-tab-key={channelKey}
-      onDragStart={(e) => {
-        // Set BOTH the custom MIME and text/plain. WebKitGTK silently
-        // skips dragover events when the drag carries only a custom
-        // MIME with no standard type alongside it.
-        e.dataTransfer.setData('application/x-livestreamlist-tab', channelKey);
-        e.dataTransfer.setData('text/plain', channelKey);
-        e.dataTransfer.effectAllowed = 'move';
-      }}
       className={isBlinking ? 'rx-tab rx-tab-flashing' : 'rx-tab'}
       style={{
         flex: '0 0 auto',
@@ -125,13 +192,18 @@ function Tab({
         gap: 8,
         height: 32,
         borderRight: 'var(--hair)',
-        background: active ? 'var(--zinc-900)' : 'transparent',
+        background: isDragTarget
+          ? 'rgba(244, 244, 245, 0.08)'  // zinc-100 at 8% — drop-target highlight
+          : active
+          ? 'var(--zinc-900)'
+          : 'transparent',
         borderTop: active ? '2px solid var(--zinc-200)' : '2px solid transparent',
         color: isLive ? 'var(--zinc-100)' : 'var(--zinc-500)',
         cursor: 'pointer',
         fontSize: 'var(--t-12)',
         whiteSpace: 'nowrap',
         userSelect: 'none',
+        opacity: isDragSource ? 0.4 : 1,
       }}
     >
       <span className={`rx-status-dot ${isLive ? 'live' : 'off'}`} />
