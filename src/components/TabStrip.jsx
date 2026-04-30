@@ -42,15 +42,22 @@ export default function TabStrip({
   // mousedown.
   const suppressClickRef = useRef(false);
 
-  const onTabMouseDown = (e, channelKey) => {
+  const onTabMouseDown = (e, channelKey, display, platform) => {
     // Left button only; ignore mousedowns landing on the icon buttons (Detach, Close).
     if (e.button !== 0) return;
     if (e.target.closest('button')) return;
+    // Suppress the browser's default mousedown handling — most importantly,
+    // initiating a text selection that would extend as the cursor moves.
+    e.preventDefault();
     suppressClickRef.current = false;
     setDrag({
       sourceKey: channelKey,
+      sourceDisplay: display,
+      sourcePlatform: platform,
       startX: e.clientX,
       startY: e.clientY,
+      currentX: e.clientX,
+      currentY: e.clientY,
       active: false,
       targetKey: null,
     });
@@ -71,7 +78,13 @@ export default function TabStrip({
       const targetKey = targetEl ? targetEl.getAttribute('data-tab-key') : null;
       setDrag((prev) =>
         prev
-          ? { ...prev, active: prev.active || moved, targetKey }
+          ? {
+              ...prev,
+              active: prev.active || moved,
+              targetKey,
+              currentX: e.clientX,
+              currentY: e.clientY,
+            }
           : prev,
       );
     };
@@ -106,6 +119,24 @@ export default function TabStrip({
       document.removeEventListener('keydown', onKey);
     };
   }, [drag, onReorder]);
+
+  // While a drag is active, lock the document cursor to "grabbing" and
+  // disable text selection globally. Without this, the cursor flickers
+  // back to text-selection over neighboring elements (rail rows, chat
+  // text, etc.) and the user can accidentally start a text selection
+  // when the mousedown's preventDefault is bypassed by some intermediate
+  // handler.
+  useEffect(() => {
+    if (!drag?.active) return;
+    const prevCursor = document.body.style.cursor;
+    const prevUserSelect = document.body.style.userSelect;
+    document.body.style.cursor = 'grabbing';
+    document.body.style.userSelect = 'none';
+    return () => {
+      document.body.style.cursor = prevCursor;
+      document.body.style.userSelect = prevUserSelect;
+    };
+  }, [drag?.active]);
 
   return (
     <div
@@ -142,7 +173,7 @@ export default function TabStrip({
             mention={mention}
             isDragSource={isDragSource}
             isDragTarget={isDragTarget}
-            onMouseDown={(e) => onTabMouseDown(e, key)}
+            onMouseDown={(e) => onTabMouseDown(e, key, display, platform)}
             onActivate={() => {
               if (suppressClickRef.current) {
                 suppressClickRef.current = false;
@@ -155,6 +186,38 @@ export default function TabStrip({
           />
         );
       })}
+      {drag?.active && <DragGhost drag={drag} />}
+    </div>
+  );
+}
+
+function DragGhost({ drag }) {
+  const platLetter = (drag.sourcePlatform || '?').charAt(0);
+  return (
+    <div
+      style={{
+        position: 'fixed',
+        left: drag.currentX + 12,
+        top: drag.currentY + 12,
+        pointerEvents: 'none',  // critical — must not intercept elementFromPoint
+        zIndex: 9999,
+        padding: '4px 10px',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+        height: 28,
+        background: 'var(--zinc-800)',
+        border: '1px solid var(--zinc-600)',
+        color: 'var(--zinc-100)',
+        fontSize: 'var(--t-12)',
+        whiteSpace: 'nowrap',
+        borderRadius: 'var(--r-2)',
+        boxShadow: '0 6px 16px rgba(0, 0, 0, 0.5)',
+        opacity: 0.92,
+      }}
+    >
+      <span style={{ fontWeight: 500 }}>{drag.sourceDisplay}</span>
+      <span className={`rx-plat ${platLetter}`}>{platLetter.toUpperCase()}</span>
     </div>
   );
 }
