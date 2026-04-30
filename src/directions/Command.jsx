@@ -69,12 +69,13 @@ export default function Command({ ctx }) {
   // ctx.selectedKey unchanged.
   const {
     tabKeys,
-    detachedKeys,                                                       // eslint-disable-line no-unused-vars
+    detachedKeys,
     activeTabKey,
-    openOrFocusTab,
     closeTab,
     reorderTabs,
     setActiveTabKey,
+    detachTab,
+    rowClickHandler,
   } = useCommandTabs({ livestreams });
 
   const playing = usePlayerState();
@@ -298,13 +299,13 @@ export default function Command({ ctx }) {
                 >
                   <button
                     type="button"
-                    onClick={() => openOrFocusTab(ch.unique_key)}
+                    onClick={() => rowClickHandler(ch.unique_key)}
                     onDoubleClick={() => {
                       if (ch.is_live) launchStream(ch.unique_key);
                     }}
                     onContextMenu={(e) => {
                       e.preventDefault();
-                      openOrFocusTab(ch.unique_key);
+                      rowClickHandler(ch.unique_key);
                       setMenu({ x: e.clientX, y: e.clientY, channel: ch });
                     }}
                     style={{
@@ -368,6 +369,11 @@ export default function Command({ ctx }) {
                         </Tooltip>
                       )}
                       <span className={`rx-plat ${ch.platform.charAt(0)}`}>{ch.platform.charAt(0).toUpperCase()}</span>
+                      {detachedKeys.has(ch.unique_key) && (
+                        <Tooltip text="Open in detached window">
+                          <span style={{ color: 'var(--zinc-500)', fontSize: 10, lineHeight: 1 }}>⤴</span>
+                        </Tooltip>
+                      )}
                     </div>
                     <div
                       className="rx-mono"
@@ -423,8 +429,8 @@ export default function Command({ ctx }) {
             onActivate={setActiveTabKey}
             onClose={closeTab}
             onReorder={reorderTabs}
-            // PR 4 wires onDetach; PR 5 passes mentions.
-            onDetach={() => { /* PR 4 */ }}
+            // PR 5 passes mentions.
+            onDetach={detachTab}
           />
           <div style={{ flex: 1, position: 'relative', minWidth: 0 }}>
             {tabKeys.length === 0 && (

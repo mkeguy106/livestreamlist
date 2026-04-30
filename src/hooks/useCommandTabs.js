@@ -5,7 +5,7 @@
 // chat-detach lifecycle events from Rust. The mention map and chat-detach
 // IPC wiring land in PR 4 / PR 5 — this PR ships only the tab pieces.
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   closeTab as closeTabReducer,
   loadInitialActiveTabKey,
@@ -17,6 +17,7 @@ import {
   saveDetachedKeys,
   saveTabKeys,
 } from '../utils/commandTabs.js';
+import { chatDetach, chatFocusDetached, listenEvent } from '../ipc.js';
 
 export function useCommandTabs({ livestreams }) {
   const [tabKeys, setTabKeys] = useState(loadInitialTabKeys);
@@ -53,6 +54,80 @@ export function useCommandTabs({ livestreams }) {
     });
   }, [livestreams]);
 
+  // Listen for the detach window's :closed event (fires for both close-button
+  // and reattach-driven closes — the listener is idempotent).
+  useEffect(() => {
+    let cancelled = false;
+    let unlisten = null;
+    listenEvent('chat-detach:closed', (key) => {
+      if (cancelled) return;
+      setDetachedKeys((prev) => {
+        if (!prev.has(key)) return prev;
+        const next = new Set(prev);
+        next.delete(key);
+        return next;
+      });
+    }).then((fn) => {
+      if (cancelled) fn();
+      else unlisten = fn;
+    });
+    return () => {
+      cancelled = true;
+      if (unlisten) unlisten();
+    };
+  }, []);
+
+  // Listen for the redock event (chat_reattach emits this BEFORE closing the
+  // window). Move the channel back to tabs and focus it.
+  useEffect(() => {
+    let cancelled = false;
+    let unlisten = null;
+    listenEvent('chat-detach:redock', (key) => {
+      if (cancelled) return;
+      setDetachedKeys((prev) => {
+        if (!prev.has(key)) return prev;
+        const next = new Set(prev);
+        next.delete(key);
+        return next;
+      });
+      setTabKeys((prev) => (prev.includes(key) ? prev : [...prev, key]));
+      setActiveTabKey(key);
+    }).then((fn) => {
+      if (cancelled) fn();
+      else unlisten = fn;
+    });
+    return () => {
+      cancelled = true;
+      if (unlisten) unlisten();
+    };
+  }, []);
+
+  // On mount, fire chat_detach for any persisted detached entries. This runs
+  // before the tab strip even renders, so the windows have a head start.
+  // Filter to channels that still exist (the cleanup-on-channel-removal effect
+  // will also catch this, but starting up valid avoids transient empty windows).
+  // Note: we depend on `livestreams` so this re-runs once the first non-empty
+  // snapshot arrives. Use a ref-guarded one-shot pattern.
+  const restoredDetachedRef = useRef(false);
+  useEffect(() => {
+    if (restoredDetachedRef.current) return;
+    if (livestreams.length === 0) return;
+    restoredDetachedRef.current = true;
+    for (const key of detachedKeys) {
+      if (!livestreams.some((l) => l.unique_key === key)) {
+        // Channel deleted between sessions — drop from set silently.
+        setDetachedKeys((prev) => {
+          if (!prev.has(key)) return prev;
+          const next = new Set(prev);
+          next.delete(key);
+          return next;
+        });
+        continue;
+      }
+      chatDetach(key).catch((e) => console.error('chat_detach (restore)', e));
+    }
+  }, [livestreams, detachedKeys]);
+
   // ── Public handlers ────────────────────────────────────────────────────
   // We compute next state from the current closure values and dispatch each
   // setter independently. React 18 batches the calls within the same
@@ -75,6 +150,39 @@ export function useCommandTabs({ livestreams }) {
     setTabKeys((prev) => reorderTabsReducer(prev, fromKey, toKey, position));
   }, []);
 
+  const detachTab = useCallback(async (channelKey) => {
+    try {
+      await chatDetach(channelKey);
+    } catch (e) {
+      console.error('chat_detach', e);
+      return;
+    }
+    // Move from tabKeys → detachedKeys. Promote the active tab if needed.
+    // Compute next state from closure values and dispatch each setter
+    // independently — same pattern as closeTab/openOrFocusTab. Calling
+    // setActiveTabKey from inside a setTabKeys updater would double-fire
+    // under React StrictMode. (See commit 19324dc for context.)
+    const [nextTabs, nextActive] = closeTabReducer(tabKeys, activeTabKey, channelKey);
+    if (nextTabs !== tabKeys) setTabKeys(nextTabs);
+    if (nextActive !== activeTabKey) setActiveTabKey(nextActive);
+    setDetachedKeys((prev) => {
+      if (prev.has(channelKey)) return prev;
+      const next = new Set(prev);
+      next.add(channelKey);
+      return next;
+    });
+  }, [tabKeys, activeTabKey]);
+
+  // Smart row click for the rail: if the channel is currently detached, raise
+  // its window. Otherwise open as a tab.
+  const rowClickHandler = useCallback((channelKey) => {
+    if (detachedKeys.has(channelKey)) {
+      chatFocusDetached(channelKey).catch((e) => console.error('chat_focus_detached', e));
+    } else {
+      openOrFocusTab(channelKey);
+    }
+  }, [detachedKeys, openOrFocusTab]);
+
   // Activating a tab is what users do when they click a tab in the strip
   // OR a row in the rail (when not detached). Both call setActiveTabKey
   // directly — the openOrFocusTab path covers the rail-row case where the
@@ -91,7 +199,8 @@ export function useCommandTabs({ livestreams }) {
     closeTab,
     reorderTabs,
     setActiveTabKey: setActive,
-    // PR 4 will add: detachTab, reattachTab, focusDetached
+    detachTab,
+    rowClickHandler,
     // PR 5 will add: mentions, notifyMention, clearMention
   };
 }
