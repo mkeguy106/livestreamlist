@@ -90,19 +90,26 @@ export default function ChatView({
 
   // Fire onMention for inactive tabs when a new message contains @<myLogin>.
   // Active tabs don't fire — the per-row highlight in this ChatView is the
-  // signal. The dep on messages.length (not messages) ensures one fire per
-  // new message, not per re-render.
+  // signal here. A dep on `messages.length` would silently miss mentions
+  // on busy channels: once the buffer hits useChat's BUFFER_SIZE (250),
+  // every new message displaces an old one and length stays pinned, so the
+  // effect wouldn't re-run. Instead, dep on the messages array itself and
+  // gate firing through a last-fired-id ref so we still produce at most
+  // one onMention call per actual incoming message.
+  const lastFiredMentionRef = useRef(null);
   useEffect(() => {
     if (!onMention) return;
     if (isActiveTab) return;
     if (!myLogin) return;
     if (messages.length === 0) return;
     const latest = messages[messages.length - 1];
-    if (!latest) return;
+    if (!latest || !latest.id) return;
+    if (latest.id === lastFiredMentionRef.current) return;
+    lastFiredMentionRef.current = latest.id;
     if (mentionsLogin(latest.text, myLogin)) {
       onMention(channelKey, latest);
     }
-  }, [messages.length, isActiveTab, onMention, channelKey, myLogin]);
+  }, [messages, isActiveTab, onMention, channelKey, myLogin]);
 
   const { settings } = usePreferences();
   const c = settings?.chat || {};
