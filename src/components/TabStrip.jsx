@@ -15,11 +15,15 @@
 // @keyframes lands with that work.
 
 import { useEffect, useRef, useState } from 'react';
-import { formatViewers } from '../utils/format.js';
 
 // Pixels of mouse movement after mousedown before we treat the gesture as
 // a drag (vs. a click). Below this, the click-to-activate path wins.
 const DRAG_THRESHOLD_PX = 5;
+
+// Fixed tab width. Consistent width keeps each tab's × close button at the
+// same horizontal position across closes, so the user can click through a
+// run of tabs to close them in a row without re-aiming.
+const TAB_WIDTH_PX = 200;
 
 export default function TabStrip({
   tabs,                  // string[]
@@ -179,7 +183,6 @@ export default function TabStrip({
             display={display}
             platform={platform}
             isLive={isLive}
-            viewers={ch?.viewers}
             active={active}
             mention={mention}
             isDragSource={isDragSource}
@@ -238,7 +241,6 @@ function Tab({
   display,
   platform,
   isLive,
-  viewers,
   active,
   mention,
   isDragSource,
@@ -259,7 +261,8 @@ function Tab({
       data-tab-key={channelKey}
       className={isBlinking ? 'rx-tab rx-tab-flashing' : 'rx-tab'}
       style={{
-        flex: '0 0 auto',
+        flex: `0 0 ${TAB_WIDTH_PX}px`,
+        width: TAB_WIDTH_PX,
         padding: '0 8px 0 12px',
         display: 'flex',
         alignItems: 'center',
@@ -287,19 +290,29 @@ function Tab({
             : undefined,
       }}
     >
-      <span className={`rx-status-dot ${isLive ? 'live' : 'off'}`} />
-      <span style={{ fontWeight: 500 }}>{display}</span>
-      <span className={`rx-plat ${platLetter}`}>{platLetter.toUpperCase()}</span>
-      {isLive && typeof viewers === 'number' && (
-        <span
-          className="rx-mono"
-          style={{ fontSize: 10, color: 'var(--zinc-500)' }}
-        >
-          {formatViewers(viewers)}
-        </span>
-      )}
+      <span
+        className={`rx-status-dot ${isLive ? 'live' : 'off'}`}
+        style={{ flex: '0 0 auto' }}
+      />
+      <span
+        style={{
+          fontWeight: 500,
+          flex: 1,
+          minWidth: 0,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+        }}
+      >
+        {display}
+      </span>
+      <span
+        className={`rx-plat ${platLetter}`}
+        style={{ flex: '0 0 auto' }}
+      >
+        {platLetter.toUpperCase()}
+      </span>
       {/* Fixed-width slot for the mention dot so layout doesn't shift */}
-      <span style={{ width: 6, display: 'inline-flex', justifyContent: 'center' }}>
+      <span style={{ flex: '0 0 6px', display: 'inline-flex', justifyContent: 'center' }}>
         {hasDot && (
           <span
             style={{
