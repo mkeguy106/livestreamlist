@@ -21,6 +21,30 @@ export default function TabStrip({
   onReorder,             // (fromKey, toKey) => void
   mentions,              // Map<channelKey, MentionState> — undefined until mention flash lands
 }) {
+  // Drag handlers live on the outer container (event delegation) rather
+  // than on each Tab, because WebKitGTK only checks preventDefault on
+  // the event target (not the propagation chain). With handlers on the
+  // strip, dragover/drop always fire here regardless of which inner
+  // element (span, button, svg) was the immediate target.
+  const onContainerDragOver = (e) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+  };
+  const onContainerDragEnter = (e) => {
+    // Some WebKit versions need preventDefault here too — without it,
+    // dragover never fires on the container.
+    e.preventDefault();
+  };
+  const onContainerDrop = (e) => {
+    const fromKey = e.dataTransfer.getData('application/x-livestreamlist-tab');
+    if (!fromKey) return;            // not our drag — let browser default
+    e.preventDefault();
+    // Find which Tab the drop landed on by walking up from e.target.
+    const targetEl = e.target.closest && e.target.closest('[data-tab-key]');
+    const toKey = targetEl ? targetEl.getAttribute('data-tab-key') : null;
+    if (toKey && fromKey !== toKey && onReorder) onReorder(fromKey, toKey);
+  };
+
   return (
     <div
       style={{
@@ -32,6 +56,9 @@ export default function TabStrip({
         background: 'var(--zinc-950)',
         flexShrink: 0,
       }}
+      onDragEnter={onContainerDragEnter}
+      onDragOver={onContainerDragOver}
+      onDrop={onContainerDrop}
     >
       {tabs.map((key) => {
         const ch = livestreams.find((l) => l.unique_key === key);
@@ -53,7 +80,6 @@ export default function TabStrip({
             onActivate={() => onActivate(key)}
             onClose={() => onClose(key)}
             onDetach={() => onDetach && onDetach(key)}
-            onReorder={onReorder}
           />
         );
       })}
@@ -72,7 +98,6 @@ function Tab({
   onActivate,
   onClose,
   onDetach,
-  onReorder,
 }) {
   const isBlinking = mention && mention.blinkUntil > Date.now();
   const hasDot = mention?.hasUnseenMention === true;
@@ -82,26 +107,14 @@ function Tab({
     <div
       onClick={onActivate}
       draggable
+      data-tab-key={channelKey}
       onDragStart={(e) => {
+        // Set BOTH the custom MIME and text/plain. WebKitGTK silently
+        // skips dragover events when the drag carries only a custom
+        // MIME with no standard type alongside it.
         e.dataTransfer.setData('application/x-livestreamlist-tab', channelKey);
+        e.dataTransfer.setData('text/plain', channelKey);
         e.dataTransfer.effectAllowed = 'move';
-      }}
-      onDragOver={(e) => {
-        // Always allow drops onto tabs. We can't gate on
-        // dataTransfer.types here because WebKit (Tauri's webview on
-        // Linux/macOS) runs dragover in "protected mode" — custom MIME
-        // types are hidden from `types` until the drop fires, so a
-        // gate would always fail and the browser would render the
-        // "not allowed" cursor. The MIME check moves to onDrop where
-        // values ARE readable; non-matching drags just no-op there.
-        e.preventDefault();
-        e.dataTransfer.dropEffect = 'move';
-      }}
-      onDrop={(e) => {
-        const fromKey = e.dataTransfer.getData('application/x-livestreamlist-tab');
-        if (!fromKey) return;            // not our drag — let browser default
-        e.preventDefault();
-        if (fromKey !== channelKey && onReorder) onReorder(fromKey, channelKey);
       }}
       className={isBlinking ? 'rx-tab rx-tab-flashing' : 'rx-tab'}
       style={{
