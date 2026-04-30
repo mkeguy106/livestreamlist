@@ -1,4 +1,4 @@
-// src/DetachedChatRoot.jsx
+// src/components/DetachedChatRoot.jsx
 //
 // Mounted by main.jsx when the URL fragment is #chat-detach=<key>. Renders
 // a single ChatView with a thin titlebar above it. Re-dock button calls
@@ -13,13 +13,13 @@
 // you need to interact with a user — main-window flow is unchanged.
 
 import { useEffect } from 'react';
-import ChatView from './components/ChatView.jsx';
-import SocialsBanner from './components/SocialsBanner.jsx';
-import TitleBanner from './components/TitleBanner.jsx';
-import WindowControls from './components/WindowControls.jsx';
-import { useDragHandler } from './hooks/useDragRegion.js';
-import { useLivestreams } from './hooks/useLivestreams.js';
-import { chatReattach } from './ipc.js';
+import ChatView from './ChatView.jsx';
+import SocialsBanner from './SocialsBanner.jsx';
+import TitleBanner from './TitleBanner.jsx';
+import WindowControls from './WindowControls.jsx';
+import { useDragHandler } from '../hooks/useDragRegion.js';
+import { useLivestreams } from '../hooks/useLivestreams.js';
+import { chatReattach } from '../ipc.js';
 
 export default function DetachedChatRoot({ channelKey }) {
   const { livestreams } = useLivestreams();
