@@ -24,6 +24,51 @@ export function useCommandTabs({ livestreams }) {
   const [detachedKeys, setDetachedKeys] = useState(() => new Set(loadInitialDetachedKeys()));
   const [activeTabKey, setActiveTabKey] = useState(loadInitialActiveTabKey);
 
+  // mentions: Map<channelKey, { blinkUntil: number, hasUnseenMention: boolean }>
+  // blinkUntil = 0 means no active blink; > now means blinking.
+  // hasUnseenMention is sticky until the tab is focused.
+  const [mentions, setMentions] = useState(() => new Map());
+
+  const notifyMention = useCallback((channelKey) => {
+    setMentions((prev) => {
+      const next = new Map(prev);
+      next.set(channelKey, {
+        blinkUntil: Date.now() + 10_000,
+        hasUnseenMention: true,
+      });
+      return next;
+    });
+  }, []);
+
+  const clearMention = useCallback((channelKey) => {
+    setMentions((prev) => {
+      if (!prev.has(channelKey)) return prev;
+      const next = new Map(prev);
+      next.delete(channelKey);
+      return next;
+    });
+  }, []);
+
+  // 1s ticker prunes elapsed blinkUntil values. Doesn't touch
+  // hasUnseenMention — only tab focus clears that.
+  useEffect(() => {
+    const id = setInterval(() => {
+      setMentions((prev) => {
+        let mutated = false;
+        const next = new Map(prev);
+        const now = Date.now();
+        for (const [k, v] of next) {
+          if (v.blinkUntil !== 0 && v.blinkUntil < now) {
+            next.set(k, { ...v, blinkUntil: 0 });
+            mutated = true;
+          }
+        }
+        return mutated ? next : prev;
+      });
+    }, 1000);
+    return () => clearInterval(id);
+  }, []);
+
   // ── Persistence ────────────────────────────────────────────────────────
   useEffect(() => { saveTabKeys(tabKeys); }, [tabKeys]);
   useEffect(() => { saveDetachedKeys([...detachedKeys]); }, [detachedKeys]);
@@ -138,6 +183,12 @@ export function useCommandTabs({ livestreams }) {
     const [nextTabs] = openOrFocusReducer(tabKeys, activeTabKey, channelKey);
     if (nextTabs !== tabKeys) setTabKeys(nextTabs);
     if (channelKey !== activeTabKey) setActiveTabKey(channelKey);
+    setMentions((prev) => {
+      if (!prev.has(channelKey)) return prev;
+      const next = new Map(prev);
+      next.delete(channelKey);
+      return next;
+    });
   }, [tabKeys, activeTabKey]);
 
   const closeTab = useCallback((channelKey) => {
@@ -189,18 +240,28 @@ export function useCommandTabs({ livestreams }) {
   // tab might not exist yet.
   const setActive = useCallback((channelKey) => {
     setActiveTabKey(channelKey);
+    if (channelKey) {
+      setMentions((prev) => {
+        if (!prev.has(channelKey)) return prev;
+        const next = new Map(prev);
+        next.delete(channelKey);
+        return next;
+      });
+    }
   }, []);
 
   return {
     tabKeys,
     detachedKeys,
     activeTabKey,
+    mentions,
     openOrFocusTab,
     closeTab,
     reorderTabs,
     setActiveTabKey: setActive,
     detachTab,
     rowClickHandler,
-    // PR 5 will add: mentions, notifyMention, clearMention
+    notifyMention,
+    clearMention,
   };
 }
