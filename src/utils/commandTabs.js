@@ -83,16 +83,19 @@ export function closeTab(tabKeys, activeTabKey, channelKey) {
   return [nextTabs, promote];
 }
 
-/** Move `fromKey` to `toKey`'s position in the strip. Identity if
- *  either is missing or they're the same key. Active tab unchanged. */
-export function reorderTabs(tabKeys, fromKey, toKey) {
+/** Move `fromKey` to `toKey`'s position in the strip.
+ *  - position='before' (default) inserts fromKey immediately before toKey
+ *  - position='after' inserts fromKey immediately after toKey
+ *  Identity if either is missing or they're the same key. */
+export function reorderTabs(tabKeys, fromKey, toKey, position = 'before') {
   if (fromKey === toKey) return tabKeys;
   const fromIdx = tabKeys.indexOf(fromKey);
   const toIdx = tabKeys.indexOf(toKey);
   if (fromIdx === -1 || toIdx === -1) return tabKeys;
   const next = tabKeys.filter((k) => k !== fromKey);
-  const newToIdx = next.indexOf(toKey);
-  next.splice(newToIdx, 0, fromKey);
+  const baseIdx = next.indexOf(toKey);
+  const insertIdx = position === 'after' ? baseIdx + 1 : baseIdx;
+  next.splice(insertIdx, 0, fromKey);
   return next;
 }
 
@@ -140,5 +143,17 @@ if (typeof import.meta !== 'undefined' && import.meta.env?.DEV) {
   console.assert(
     JSON.stringify(reorderTabs(['a', 'b'], 'a', 'a')) === JSON.stringify(['a', 'b']),
     'reorder identity',
+  );
+  console.assert(
+    JSON.stringify(reorderTabs(['a', 'b', 'c'], 'a', 'c', 'after')) === JSON.stringify(['b', 'c', 'a']),
+    'reorder after rightmost (drop at end)',
+  );
+  console.assert(
+    JSON.stringify(reorderTabs(['a', 'b', 'c'], 'c', 'a', 'after')) === JSON.stringify(['a', 'c', 'b']),
+    'reorder after non-rightmost',
+  );
+  console.assert(
+    JSON.stringify(reorderTabs(['a', 'b', 'c'], 'a', 'b', 'before')) === JSON.stringify(['a', 'b', 'c']),
+    'reorder before, fromKey already preceding toKey → identity',
   );
 }

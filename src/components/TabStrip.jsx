@@ -76,12 +76,21 @@ export default function TabStrip({
       const el = document.elementFromPoint(e.clientX, e.clientY);
       const targetEl = el && el.closest && el.closest('[data-tab-key]');
       const targetKey = targetEl ? targetEl.getAttribute('data-tab-key') : null;
+      // Drop position: cursor on the left half of a tab → drop BEFORE it;
+      // right half → drop AFTER it. Lets the user reach the trailing
+      // position by hovering the right edge of the rightmost tab.
+      let dropPosition = 'before';
+      if (targetEl) {
+        const rect = targetEl.getBoundingClientRect();
+        dropPosition = e.clientX >= rect.left + rect.width / 2 ? 'after' : 'before';
+      }
       setDrag((prev) =>
         prev
           ? {
               ...prev,
               active: prev.active || moved,
               targetKey,
+              dropPosition,
               currentX: e.clientX,
               currentY: e.clientY,
             }
@@ -96,7 +105,7 @@ export default function TabStrip({
           // Real drag — apply reorder if the target is a different tab.
           suppressClickRef.current = true;
           if (prev.targetKey && prev.targetKey !== prev.sourceKey && onReorder) {
-            onReorder(prev.sourceKey, prev.targetKey);
+            onReorder(prev.sourceKey, prev.targetKey, prev.dropPosition || 'before');
           }
         }
         return null;
@@ -161,6 +170,8 @@ export default function TabStrip({
         const isDragSource = drag?.active && drag.sourceKey === key;
         const isDragTarget =
           drag?.active && drag.targetKey === key && drag.sourceKey !== key;
+        const dropEdge =
+          isDragTarget ? (drag.dropPosition === 'after' ? 'right' : 'left') : null;
         return (
           <Tab
             key={key}
@@ -172,7 +183,7 @@ export default function TabStrip({
             active={active}
             mention={mention}
             isDragSource={isDragSource}
-            isDragTarget={isDragTarget}
+            dropEdge={dropEdge}
             onMouseDown={(e) => onTabMouseDown(e, key, display, platform)}
             onActivate={() => {
               if (suppressClickRef.current) {
@@ -231,7 +242,7 @@ function Tab({
   active,
   mention,
   isDragSource,
-  isDragTarget,
+  dropEdge,            // 'left' | 'right' | null — drop indicator side
   onMouseDown,
   onActivate,
   onClose,
@@ -255,11 +266,7 @@ function Tab({
         gap: 8,
         height: 32,
         borderRight: 'var(--hair)',
-        background: isDragTarget
-          ? 'rgba(244, 244, 245, 0.08)'  // zinc-100 at 8% — drop-target highlight
-          : active
-          ? 'var(--zinc-900)'
-          : 'transparent',
+        background: active ? 'var(--zinc-900)' : 'transparent',
         borderTop: active ? '2px solid var(--zinc-200)' : '2px solid transparent',
         color: isLive ? 'var(--zinc-100)' : 'var(--zinc-500)',
         cursor: 'pointer',
@@ -267,6 +274,17 @@ function Tab({
         whiteSpace: 'nowrap',
         userSelect: 'none',
         opacity: isDragSource ? 0.4 : 1,
+        // Drop indicator: a 2px solid white line on the leading edge of
+        // the target tab. inset shadow so it draws inside the tab body
+        // without affecting layout. Left edge = drop before; right edge
+        // = drop after (the latter lets the user reach the trailing
+        // position by hovering the right half of the rightmost tab).
+        boxShadow:
+          dropEdge === 'left'
+            ? 'inset 2px 0 0 0 #ffffff'
+            : dropEdge === 'right'
+            ? 'inset -2px 0 0 0 #ffffff'
+            : undefined,
       }}
     >
       <span className={`rx-status-dot ${isLive ? 'live' : 'off'}`} />
