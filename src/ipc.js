@@ -28,6 +28,9 @@ export const chatConnect = (uniqueKey) => invoke('chat_connect', { uniqueKey });
 export const chatDisconnect = (uniqueKey) => invoke('chat_disconnect', { uniqueKey });
 export const chatSend = (uniqueKey, text) => invoke('chat_send', { uniqueKey, text });
 export const chatOpenInBrowser = (uniqueKey) => invoke('chat_open_in_browser', { uniqueKey });
+export const chatDetach = (uniqueKey) => invoke('chat_detach', { uniqueKey });
+export const chatReattach = (uniqueKey) => invoke('chat_reattach', { uniqueKey });
+export const chatFocusDetached = (uniqueKey) => invoke('chat_focus_detached', { uniqueKey });
 export const embedMount = (uniqueKey, x, y, width, height) =>
   invoke('embed_mount', { uniqueKey, x, y, width, height });
 export const embedBounds = (uniqueKey, x, y, width, height) =>
@@ -207,6 +210,18 @@ async function mockInvoke(name, args) {
       return null;
     case 'chat_open_in_browser':
       window.open('https://example.com', '_blank', 'noopener');
+      return null;
+    case 'chat_detach':
+      console.info('[mock] chat_detach', args.uniqueKey);
+      return null;
+    case 'chat_reattach':
+      // Browser-dev: synthesize the redock event so the UI can be tested.
+      console.info('[mock] chat_reattach', args.uniqueKey);
+      mockEmit('chat-detach:redock', args.uniqueKey);
+      mockEmit('chat-detach:closed', args.uniqueKey);
+      return null;
+    case 'chat_focus_detached':
+      console.info('[mock] chat_focus_detached', args.uniqueKey);
       return null;
     case 'replay_chat_history':
       return [];
