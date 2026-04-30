@@ -87,17 +87,21 @@ function Tab({
         e.dataTransfer.effectAllowed = 'move';
       }}
       onDragOver={(e) => {
-        if (Array.from(e.dataTransfer.types).includes('application/x-livestreamlist-tab')) {
-          e.preventDefault();
-          e.dataTransfer.dropEffect = 'move';
-        }
+        // Always allow drops onto tabs. We can't gate on
+        // dataTransfer.types here because WebKit (Tauri's webview on
+        // Linux/macOS) runs dragover in "protected mode" — custom MIME
+        // types are hidden from `types` until the drop fires, so a
+        // gate would always fail and the browser would render the
+        // "not allowed" cursor. The MIME check moves to onDrop where
+        // values ARE readable; non-matching drags just no-op there.
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
       }}
       onDrop={(e) => {
         const fromKey = e.dataTransfer.getData('application/x-livestreamlist-tab');
-        if (fromKey && fromKey !== channelKey && onReorder) {
-          e.preventDefault();
-          onReorder(fromKey, channelKey);
-        }
+        if (!fromKey) return;            // not our drag — let browser default
+        e.preventDefault();
+        if (fromKey !== channelKey && onReorder) onReorder(fromKey, channelKey);
       }}
       className={isBlinking ? 'rx-tab rx-tab-flashing' : 'rx-tab'}
       style={{
