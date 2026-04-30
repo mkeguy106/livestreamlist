@@ -61,8 +61,18 @@ export function useChat(channelKey) {
         const history = await replayChatHistory(channelKey, HISTORY_REPLAY);
         if (cancelled) return;
         if (Array.isArray(history) && history.length > 0) {
-          bufferRef.current = history;
-          setMessages(history);
+          // Dedupe history defensively. The Rust-side replay merges
+          // backfill from robotty.de with live messages, and either
+          // source can re-emit ids that the other already produced.
+          const seen = new Set();
+          const deduped = [];
+          for (const m of history) {
+            if (m?.id && seen.has(m.id)) continue;
+            if (m?.id) seen.add(m.id);
+            deduped.push(m);
+          }
+          bufferRef.current = deduped;
+          setMessages(deduped);
         }
       } catch (e) {
         console.warn('replay_chat_history', e);
@@ -70,6 +80,13 @@ export function useChat(channelKey) {
 
       unMsg = await listenEvent(`chat:message:${channelKey}`, (payload) => {
         if (cancelled) return;
+        // Dedupe by id — guards against IRC servers replaying recent
+        // messages on JOIN, the live event arriving before
+        // replayChatHistory resolves, and React StrictMode double-mount
+        // creating overlapping subscriptions in dev.
+        if (payload?.id && bufferRef.current.some((m) => m.id === payload.id)) {
+          return;
+        }
         const next = [...bufferRef.current, payload];
         if (!pausedRef.current && next.length > BUFFER_SIZE) {
           next.splice(0, next.length - BUFFER_SIZE);
@@ -77,11 +94,19 @@ export function useChat(channelKey) {
         bufferRef.current = next;
         setMessages(next);
       });
+      // If cleanup already ran while we were awaiting listenEvent, the
+      // outer cleanup closure has already fired (with unMsg still null
+      // at that point). Drop the listener now to avoid leaking it.
+      if (cancelled) { unMsg(); unMsg = null; return; }
+
       unStatus = await listenEvent(`chat:status:${channelKey}`, (payload) => {
         if (cancelled) return;
         setStatus(payload?.status ?? 'closed');
       });
+      if (cancelled) { unStatus(); unStatus = null; return; }
+
       unMod = await listenEvent(`chat:moderation:${channelKey}`, applyMod);
+      if (cancelled) { unMod(); unMod = null; return; }
       try {
         await chatConnect(channelKey);
       } catch (e) {
