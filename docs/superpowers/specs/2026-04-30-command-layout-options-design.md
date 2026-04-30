@@ -39,8 +39,8 @@ Added to `src/tokens.css`:
   --cmd-row-h:   40px;
   --cmd-row-fs:  var(--t-12);
 }
-.rx-root[data-sidebar-collapsed="true"]  { --cmd-sidebar-w: 48px; }
-.rx-root[data-sidebar-density="compact"] { --cmd-row-h: 28px; }
+:root[data-sidebar-collapsed="true"]  { --cmd-sidebar-w: 48px; }
+:root[data-sidebar-density="compact"] { --cmd-row-h: 28px; }
 
 .cmd-row {
   display: grid;
@@ -49,14 +49,14 @@ Added to `src/tokens.css`:
   flex: 1;
   min-height: 0;
 }
-.rx-root[data-sidebar-position="right"] .cmd-row {
+:root[data-sidebar-position="right"] .cmd-row {
   grid-template-columns: minmax(0, 1fr) var(--cmd-sidebar-w);
   grid-template-areas: "main sidebar";
 }
 
 .cmd-sidebar { grid-area: sidebar; border-right: var(--hair); }
 .cmd-main    { grid-area: main; }
-.rx-root[data-sidebar-position="right"] .cmd-sidebar {
+:root[data-sidebar-position="right"] .cmd-sidebar {
   border-right: none;
   border-left: var(--hair);
 }
@@ -64,22 +64,22 @@ Added to `src/tokens.css`:
 /* Active-row indicator flips to the outer edge (the side touching the main pane) */
 .cmd-row-item                                              { border-left:  2px solid transparent; border-right: 2px solid transparent; }
 .cmd-row-item.active                                       { border-left:  2px solid var(--zinc-200); }
-.rx-root[data-sidebar-position="right"] .cmd-row-item.active {
+:root[data-sidebar-position="right"] .cmd-row-item.active {
   border-left:  2px solid transparent;
   border-right: 2px solid var(--zinc-200);
 }
 
 /* Density: compact hides the secondary "game" line and tightens padding */
-.rx-root[data-sidebar-density="compact"] .cmd-row-meta { display: none; }
-.rx-root[data-sidebar-density="compact"] .cmd-row-item { padding-top: 3px; padding-bottom: 3px; }
+:root[data-sidebar-density="compact"] .cmd-row-meta { display: none; }
+:root[data-sidebar-density="compact"] .cmd-row-item { padding-top: 3px; padding-bottom: 3px; }
 
 /* Collapsed: hides text content + functional surfaces (search, add, filter/sort) */
-.rx-root[data-sidebar-collapsed="true"] .cmd-row-text,
-.rx-root[data-sidebar-collapsed="true"] .cmd-row-meta,
-.rx-root[data-sidebar-collapsed="true"] .cmd-search,
-.rx-root[data-sidebar-collapsed="true"] .cmd-add,
-.rx-root[data-sidebar-collapsed="true"] .cmd-toolbar,
-.rx-root[data-sidebar-collapsed="true"] .cmd-resize-handle { display: none; }
+:root[data-sidebar-collapsed="true"] .cmd-row-text,
+:root[data-sidebar-collapsed="true"] .cmd-row-meta,
+:root[data-sidebar-collapsed="true"] .cmd-search,
+:root[data-sidebar-collapsed="true"] .cmd-add,
+:root[data-sidebar-collapsed="true"] .cmd-toolbar,
+:root[data-sidebar-collapsed="true"] .cmd-resize-handle { display: none; }
 ```
 
 Width is set inline (`style.setProperty('--cmd-sidebar-w', `${px}px`)`) by the drag handle for live feedback; the same value persists to settings on mouseup.
