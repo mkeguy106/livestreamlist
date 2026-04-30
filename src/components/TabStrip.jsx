@@ -269,6 +269,11 @@ function Tab({
         gap: 8,
         height: 32,
         borderRight: 'var(--hair)',
+        // Bottom hairline on every tab so wrapped rows are visually
+        // separated. The strip's own border-bottom still draws under
+        // the last row; the two hairlines on the same pixel column
+        // collapse visually.
+        borderBottom: 'var(--hair)',
         background: active ? 'var(--zinc-900)' : 'transparent',
         borderTop: active ? '2px solid var(--zinc-200)' : '2px solid transparent',
         color: isLive ? 'var(--zinc-100)' : 'var(--zinc-500)',
