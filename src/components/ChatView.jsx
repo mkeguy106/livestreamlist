@@ -34,6 +34,7 @@ export default function ChatView({
   footer = null,
   isLive = true,
   isActiveTab = true,
+  onMention,                  // (channelKey, message) => void — fires for inactive tabs only
   onUsernameOpen,
   onUsernameContext,
   onUsernameHover,
@@ -86,6 +87,22 @@ export default function ChatView({
 
   const myLogin =
     (platform === 'kick' ? auth.kick?.login : auth.twitch?.login)?.toLowerCase() ?? null;
+
+  // Fire onMention for inactive tabs when a new message contains @<myLogin>.
+  // Active tabs don't fire — the per-row highlight in this ChatView is the
+  // signal. The dep on messages.length (not messages) ensures one fire per
+  // new message, not per re-render.
+  useEffect(() => {
+    if (!onMention) return;
+    if (isActiveTab) return;
+    if (!myLogin) return;
+    if (messages.length === 0) return;
+    const latest = messages[messages.length - 1];
+    if (!latest) return;
+    if (mentionsLogin(latest.text, myLogin)) {
+      onMention(channelKey, latest);
+    }
+  }, [messages.length, isActiveTab, onMention, channelKey, myLogin]);
 
   const { settings } = usePreferences();
   const c = settings?.chat || {};
