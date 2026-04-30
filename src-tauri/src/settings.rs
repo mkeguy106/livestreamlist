@@ -57,12 +57,27 @@ impl Default for GeneralSettings {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppearanceSettings {
     /// One of the valid layout ids — `"command"` / `"columns"` / `"focus"`.
+    #[serde(default = "default_layout")]
     pub default_layout: String,
     /// Hex string (`#rrggbb`) to override the bright-text / primary-button
     /// accent (`--zinc-100`). Empty string means use the default.
+    #[serde(default)]
     pub accent_override: String,
     /// Hex string for the live dot color. Empty means default red.
+    #[serde(default)]
     pub live_color_override: String,
+    /// Side of the Command layout where the channel rail lives. `"left"` (default) or `"right"`.
+    #[serde(default = "default_command_sidebar_position")]
+    pub command_sidebar_position: String,
+    /// Persisted pixel width of the Command channel rail. Clamped to 220..=520 on read in JS.
+    #[serde(default = "default_command_sidebar_width")]
+    pub command_sidebar_width: u32,
+    /// Whether the Command rail is collapsed to a 48 px icon-only state.
+    #[serde(default)]
+    pub command_sidebar_collapsed: bool,
+    /// Channel-row vertical density — `"comfortable"` (default) or `"compact"`.
+    #[serde(default = "default_command_sidebar_density")]
+    pub command_sidebar_density: String,
 }
 
 impl Default for AppearanceSettings {
@@ -71,8 +86,25 @@ impl Default for AppearanceSettings {
             default_layout: "command".into(),
             accent_override: String::new(),
             live_color_override: String::new(),
+            command_sidebar_position: default_command_sidebar_position(),
+            command_sidebar_width: default_command_sidebar_width(),
+            command_sidebar_collapsed: false,
+            command_sidebar_density: default_command_sidebar_density(),
         }
     }
+}
+
+fn default_layout() -> String {
+    "command".into()
+}
+fn default_command_sidebar_position() -> String {
+    "left".into()
+}
+fn default_command_sidebar_width() -> u32 {
+    240
+}
+fn default_command_sidebar_density() -> String {
+    "comfortable".into()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -163,6 +195,18 @@ mod tests {
             s.chat.show_timestamps,
             "show_timestamps default should be true"
         );
+    }
+
+    #[test]
+    fn appearance_defaults_when_fields_missing() {
+        // Empty appearance object — every Command-layout field should fall back
+        // to its named default fn.
+        let json = b"{\"appearance\":{}}";
+        let s: Settings = serde_json::from_slice(json).expect("parse");
+        assert_eq!(s.appearance.command_sidebar_position, "left");
+        assert_eq!(s.appearance.command_sidebar_width, 240);
+        assert!(!s.appearance.command_sidebar_collapsed);
+        assert_eq!(s.appearance.command_sidebar_density, "comfortable");
     }
 
     #[test]
