@@ -23,14 +23,23 @@ export default function EmbedSlot({ channelKey, isLive, active, placeholderText 
         if (!layer || !inTauri) return;
         if (!isLive || !channelKey) return;
         if (slotIdRef.current === null) slotIdRef.current = generateSlotId();
+        // Pass the CURRENT active value at register time — it's the initial
+        // value the layer sees. After this, every change to `active` flows
+        // through the separate updateActive effect below; we deliberately
+        // do NOT re-register on active changes because that would unmount
+        // the embed (the unregister path's `entry.refs.size === 0` branch
+        // tears down the wry WebView entirely, which is exactly what
+        // happened to YT/CB embeds on every chat-tab switch — the embed
+        // would briefly become the only-and-zero slot and get destroyed,
+        // then re-mount on re-register, producing a visible reload).
         layer.register(channelKey, slotIdRef.current, ref, active);
         return () => {
             if (slotIdRef.current !== null) {
                 layer.unregister(channelKey, slotIdRef.current);
             }
         };
-        // The ref is stable; channelKey + isLive + active are the deps.
-    }, [channelKey, isLive, active, layer]);
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- `active` flows through updateActive
+    }, [channelKey, isLive, layer]);
 
     useEffect(() => {
         if (!layer || !inTauri) return;
