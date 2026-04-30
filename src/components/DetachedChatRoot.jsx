@@ -22,7 +22,7 @@ import { useLivestreams } from '../hooks/useLivestreams.js';
 import { chatReattach } from '../ipc.js';
 
 export default function DetachedChatRoot({ channelKey }) {
-  const { livestreams } = useLivestreams();
+  const { livestreams, loading } = useLivestreams();
   const onTitlebarMouseDown = useDragHandler();
   const channel = livestreams.find((l) => l.unique_key === channelKey);
   const platform = channel?.platform ?? channelKey.split(':')[0];
@@ -108,6 +108,15 @@ export default function DetachedChatRoot({ channelKey }) {
             onUsernameContext={() => {}}
             onUsernameHover={() => {}}
           />
+        ) : loading ? (
+          <div
+            style={{
+              flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
+              color: 'var(--zinc-600)', fontSize: 'var(--t-12)',
+            }}
+          >
+            Loading…
+          </div>
         ) : (
           <div
             style={{
