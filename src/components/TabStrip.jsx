@@ -4,12 +4,26 @@
 // when a row fills, the next tab wraps onto a new row. flex-wrap does the
 // math Qt's _FlowTabBar._relayout() does manually.
 //
-// Drag-to-reorder lands in PR 3 (onReorder prop is forwarded but not yet
-// consumed). Detach + Re-dock land in PR 4 (the ⤓ icon button is placed
-// but its onClick is a no-op until then). Mention flash + sticky dot land
-// in PR 5.
+// Reorder is implemented with mouse events, not HTML5 drag-and-drop. The
+// wry/WebKitGTK webview on Linux doesn't propagate dragenter/dragover/drop
+// to JS — only dragstart/dragend fire — which makes HTML5 dnd a no-go.
+// Mouse-tracked drag works uniformly across Linux, macOS, and Windows.
+//
+// Detach + Re-dock land in a follow-up PR (the ⤓ icon button is placed but
+// its onClick is a no-op until then). Mention flash + sticky dot also land
+// later — the rx-tab-flashing class is applied conditionally but the
+// @keyframes lands with that work.
 
-import { formatViewers } from '../utils/format.js';
+import { useEffect, useRef, useState } from 'react';
+
+// Pixels of mouse movement after mousedown before we treat the gesture as
+// a drag (vs. a click). Below this, the click-to-activate path wins.
+const DRAG_THRESHOLD_PX = 5;
+
+// Fixed tab width. Consistent width keeps each tab's × close button at the
+// same horizontal position across closes, so the user can click through a
+// run of tabs to close them in a row without re-aiming.
+const TAB_WIDTH_PX = 200;
 
 export default function TabStrip({
   tabs,                  // string[]
@@ -17,10 +31,126 @@ export default function TabStrip({
   livestreams,           // Livestream[]
   onActivate,            // (channelKey) => void
   onClose,               // (channelKey) => void
-  onDetach,              // (channelKey) => void   — placeholder until PR 4
-  onReorder,             // (fromKey, toKey) => void — placeholder until PR 3
-  mentions,              // Map<channelKey, MentionState> — undefined until PR 5
+  onDetach,              // (channelKey) => void   — placeholder until detach lands
+  onReorder,             // (fromKey, toKey) => void
+  mentions,              // Map<channelKey, MentionState> — undefined until mention flash lands
 }) {
+  // Drag state: null = idle. Once a tab's mousedown is captured, we store
+  // the source key and the start coordinates. The drag transitions from
+  // "armed" to "active" only after DRAG_THRESHOLD_PX of movement, which
+  // distinguishes a click from a drag and prevents accidental reorders
+  // when the user just clicks to activate a tab.
+  const [drag, setDrag] = useState(null); // { sourceKey, startX, startY, active, targetKey }
+  // Latches when a drag actually moved, so the trailing onClick (which
+  // fires after mouseup) knows to suppress activation. Cleared on the next
+  // mousedown.
+  const suppressClickRef = useRef(false);
+
+  const onTabMouseDown = (e, channelKey, display, platform) => {
+    // Left button only; ignore mousedowns landing on the icon buttons (Detach, Close).
+    if (e.button !== 0) return;
+    if (e.target.closest('button')) return;
+    // Suppress the browser's default mousedown handling — most importantly,
+    // initiating a text selection that would extend as the cursor moves.
+    e.preventDefault();
+    suppressClickRef.current = false;
+    setDrag({
+      sourceKey: channelKey,
+      sourceDisplay: display,
+      sourcePlatform: platform,
+      startX: e.clientX,
+      startY: e.clientY,
+      currentX: e.clientX,
+      currentY: e.clientY,
+      active: false,
+      targetKey: null,
+    });
+  };
+
+  // Document-level mousemove + mouseup so the drag survives the cursor
+  // leaving the source tab (and the strip entirely).
+  useEffect(() => {
+    if (!drag) return;
+
+    const onMove = (e) => {
+      const dx = Math.abs(e.clientX - drag.startX);
+      const dy = Math.abs(e.clientY - drag.startY);
+      const moved = dx + dy >= DRAG_THRESHOLD_PX;
+      // Find the tab under the cursor (if any) so we can highlight it.
+      const el = document.elementFromPoint(e.clientX, e.clientY);
+      const targetEl = el && el.closest && el.closest('[data-tab-key]');
+      const targetKey = targetEl ? targetEl.getAttribute('data-tab-key') : null;
+      // Drop position: cursor on the left half of a tab → drop BEFORE it;
+      // right half → drop AFTER it. Lets the user reach the trailing
+      // position by hovering the right edge of the rightmost tab.
+      let dropPosition = 'before';
+      if (targetEl) {
+        const rect = targetEl.getBoundingClientRect();
+        dropPosition = e.clientX >= rect.left + rect.width / 2 ? 'after' : 'before';
+      }
+      setDrag((prev) =>
+        prev
+          ? {
+              ...prev,
+              active: prev.active || moved,
+              targetKey,
+              dropPosition,
+              currentX: e.clientX,
+              currentY: e.clientY,
+            }
+          : prev,
+      );
+    };
+
+    const onUp = () => {
+      setDrag((prev) => {
+        if (!prev) return null;
+        if (prev.active) {
+          // Real drag — apply reorder if the target is a different tab.
+          suppressClickRef.current = true;
+          if (prev.targetKey && prev.targetKey !== prev.sourceKey && onReorder) {
+            onReorder(prev.sourceKey, prev.targetKey, prev.dropPosition || 'before');
+          }
+        }
+        return null;
+      });
+    };
+
+    const onKey = (e) => {
+      if (e.key === 'Escape') {
+        suppressClickRef.current = true;
+        setDrag(null);
+      }
+    };
+
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [drag, onReorder]);
+
+  // While a drag is active, lock the document cursor to "grabbing" and
+  // disable text selection globally. Without this, the cursor flickers
+  // back to text-selection over neighboring elements (rail rows, chat
+  // text, etc.) and the user can accidentally start a text selection
+  // when the mousedown's preventDefault is bypassed by some intermediate
+  // handler.
+  useEffect(() => {
+    if (!drag?.active) return;
+    const prevCursor = document.body.style.cursor;
+    const prevUserSelect = document.body.style.userSelect;
+    document.body.style.cursor = 'grabbing';
+    document.body.style.userSelect = 'none';
+    return () => {
+      document.body.style.cursor = prevCursor;
+      document.body.style.userSelect = prevUserSelect;
+    };
+  }, [drag?.active]);
+
   return (
     <div
       style={{
@@ -40,6 +170,12 @@ export default function TabStrip({
         const isLive = Boolean(ch?.is_live);
         const active = key === activeKey;
         const mention = mentions ? mentions.get(key) : null;
+        // Drag visual state for this specific tab.
+        const isDragSource = drag?.active && drag.sourceKey === key;
+        const isDragTarget =
+          drag?.active && drag.targetKey === key && drag.sourceKey !== key;
+        const dropEdge =
+          isDragTarget ? (drag.dropPosition === 'after' ? 'right' : 'left') : null;
         return (
           <Tab
             key={key}
@@ -47,16 +183,55 @@ export default function TabStrip({
             display={display}
             platform={platform}
             isLive={isLive}
-            viewers={ch?.viewers}
             active={active}
             mention={mention}
-            onActivate={() => onActivate(key)}
+            isDragSource={isDragSource}
+            dropEdge={dropEdge}
+            onMouseDown={(e) => onTabMouseDown(e, key, display, platform)}
+            onActivate={() => {
+              if (suppressClickRef.current) {
+                suppressClickRef.current = false;
+                return;
+              }
+              onActivate(key);
+            }}
             onClose={() => onClose(key)}
             onDetach={() => onDetach && onDetach(key)}
-            onReorder={onReorder}
           />
         );
       })}
+      {drag?.active && <DragGhost drag={drag} />}
+    </div>
+  );
+}
+
+function DragGhost({ drag }) {
+  const platLetter = (drag.sourcePlatform || '?').charAt(0);
+  return (
+    <div
+      style={{
+        position: 'fixed',
+        left: drag.currentX + 12,
+        top: drag.currentY + 12,
+        pointerEvents: 'none',  // critical — must not intercept elementFromPoint
+        zIndex: 9999,
+        padding: '4px 10px',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+        height: 28,
+        background: 'var(--zinc-800)',
+        border: '1px solid var(--zinc-600)',
+        color: 'var(--zinc-100)',
+        fontSize: 'var(--t-12)',
+        whiteSpace: 'nowrap',
+        borderRadius: 'var(--r-2)',
+        boxShadow: '0 6px 16px rgba(0, 0, 0, 0.5)',
+        opacity: 0.92,
+      }}
+    >
+      <span style={{ fontWeight: 500 }}>{drag.sourceDisplay}</span>
+      <span className={`rx-plat ${platLetter}`}>{platLetter.toUpperCase()}</span>
     </div>
   );
 }
@@ -66,15 +241,14 @@ function Tab({
   display,
   platform,
   isLive,
-  viewers,
   active,
   mention,
+  isDragSource,
+  dropEdge,            // 'left' | 'right' | null — drop indicator side
+  onMouseDown,
   onActivate,
   onClose,
   onDetach,
-  // onReorder is consumed in PR 3 — accepting the prop here so the
-  // signature is stable across PRs.
-  onReorder,                                                            // eslint-disable-line no-unused-vars
 }) {
   const isBlinking = mention && mention.blinkUntil > Date.now();
   const hasDot = mention?.hasUnseenMention === true;
@@ -83,15 +257,23 @@ function Tab({
   return (
     <div
       onClick={onActivate}
+      onMouseDown={onMouseDown}
+      data-tab-key={channelKey}
       className={isBlinking ? 'rx-tab rx-tab-flashing' : 'rx-tab'}
       style={{
-        flex: '0 0 auto',
+        flex: `0 0 ${TAB_WIDTH_PX}px`,
+        width: TAB_WIDTH_PX,
         padding: '0 8px 0 12px',
         display: 'flex',
         alignItems: 'center',
         gap: 8,
         height: 32,
         borderRight: 'var(--hair)',
+        // Bottom hairline on every tab so wrapped rows are visually
+        // separated. The strip's own border-bottom still draws under
+        // the last row; the two hairlines on the same pixel column
+        // collapse visually.
+        borderBottom: 'var(--hair)',
         background: active ? 'var(--zinc-900)' : 'transparent',
         borderTop: active ? '2px solid var(--zinc-200)' : '2px solid transparent',
         color: isLive ? 'var(--zinc-100)' : 'var(--zinc-500)',
@@ -99,21 +281,43 @@ function Tab({
         fontSize: 'var(--t-12)',
         whiteSpace: 'nowrap',
         userSelect: 'none',
+        opacity: isDragSource ? 0.4 : 1,
+        // Drop indicator: a 2px solid white line on the leading edge of
+        // the target tab. inset shadow so it draws inside the tab body
+        // without affecting layout. Left edge = drop before; right edge
+        // = drop after (the latter lets the user reach the trailing
+        // position by hovering the right half of the rightmost tab).
+        boxShadow:
+          dropEdge === 'left'
+            ? 'inset 2px 0 0 0 #ffffff'
+            : dropEdge === 'right'
+            ? 'inset -2px 0 0 0 #ffffff'
+            : undefined,
       }}
     >
-      <span className={`rx-status-dot ${isLive ? 'live' : 'off'}`} />
-      <span style={{ fontWeight: 500 }}>{display}</span>
-      <span className={`rx-plat ${platLetter}`}>{platLetter.toUpperCase()}</span>
-      {isLive && typeof viewers === 'number' && (
-        <span
-          className="rx-mono"
-          style={{ fontSize: 10, color: 'var(--zinc-500)' }}
-        >
-          {formatViewers(viewers)}
-        </span>
-      )}
+      <span
+        className={`rx-status-dot ${isLive ? 'live' : 'off'}`}
+        style={{ flex: '0 0 auto' }}
+      />
+      <span
+        style={{
+          fontWeight: 500,
+          flex: 1,
+          minWidth: 0,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+        }}
+      >
+        {display}
+      </span>
+      <span
+        className={`rx-plat ${platLetter}`}
+        style={{ flex: '0 0 auto' }}
+      >
+        {platLetter.toUpperCase()}
+      </span>
       {/* Fixed-width slot for the mention dot so layout doesn't shift */}
-      <span style={{ width: 6, display: 'inline-flex', justifyContent: 'center' }}>
+      <span style={{ flex: '0 0 6px', display: 'inline-flex', justifyContent: 'center' }}>
         {hasDot && (
           <span
             style={{

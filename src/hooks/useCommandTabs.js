@@ -71,8 +71,8 @@ export function useCommandTabs({ livestreams }) {
     if (nextActive !== activeTabKey) setActiveTabKey(nextActive);
   }, [tabKeys, activeTabKey]);
 
-  const reorderTabs = useCallback((fromKey, toKey) => {
-    setTabKeys((prev) => reorderTabsReducer(prev, fromKey, toKey));
+  const reorderTabs = useCallback((fromKey, toKey, position) => {
+    setTabKeys((prev) => reorderTabsReducer(prev, fromKey, toKey, position));
   }, []);
 
   // Activating a tab is what users do when they click a tab in the strip
