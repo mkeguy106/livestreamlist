@@ -134,19 +134,9 @@ export default function Command({ ctx }) {
 
   return (
     <>
-      <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
+      <div className="cmd-row">
         {/* Sidebar */}
-        <div
-          style={{
-            width: 240,
-            borderRight: 'var(--hair)',
-            display: 'flex',
-            flexDirection: 'column',
-            background: 'var(--zinc-950)',
-            minHeight: 0,
-            flexShrink: 0,
-          }}
-        >
+        <div className="cmd-sidebar">
           <div style={{ padding: '10px 12px 4px', display: 'flex', alignItems: 'center', gap: 6 }}>
             <div className="rx-chiclet">Channels</div>
             <div style={{ flex: 1 }} />
@@ -161,6 +151,7 @@ export default function Command({ ctx }) {
             </IconBtn>
           </div>
           <div
+            className="cmd-toolbar"
             style={{
               padding: '2px 10px 8px',
               display: 'flex',
@@ -221,7 +212,7 @@ export default function Command({ ctx }) {
               {filterLabel.toLowerCase()} · {sortLabel.toLowerCase()}
             </span>
           </div>
-          <div style={{ padding: '6px 10px', borderBottom: 'var(--hair)' }}>
+          <div className="cmd-search" style={{ padding: '6px 10px', borderBottom: 'var(--hair)' }}>
             <div style={{ position: 'relative' }}>
               <input
                 ref={searchRef}
@@ -301,6 +292,7 @@ export default function Command({ ctx }) {
                 >
                   <button
                     type="button"
+                    className={`cmd-row-item${active ? ' active' : ''}`}
                     onClick={() => rowClickHandler(ch.unique_key)}
                     onDoubleClick={() => {
                       if (ch.is_live) launchStream(ch.unique_key);
@@ -310,27 +302,17 @@ export default function Command({ ctx }) {
                       rowClickHandler(ch.unique_key);
                       setMenu({ x: e.clientX, y: e.clientY, channel: ch });
                     }}
-                    style={{
-                      width: '100%',
-                      textAlign: 'left',
-                      background: active ? 'var(--zinc-900)' : 'transparent',
-                      borderLeft: active ? '2px solid var(--zinc-200)' : '2px solid transparent',
-                      borderTop: 'none',
-                      borderRight: 'none',
-                      borderBottom: 'none',
-                      padding: '6px 12px',
-                      display: 'grid',
-                      gridTemplateColumns: '10px 1fr auto',
-                      columnGap: 10,
-                      alignItems: 'center',
-                      color: 'inherit',
-                      cursor: 'pointer',
-                      opacity: ch.is_live ? 1 : 0.45,
-                      fontFamily: 'inherit',
-                    }}
+                    style={{ opacity: ch.is_live ? 1 : 0.45 }}
                   >
                   <span className={`rx-status-dot ${ch.is_live ? 'live' : 'off'}`} />
-                  <div style={{ minWidth: 0 }}>
+
+                  {/* Collapsed-only chip — hidden by default, shown only when data-sidebar-collapsed="true". */}
+                  <span className="cmd-row-chip-collapsed">
+                    <span className={`rx-plat ${ch.platform.charAt(0)}`}>{ch.platform.charAt(0).toUpperCase()}</span>
+                  </span>
+
+                  {/* Center column — name row + meta line. Hidden as a unit in collapsed mode. */}
+                  <div className="cmd-row-text" style={{ minWidth: 0 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                       {ch.favorite && (
                         <Tooltip text="Unfavorite">
@@ -359,17 +341,10 @@ export default function Command({ ctx }) {
                       </span>
                       {isPlaying && (
                         <Tooltip text="Playing">
-                          <span
-                            style={{
-                              color: 'var(--ok)',
-                              fontSize: 9,
-                              lineHeight: 1,
-                            }}
-                          >
-                            ▶
-                          </span>
+                          <span style={{ color: 'var(--ok)', fontSize: 9, lineHeight: 1 }}>▶</span>
                         </Tooltip>
                       )}
+                      {/* Original inline chip — visible in expanded mode only (via cmd-row-text). */}
                       <span className={`rx-plat ${ch.platform.charAt(0)}`}>{ch.platform.charAt(0).toUpperCase()}</span>
                       {detachedKeys.has(ch.unique_key) && (
                         <Tooltip text="Open in detached window">
@@ -378,7 +353,7 @@ export default function Command({ ctx }) {
                       )}
                     </div>
                     <div
-                      className="rx-mono"
+                      className="rx-mono cmd-row-meta"
                       style={{
                         fontSize: 10,
                         color: 'var(--zinc-500)',
@@ -390,7 +365,9 @@ export default function Command({ ctx }) {
                       {ch.is_live ? (ch.game ?? 'live') : 'offline'}
                     </div>
                   </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 }}>
+
+                  {/* Viewers cluster — hidden in compact density and collapsed mode. */}
+                  <div className="cmd-row-meta" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 }}>
                     <span className="rx-mono" style={{ fontSize: 10, color: 'var(--zinc-400)' }}>
                       {ch.is_live ? formatViewers(ch.viewers) : '—'}
                     </span>
@@ -402,6 +379,7 @@ export default function Command({ ctx }) {
           </div>
           <button
             type="button"
+            className="cmd-add"
             onClick={openAddDialog}
             style={{
               padding: '8px 12px',
@@ -423,7 +401,7 @@ export default function Command({ ctx }) {
         </div>
 
         {/* Main */}
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+        <div className="cmd-main">
           <TabStrip
             tabs={tabKeys}
             activeKey={activeTabKey}
