@@ -207,6 +207,10 @@ mod tests {
         assert_eq!(s.appearance.command_sidebar_width, 240);
         assert!(!s.appearance.command_sidebar_collapsed);
         assert_eq!(s.appearance.command_sidebar_density, "comfortable");
+        // Pre-existing fields that were retrofitted with #[serde(default …)]
+        assert_eq!(s.appearance.default_layout, "command");
+        assert_eq!(s.appearance.accent_override, "");
+        assert_eq!(s.appearance.live_color_override, "");
     }
 
     #[test]
