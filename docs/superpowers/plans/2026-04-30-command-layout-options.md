@@ -174,18 +174,13 @@ Implements: CSS contract section of the spec.
 
 - [ ] **Step 1: Append the variables + grid layout block**
 
-Open `src/tokens.css`. Append the following block at the end of the file (after all existing rules):
+Open `src/tokens.css`.
+
+**First, add `--cmd-sidebar-w: 240px;` to the existing `:root { ... }` block at the top of `src/tokens.css` (after the `--hair-strong` line — separate with one blank line).** Then append the block below to the end of the file.
 
 ```css
 /* ── Command layout (A) — variable-driven sidebar ──────────────── */
-.rx-root {
-  --cmd-sidebar-w: 240px;
-  --cmd-row-h:    40px;
-  --cmd-row-fs:   var(--t-12);
-}
-
-:root[data-sidebar-collapsed="true"]  { --cmd-sidebar-w: 48px;  }
-:root[data-sidebar-density="compact"] { --cmd-row-h:    28px;   }
+:root[data-sidebar-collapsed="true"] { --cmd-sidebar-w: 48px; }
 
 .cmd-row {
   display: grid;

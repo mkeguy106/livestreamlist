@@ -34,13 +34,8 @@ Width is the only field a user changes by direct manipulation (drag handle); all
 Added to `src/tokens.css`:
 
 ```css
-.rx-root {
-  --cmd-sidebar-w: 240px;
-  --cmd-row-h:   40px;
-  --cmd-row-fs:  var(--t-12);
-}
-:root[data-sidebar-collapsed="true"]  { --cmd-sidebar-w: 48px; }
-:root[data-sidebar-density="compact"] { --cmd-row-h: 28px; }
+:root { --cmd-sidebar-w: 240px; }                       /* declared on :root so :root-level overrides + style.setProperty propagate */
+:root[data-sidebar-collapsed="true"] { --cmd-sidebar-w: 48px; }
 
 .cmd-row {
   display: grid;

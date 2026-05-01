@@ -41,6 +41,8 @@
 
   --hair: 1px solid rgba(255, 255, 255, 0.06);
   --hair-strong: 1px solid rgba(255, 255, 255, 0.09);
+
+  --cmd-sidebar-w: 240px;
 }
 
 html, body, #root { height: 100%; margin: 0; }
@@ -196,14 +198,7 @@ body { background: var(--zinc-950); }
 }
 
 /* ── Command layout (A) — variable-driven sidebar ──────────────── */
-.rx-root {
-  --cmd-sidebar-w: 240px;
-  --cmd-row-h:    40px;
-  --cmd-row-fs:   var(--t-12);
-}
-
-:root[data-sidebar-collapsed="true"]  { --cmd-sidebar-w: 48px;  }
-:root[data-sidebar-density="compact"] { --cmd-row-h:    28px;   }
+:root[data-sidebar-collapsed="true"] { --cmd-sidebar-w: 48px; }
 
 .cmd-row {
   display: grid;
