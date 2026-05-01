@@ -140,18 +140,23 @@ export default function Command({ ctx }) {
         {/* Sidebar */}
         <div className="cmd-sidebar">
           <div className="cmd-rail-header" style={{ padding: '10px 12px 4px', display: 'flex', alignItems: 'center', gap: 6 }}>
-            <div className="rx-chiclet">Channels</div>
-            <div style={{ flex: 1 }} />
-            <div className="rx-chiclet" style={{ color: 'var(--zinc-400)' }}>
-              {liveCount}/{filtered.length}
-            </div>
-            <IconBtn
-              title={loading ? 'Refreshing…' : 'Refresh now (F5)'}
-              onClick={() => { if (!loading) refresh(); }}
-            >
-              <IconRefresh spinning={loading} />
-            </IconBtn>
-            {/* Collapse chevron — floats to the inner edge via .cmd-collapse-chevron order rule. */}
+            {!settings?.appearance?.command_sidebar_collapsed && (
+              <>
+                <div className="rx-chiclet">Channels</div>
+                <DensityIconBtn settings={settings} patch={patch} />
+                <div style={{ flex: 1 }} />
+                <div className="rx-chiclet" style={{ color: 'var(--zinc-400)' }}>
+                  {liveCount}/{filtered.length}
+                </div>
+                <IconBtn
+                  title={loading ? 'Refreshing…' : 'Refresh now (F5)'}
+                  onClick={() => { if (!loading) refresh(); }}
+                >
+                  <IconRefresh spinning={loading} />
+                </IconBtn>
+              </>
+            )}
+            {/* Collapse chevron — always rendered. Order CSS floats it to the inner edge. */}
             <CollapseChevron settings={settings} patch={patch} />
           </div>
           <div
@@ -704,6 +709,33 @@ function IconRefresh({ spinning }) {
     </svg>
   );
 }
+function IconDensity({ compact }) {
+  // Comfortable: two spaced lines. Compact: three dense lines.
+  return (
+    <svg
+      width="12"
+      height="12"
+      viewBox="0 0 12 12"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1"
+      strokeLinecap="square"
+    >
+      {compact ? (
+        <>
+          <path d="M2 3 L10 3" />
+          <path d="M2 6 L10 6" />
+          <path d="M2 9 L10 9" />
+        </>
+      ) : (
+        <>
+          <path d="M2 4 L10 4" />
+          <path d="M2 8 L10 8" />
+        </>
+      )}
+    </svg>
+  );
+}
 function IconChevron({ pointing }) {
   // pointing: 'left' or 'right' — the direction the chevron's tip points.
   // We rotate a single path so the SVG itself stays identical.
@@ -819,6 +851,28 @@ function Dropdown({ items, selected, onSelect, onClose, width = 150 }) {
   );
 }
 
+/* ── Density toggle (next to Channels chiclet in the rail header) ── */
+function DensityIconBtn({ settings, patch }) {
+  const compact = settings?.appearance?.command_sidebar_density === 'compact';
+  return (
+    <IconBtn
+      title={compact ? 'Comfortable rows' : 'Compact rows'}
+      active={compact}
+      onClick={() =>
+        patch((prev) => ({
+          ...prev,
+          appearance: {
+            ...prev.appearance,
+            command_sidebar_density: compact ? 'comfortable' : 'compact',
+          },
+        }))
+      }
+    >
+      <IconDensity compact={compact} />
+    </IconBtn>
+  );
+}
+
 /* ── Drag-to-resize handle for the rail ────────────────────────────
  * Uses TabStrip's canonical pattern: drag state in React, listeners
  * attached via useEffect while drag is armed. Survives Alt-Tab, Esc
@@ -928,7 +982,7 @@ function CollapseChevron({ settings, patch }) {
     (isRight && !collapsed) || (!isRight && collapsed) ? 'right' : 'left';
 
   return (
-    <Tooltip text={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}>
+    <Tooltip text={collapsed ? 'Expand sidebar' : 'Collapse sidebar'} align="right">
       <button
         type="button"
         className="cmd-collapse-chevron"

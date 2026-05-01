@@ -52,7 +52,12 @@ export default function App() {
     root.dataset.sidebarPosition  = a.command_sidebar_position === 'right' ? 'right' : 'left';
     root.dataset.sidebarCollapsed = a.command_sidebar_collapsed ? 'true' : '';
     root.dataset.sidebarDensity   = a.command_sidebar_density === 'compact' ? 'compact' : 'comfortable';
-    const w = Math.max(220, Math.min(520, Number(a.command_sidebar_width) || 240));
+    // When collapsed, force 48 px — an inline width here beats the CSS
+    // `:root[data-sidebar-collapsed="true"] { --cmd-sidebar-w: 48px }` rule
+    // (inline > class), so the bridge has to write the right value itself.
+    const w = a.command_sidebar_collapsed
+      ? 48
+      : Math.max(220, Math.min(520, Number(a.command_sidebar_width) || 240));
     root.style.setProperty('--cmd-sidebar-w', `${w}px`);
   }, [settings]);
 

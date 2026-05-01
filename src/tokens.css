@@ -271,7 +271,7 @@ body { background: var(--zinc-950); }
 :root[data-sidebar-collapsed="true"] .cmd-search,
 :root[data-sidebar-collapsed="true"] .cmd-add,
 :root[data-sidebar-collapsed="true"] .cmd-toolbar,
-:root[data-sidebar-collapsed="true"] .cmd-resize-handle { display: none; }
+:root[data-sidebar-collapsed="true"] .cmd-resize-handle { display: none !important; } /* !important beats inline display:flex on these elements */
 :root[data-sidebar-collapsed="true"] .cmd-row-item {
   /* In collapsed mode the only visible row children are the status dot and
    * .cmd-row-chip-collapsed — override the 3-col grid to two auto columns and
@@ -283,10 +283,10 @@ body { background: var(--zinc-950); }
   overflow: hidden;
 }
 
-/* In collapsed mode the rail header keeps only the chevron — Channels chiclet,
- * live-count, and refresh button overflow in 48px. The chevron's :not(...)
- * exception keeps it visible. */
-:root[data-sidebar-collapsed="true"] .cmd-rail-header > *:not(.cmd-collapse-chevron) { display: none; }
+/* In collapsed mode the rail header items (Channels chiclet / live count /
+ * refresh / density toggle) are JSX-conditionally not rendered — only the
+ * chevron stays. Doing it in JSX rather than CSS sidesteps Tooltip wrapping
+ * making `> *:not(.cmd-collapse-chevron)` selector brittle. */
 
 /* Resize handle sits on the inner edge of the rail. Position swaps via data-attr. */
 .cmd-resize-handle {
