@@ -315,11 +315,6 @@ export default function Command({ ctx }) {
                   >
                   <span className={`rx-status-dot ${ch.is_live ? 'live' : 'off'}`} />
 
-                  {/* Collapsed-only chip — hidden by default, shown only when data-sidebar-collapsed="true". */}
-                  <span className="cmd-row-chip-collapsed">
-                    <span className={`rx-plat ${ch.platform.charAt(0)}`}>{ch.platform.charAt(0).toUpperCase()}</span>
-                  </span>
-
                   {/* Center column — name row + meta line. Hidden as a unit in collapsed mode. */}
                   <div className="cmd-row-text" style={{ minWidth: 0 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>

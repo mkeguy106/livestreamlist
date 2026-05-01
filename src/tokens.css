@@ -198,7 +198,7 @@ body { background: var(--zinc-950); }
 }
 
 /* ── Command layout (A) — variable-driven sidebar ──────────────── */
-:root[data-sidebar-collapsed="true"] { --cmd-sidebar-w: 48px; }
+:root[data-sidebar-collapsed="true"] { --cmd-sidebar-w: 32px; }
 
 .cmd-row {
   display: grid;
@@ -257,10 +257,6 @@ body { background: var(--zinc-950); }
 .cmd-row-item.active                                         { background: var(--zinc-900); border-left: 2px solid var(--zinc-200); }
 :root[data-sidebar-position="right"] .cmd-row-item.active    { border-left: 2px solid transparent; border-right: 2px solid var(--zinc-200); }
 
-/* The collapsed-mode chip stays out of the grid in expanded mode. */
-.cmd-row-chip-collapsed                                      { display: none; }
-:root[data-sidebar-collapsed="true"] .cmd-row-chip-collapsed { display: inline-flex; }
-
 /* Density: compact hides the secondary "game" line + tightens vertical padding */
 :root[data-sidebar-density="compact"] .cmd-row-meta { display: none; }
 :root[data-sidebar-density="compact"] .cmd-row-item { padding-top: 3px; padding-bottom: 3px; }
@@ -273,13 +269,11 @@ body { background: var(--zinc-950); }
 :root[data-sidebar-collapsed="true"] .cmd-toolbar,
 :root[data-sidebar-collapsed="true"] .cmd-resize-handle { display: none !important; } /* !important beats inline display:flex on these elements */
 :root[data-sidebar-collapsed="true"] .cmd-row-item {
-  /* In collapsed mode the only visible row children are the status dot and
-   * .cmd-row-chip-collapsed — override the 3-col grid to two auto columns and
-   * center the whole pair in the 48 px rail. */
-  grid-template-columns: auto auto;
+  /* In collapsed mode only the status dot remains visible — single-column
+   * grid centered in the 32 px rail. */
+  grid-template-columns: auto;
   justify-content: center;
-  padding: 6px 4px;
-  column-gap: 6px;
+  padding: 6px 0;
   overflow: hidden;
 }
 
