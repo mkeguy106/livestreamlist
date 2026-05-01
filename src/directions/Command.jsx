@@ -11,6 +11,7 @@ import TitleBanner from '../components/TitleBanner.jsx';
 import Tooltip from '../components/Tooltip.jsx';
 import { useCommandTabs } from '../hooks/useCommandTabs.js';
 import { usePlayerState } from '../hooks/usePlayerState.js';
+import { usePreferences } from '../hooks/usePreferences.jsx';
 import { stopStream } from '../ipc.js';
 import { formatUptime, formatViewers } from '../utils/format.js';
 
@@ -81,6 +82,7 @@ export default function Command({ ctx }) {
   } = useCommandTabs({ livestreams });
 
   const playing = usePlayerState();
+  const { patch } = usePreferences();
   const [menu, setMenu] = useState(null); // { x, y, channel }
 
   const [filter, setFilter] = useState(() => loadPref(STORAGE_KEYS.filter, 'all'));
@@ -398,6 +400,7 @@ export default function Command({ ctx }) {
             <div className="rx-kbd">N</div>
             <span className="rx-chiclet">Add channel</span>
           </button>
+          <DragResizeHandle patch={patch} />
         </div>
 
         {/* Main */}
@@ -793,5 +796,66 @@ function Dropdown({ items, selected, onSelect, onClose, width = 150 }) {
         ))}
       </div>
     </>
+  );
+}
+
+/* ── Drag-to-resize handle for the rail ────────────────────────── */
+function DragResizeHandle({ patch }) {
+  const dragRef = useRef(null);
+
+  const onMouseDown = (e) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const root = document.documentElement;
+    const startW = parseFloat(getComputedStyle(root).getPropertyValue('--cmd-sidebar-w')) || 240;
+    const isRight = root.dataset.sidebarPosition === 'right';
+
+    dragRef.current = { startX, startW, isRight };
+    document.body.style.userSelect = 'none';
+    document.body.style.cursor = 'col-resize';
+
+    const onMove = (ev) => {
+      if (!dragRef.current) return;
+      const { startX, startW, isRight } = dragRef.current;
+      const dx = ev.clientX - startX;
+      const next = Math.max(220, Math.min(520, startW + (isRight ? -dx : dx)));
+      root.style.setProperty('--cmd-sidebar-w', `${next}px`);
+    };
+    const onUp = () => {
+      if (!dragRef.current) return;
+      // Re-read whatever live value is on the root and persist it.
+      const final = parseFloat(getComputedStyle(root).getPropertyValue('--cmd-sidebar-w')) || 240;
+      const clamped = Math.max(220, Math.min(520, Math.round(final)));
+      patch((prev) => ({
+        ...prev,
+        appearance: { ...prev.appearance, command_sidebar_width: clamped },
+      }));
+      dragRef.current = null;
+      document.body.style.userSelect = '';
+      document.body.style.cursor = '';
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    };
+
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  };
+
+  const onDoubleClick = () => {
+    document.documentElement.style.setProperty('--cmd-sidebar-w', '240px');
+    patch((prev) => ({
+      ...prev,
+      appearance: { ...prev.appearance, command_sidebar_width: 240 },
+    }));
+  };
+
+  return (
+    <Tooltip text="Drag to resize · double-click to reset">
+      <div
+        className="cmd-resize-handle"
+        onMouseDown={onMouseDown}
+        onDoubleClick={onDoubleClick}
+      />
+    </Tooltip>
   );
 }
