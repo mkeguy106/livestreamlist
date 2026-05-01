@@ -198,7 +198,7 @@ body { background: var(--zinc-950); }
 }
 
 /* ── Command layout (A) — variable-driven sidebar ──────────────── */
-:root[data-sidebar-collapsed="true"] { --cmd-sidebar-w: 32px; }
+:root[data-sidebar-collapsed="true"] { --cmd-sidebar-w: 28px; }
 
 .cmd-row {
   display: grid;
@@ -267,15 +267,8 @@ body { background: var(--zinc-950); }
 :root[data-sidebar-collapsed="true"] .cmd-search,
 :root[data-sidebar-collapsed="true"] .cmd-add,
 :root[data-sidebar-collapsed="true"] .cmd-toolbar,
+:root[data-sidebar-collapsed="true"] .cmd-row-item,
 :root[data-sidebar-collapsed="true"] .cmd-resize-handle { display: none !important; } /* !important beats inline display:flex on these elements */
-:root[data-sidebar-collapsed="true"] .cmd-row-item {
-  /* In collapsed mode only the status dot remains visible — single-column
-   * grid centered in the 32 px rail. */
-  grid-template-columns: auto;
-  justify-content: center;
-  padding: 6px 0;
-  overflow: hidden;
-}
 
 /* In collapsed mode the rail header items (Channels chiclet / live count /
  * refresh / density toggle) are JSX-conditionally not rendered — only the

@@ -56,7 +56,7 @@ export default function App() {
     // `:root[data-sidebar-collapsed="true"] { --cmd-sidebar-w: 48px }` rule
     // (inline > class), so the bridge has to write the right value itself.
     const w = a.command_sidebar_collapsed
-      ? 32
+      ? 28
       : Math.max(220, Math.min(520, Number(a.command_sidebar_width) || 240));
     root.style.setProperty('--cmd-sidebar-w', `${w}px`);
   }, [settings]);
