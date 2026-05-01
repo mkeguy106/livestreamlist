@@ -362,6 +362,23 @@ Everything that's colorful or sized is a CSS var. Categories:
 
 Inline styles are used liberally for one-off layout — consistent with the prototype designs. If a pattern recurs, promote it to a class.
 
+### Hover-discoverable text — always use the themed `Tooltip`
+
+**Never use the native `title=""` HTML attribute** for hover-discoverable text on buttons, icons, links, or any other interactive element. WebKitGTK renders native tooltips with the system's white-on-light styling, which breaks the zinc-950 dark design. We've re-fixed this multiple times across PRs (#86, #90 — Re-dock + Find toolbar) and want it to stop recurring.
+
+**Always wrap interactive elements with `<Tooltip text="…">`** (`src/components/Tooltip.jsx`) — zinc-925 background, mono font, themed to the design system. Set `aria-label` on the element to mirror the tooltip text for screen readers.
+
+Canonical pattern (`Command.jsx::IconBtn`):
+```jsx
+<Tooltip text={title}>
+  <button type="button" aria-label={title} onClick={onClick}>…</button>
+</Tooltip>
+```
+
+For elements near the right edge of the viewport (rightmost icon in a titlebar, last item in a column), pass `align="right"` so the popover anchors its right edge to the trigger and doesn't overflow off-screen. `align="left"` is the mirror for elements near the left edge.
+
+When reviewing or writing any new feature that has buttons, icons, or hover-text affordances, audit for `title=""` and replace with `Tooltip` — and check `aria-label`-only elements for whether they should also have a themed tooltip for visual discoverability.
+
 ## Configuration
 
 Data dir (XDG):

@@ -815,17 +815,17 @@ function FindBar({
       >
         {counterText}
       </span>
-      <FindBtn aria-label="Previous match" onClick={onPrev} disabled={matchCount === 0}>
+      <FindBtn title="Previous match" onClick={onPrev} disabled={matchCount === 0}>
         <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="square">
           <path d="M2 6 L5 3 L8 6" />
         </svg>
       </FindBtn>
-      <FindBtn aria-label="Next match" onClick={onNext} disabled={matchCount === 0}>
+      <FindBtn title="Next match" onClick={onNext} disabled={matchCount === 0}>
         <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="square">
           <path d="M2 4 L5 7 L8 4" />
         </svg>
       </FindBtn>
-      <FindBtn aria-label="Close find" onClick={onClose}>
+      <FindBtn title="Close find" onClick={onClose} align="right">
         <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="square">
           <path d="M2 2 L8 8 M8 2 L2 8" />
         </svg>
@@ -834,33 +834,37 @@ function FindBar({
   );
 }
 
-function FindBtn({ children, onClick, disabled, ...rest }) {
+function FindBtn({ children, onClick, disabled, title, align }) {
+  // align="right" — for the trailing "Close find" button which sits at the
+  // right edge of the chat pane; centered popovers there overflow the window.
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      {...rest}
-      style={{
-        background: 'transparent',
-        border: 'none',
-        padding: 4,
-        color: disabled ? 'var(--zinc-700)' : 'var(--zinc-400)',
-        cursor: disabled ? 'not-allowed' : 'pointer',
-        lineHeight: 0,
-        display: 'inline-flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-      }}
-      onMouseEnter={(e) => {
-        if (!disabled) e.currentTarget.style.color = 'var(--zinc-200)';
-      }}
-      onMouseLeave={(e) => {
-        if (!disabled) e.currentTarget.style.color = 'var(--zinc-400)';
-      }}
-    >
-      {children}
-    </button>
+    <Tooltip text={title} align={align}>
+      <button
+        type="button"
+        onClick={onClick}
+        disabled={disabled}
+        aria-label={title}
+        style={{
+          background: 'transparent',
+          border: 'none',
+          padding: 4,
+          color: disabled ? 'var(--zinc-700)' : 'var(--zinc-400)',
+          cursor: disabled ? 'not-allowed' : 'pointer',
+          lineHeight: 0,
+          display: 'inline-flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+        onMouseEnter={(e) => {
+          if (!disabled) e.currentTarget.style.color = 'var(--zinc-200)';
+        }}
+        onMouseLeave={(e) => {
+          if (!disabled) e.currentTarget.style.color = 'var(--zinc-400)';
+        }}
+      >
+        {children}
+      </button>
+    </Tooltip>
   );
 }
 

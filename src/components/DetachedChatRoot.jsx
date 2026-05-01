@@ -17,6 +17,7 @@ import ChatView from './ChatView.jsx';
 import ResizeHandles from './ResizeHandles.jsx';
 import SocialsBanner from './SocialsBanner.jsx';
 import TitleBanner from './TitleBanner.jsx';
+import Tooltip from './Tooltip.jsx';
 import WindowControls from './WindowControls.jsx';
 import { useDragHandler } from '../hooks/useDragRegion.js';
 import { useLivestreams } from '../hooks/useLivestreams.js';
@@ -83,15 +84,17 @@ export default function DetachedChatRoot({ channelKey }) {
           {platform.charAt(0).toUpperCase()}
         </span>
         <div style={{ flex: 1 }} />
-        <button
-          type="button"
-          className="rx-btn rx-btn-ghost"
-          onClick={onRedock}
-          title="Re-dock to main window"
-          style={{ padding: '2px 8px', fontSize: 11 }}
-        >
-          ⤴ Re-dock
-        </button>
+        <Tooltip text="Re-dock to main window" align="right">
+          <button
+            type="button"
+            className="rx-btn rx-btn-ghost"
+            onClick={onRedock}
+            aria-label="Re-dock to main window"
+            style={{ padding: '2px 8px', fontSize: 11 }}
+          >
+            ⤴ Re-dock
+          </button>
+        </Tooltip>
         <WindowControls />
       </div>
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
