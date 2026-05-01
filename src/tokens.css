@@ -41,6 +41,8 @@
 
   --hair: 1px solid rgba(255, 255, 255, 0.06);
   --hair-strong: 1px solid rgba(255, 255, 255, 0.09);
+
+  --cmd-sidebar-w: 240px;
 }
 
 html, body, #root { height: 100%; margin: 0; }
@@ -194,3 +196,104 @@ body { background: var(--zinc-950); }
 .rx-tab-flashing {
   animation: rx-flash-mention 500ms steps(2, end) infinite;
 }
+
+/* ── Command layout (A) — variable-driven sidebar ──────────────── */
+:root[data-sidebar-collapsed="true"] { --cmd-sidebar-w: 40px; }
+
+.cmd-row {
+  display: grid;
+  grid-template-columns: var(--cmd-sidebar-w) minmax(0, 1fr);
+  grid-template-areas: "sidebar main";
+  flex: 1;
+  min-height: 0;
+}
+:root[data-sidebar-position="right"] .cmd-row {
+  grid-template-columns: minmax(0, 1fr) var(--cmd-sidebar-w);
+  grid-template-areas: "main sidebar";
+}
+
+.cmd-sidebar {
+  grid-area: sidebar;
+  border-right: var(--hair);
+  display: flex;
+  flex-direction: column;
+  background: var(--zinc-950);
+  min-height: 0;
+  position: relative; /* anchor for the absolutely-positioned resize handle */
+}
+:root[data-sidebar-position="right"] .cmd-sidebar {
+  border-right: none;
+  border-left: var(--hair);
+}
+
+.cmd-main {
+  grid-area: main;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+/* Channel-row layout (3-column grid — unchanged from existing inline). The
+ * platform-letter chip stays in its original position (inline with the name)
+ * in expanded mode; a SECOND copy of the chip (.cmd-row-chip-collapsed) lives
+ * outside cmd-row-text and only renders in collapsed mode. */
+.cmd-row-item {
+  display: grid;
+  grid-template-columns: 10px 1fr auto;
+  column-gap: 10px;
+  align-items: center;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border-top:    none;
+  border-bottom: none;
+  border-left:   2px solid transparent;
+  border-right:  2px solid transparent;
+  padding: 6px 12px;
+  cursor: pointer;
+  font-family: inherit;
+  color: inherit;
+}
+.cmd-row-item.active                                         { background: var(--zinc-900); border-left: 2px solid var(--zinc-200); }
+:root[data-sidebar-position="right"] .cmd-row-item.active    { border-left: 2px solid transparent; border-right: 2px solid var(--zinc-200); }
+
+/* Density: compact hides the secondary "game" line + tightens vertical padding */
+:root[data-sidebar-density="compact"] .cmd-row-meta { display: none; }
+:root[data-sidebar-density="compact"] .cmd-row-item { padding-top: 3px; padding-bottom: 3px; }
+
+/* Collapsed: hide text + functional surfaces. The width drops via the CSS-var override above. */
+:root[data-sidebar-collapsed="true"] .cmd-row-text,
+:root[data-sidebar-collapsed="true"] .cmd-row-meta,
+:root[data-sidebar-collapsed="true"] .cmd-search,
+:root[data-sidebar-collapsed="true"] .cmd-add,
+:root[data-sidebar-collapsed="true"] .cmd-toolbar,
+:root[data-sidebar-collapsed="true"] .cmd-row-item,
+:root[data-sidebar-collapsed="true"] .cmd-resize-handle { display: none !important; } /* !important beats inline display:flex on these elements */
+
+/* In collapsed mode the rail header items (Channels chiclet / live count /
+ * refresh / density toggle) are JSX-conditionally not rendered — only the
+ * chevron stays. Doing it in JSX rather than CSS sidesteps Tooltip wrapping
+ * making `> *:not(.cmd-collapse-chevron)` selector brittle.
+ * Center the lone chevron so it doesn't sit flush against either edge — the
+ * window's own resize zone lives near the outer edge and was eating clicks. */
+:root[data-sidebar-collapsed="true"] .cmd-rail-header { justify-content: center; }
+
+/* Resize handle sits on the inner edge of the rail. Position swaps via data-attr. */
+.cmd-resize-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: -2px;
+  width: 4px;
+  cursor: col-resize;
+  z-index: 1;
+}
+:root[data-sidebar-position="right"] .cmd-resize-handle {
+  right: auto;
+  left: -2px;
+}
+.cmd-resize-handle:hover { background: rgba(255, 255, 255, 0.06); }
+
+/* Collapse chevron — order pushes it to the inner edge of the rail header. */
+.cmd-collapse-chevron { order: 99; }
+:root[data-sidebar-position="right"] .cmd-collapse-chevron { order: -1; }

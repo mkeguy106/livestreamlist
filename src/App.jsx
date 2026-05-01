@@ -42,6 +42,25 @@ export default function App() {
   const [selectedKey, setSelectedKey] = useState(null);
 
   const { settings } = usePreferences();
+
+  // Sync command-layout appearance settings → document root data-attributes + CSS var.
+  // Defines the contract that tokens.css consumes; see :root[data-sidebar-*] selectors.
+  useEffect(() => {
+    if (!settings) return;
+    const a = settings.appearance ?? {};
+    const root = document.documentElement;
+    root.dataset.sidebarPosition  = a.command_sidebar_position === 'right' ? 'right' : 'left';
+    root.dataset.sidebarCollapsed = a.command_sidebar_collapsed ? 'true' : '';
+    root.dataset.sidebarDensity   = a.command_sidebar_density === 'compact' ? 'compact' : 'comfortable';
+    // When collapsed, force 48 px — an inline width here beats the CSS
+    // `:root[data-sidebar-collapsed="true"] { --cmd-sidebar-w: 48px }` rule
+    // (inline > class), so the bridge has to write the right value itself.
+    const w = a.command_sidebar_collapsed
+      ? 40
+      : Math.max(220, Math.min(520, Number(a.command_sidebar_width) || 240));
+    root.style.setProperty('--cmd-sidebar-w', `${w}px`);
+  }, [settings]);
+
   const hoverEnabled = settings?.chat?.user_card_hover !== false; // default true
   const hoverDelay = settings?.chat?.user_card_hover_delay_ms ?? 400;
   const intervalSeconds = settings?.general?.refresh_interval_seconds;

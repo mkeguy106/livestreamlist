@@ -11,6 +11,7 @@ import TitleBanner from '../components/TitleBanner.jsx';
 import Tooltip from '../components/Tooltip.jsx';
 import { useCommandTabs } from '../hooks/useCommandTabs.js';
 import { usePlayerState } from '../hooks/usePlayerState.js';
+import { usePreferences } from '../hooks/usePreferences.jsx';
 import { stopStream } from '../ipc.js';
 import { formatUptime, formatViewers } from '../utils/format.js';
 
@@ -81,6 +82,7 @@ export default function Command({ ctx }) {
   } = useCommandTabs({ livestreams });
 
   const playing = usePlayerState();
+  const { settings, patch } = usePreferences();
   const [menu, setMenu] = useState(null); // { x, y, channel }
 
   const [filter, setFilter] = useState(() => loadPref(STORAGE_KEYS.filter, 'all'));
@@ -134,33 +136,31 @@ export default function Command({ ctx }) {
 
   return (
     <>
-      <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
+      <div className="cmd-row">
         {/* Sidebar */}
-        <div
-          style={{
-            width: 240,
-            borderRight: 'var(--hair)',
-            display: 'flex',
-            flexDirection: 'column',
-            background: 'var(--zinc-950)',
-            minHeight: 0,
-            flexShrink: 0,
-          }}
-        >
-          <div style={{ padding: '10px 12px 4px', display: 'flex', alignItems: 'center', gap: 6 }}>
-            <div className="rx-chiclet">Channels</div>
-            <div style={{ flex: 1 }} />
-            <div className="rx-chiclet" style={{ color: 'var(--zinc-400)' }}>
-              {liveCount}/{filtered.length}
-            </div>
-            <IconBtn
-              title={loading ? 'Refreshing…' : 'Refresh now (F5)'}
-              onClick={() => { if (!loading) refresh(); }}
-            >
-              <IconRefresh spinning={loading} />
-            </IconBtn>
+        <div className="cmd-sidebar">
+          <div className="cmd-rail-header" style={{ padding: '10px 12px 4px', display: 'flex', alignItems: 'center', gap: 6 }}>
+            {!settings?.appearance?.command_sidebar_collapsed && (
+              <>
+                <div className="rx-chiclet">Channels</div>
+                <DensityIconBtn settings={settings} patch={patch} />
+                <div style={{ flex: 1 }} />
+                <div className="rx-chiclet" style={{ color: 'var(--zinc-400)' }}>
+                  {liveCount}/{filtered.length}
+                </div>
+                <IconBtn
+                  title={loading ? 'Refreshing…' : 'Refresh now (F5)'}
+                  onClick={() => { if (!loading) refresh(); }}
+                >
+                  <IconRefresh spinning={loading} />
+                </IconBtn>
+              </>
+            )}
+            {/* Collapse chevron — always rendered. Order CSS floats it to the inner edge. */}
+            <CollapseChevron settings={settings} patch={patch} />
           </div>
           <div
+            className="cmd-toolbar"
             style={{
               padding: '2px 10px 8px',
               display: 'flex',
@@ -221,7 +221,7 @@ export default function Command({ ctx }) {
               {filterLabel.toLowerCase()} · {sortLabel.toLowerCase()}
             </span>
           </div>
-          <div style={{ padding: '6px 10px', borderBottom: 'var(--hair)' }}>
+          <div className="cmd-search" style={{ padding: '6px 10px', borderBottom: 'var(--hair)' }}>
             <div style={{ position: 'relative' }}>
               <input
                 ref={searchRef}
@@ -301,36 +301,21 @@ export default function Command({ ctx }) {
                 >
                   <button
                     type="button"
+                    className={`cmd-row-item${active ? ' active' : ''}`}
                     onClick={() => rowClickHandler(ch.unique_key)}
                     onDoubleClick={() => {
                       if (ch.is_live) launchStream(ch.unique_key);
                     }}
                     onContextMenu={(e) => {
                       e.preventDefault();
-                      rowClickHandler(ch.unique_key);
                       setMenu({ x: e.clientX, y: e.clientY, channel: ch });
                     }}
-                    style={{
-                      width: '100%',
-                      textAlign: 'left',
-                      background: active ? 'var(--zinc-900)' : 'transparent',
-                      borderLeft: active ? '2px solid var(--zinc-200)' : '2px solid transparent',
-                      borderTop: 'none',
-                      borderRight: 'none',
-                      borderBottom: 'none',
-                      padding: '6px 12px',
-                      display: 'grid',
-                      gridTemplateColumns: '10px 1fr auto',
-                      columnGap: 10,
-                      alignItems: 'center',
-                      color: 'inherit',
-                      cursor: 'pointer',
-                      opacity: ch.is_live ? 1 : 0.45,
-                      fontFamily: 'inherit',
-                    }}
+                    style={{ opacity: ch.is_live ? 1 : 0.45 }}
                   >
                   <span className={`rx-status-dot ${ch.is_live ? 'live' : 'off'}`} />
-                  <div style={{ minWidth: 0 }}>
+
+                  {/* Center column — name row + meta line. Hidden as a unit in collapsed mode. */}
+                  <div className="cmd-row-text" style={{ minWidth: 0 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                       {ch.favorite && (
                         <Tooltip text="Unfavorite">
@@ -359,17 +344,10 @@ export default function Command({ ctx }) {
                       </span>
                       {isPlaying && (
                         <Tooltip text="Playing">
-                          <span
-                            style={{
-                              color: 'var(--ok)',
-                              fontSize: 9,
-                              lineHeight: 1,
-                            }}
-                          >
-                            ▶
-                          </span>
+                          <span style={{ color: 'var(--ok)', fontSize: 9, lineHeight: 1 }}>▶</span>
                         </Tooltip>
                       )}
+                      {/* Original inline chip — visible in expanded mode only (via cmd-row-text). */}
                       <span className={`rx-plat ${ch.platform.charAt(0)}`}>{ch.platform.charAt(0).toUpperCase()}</span>
                       {detachedKeys.has(ch.unique_key) && (
                         <Tooltip text="Open in detached window">
@@ -378,7 +356,7 @@ export default function Command({ ctx }) {
                       )}
                     </div>
                     <div
-                      className="rx-mono"
+                      className="rx-mono cmd-row-meta"
                       style={{
                         fontSize: 10,
                         color: 'var(--zinc-500)',
@@ -390,7 +368,9 @@ export default function Command({ ctx }) {
                       {ch.is_live ? (ch.game ?? 'live') : 'offline'}
                     </div>
                   </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 }}>
+
+                  {/* Viewers cluster — hidden in compact density and collapsed mode. */}
+                  <div className="cmd-row-meta" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 }}>
                     <span className="rx-mono" style={{ fontSize: 10, color: 'var(--zinc-400)' }}>
                       {ch.is_live ? formatViewers(ch.viewers) : '—'}
                     </span>
@@ -402,6 +382,7 @@ export default function Command({ ctx }) {
           </div>
           <button
             type="button"
+            className="cmd-add"
             onClick={openAddDialog}
             style={{
               padding: '8px 12px',
@@ -420,10 +401,11 @@ export default function Command({ ctx }) {
             <div className="rx-kbd">N</div>
             <span className="rx-chiclet">Add channel</span>
           </button>
+          <DragResizeHandle patch={patch} />
         </div>
 
         {/* Main */}
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+        <div className="cmd-main">
           <TabStrip
             tabs={tabKeys}
             activeKey={activeTabKey}
@@ -482,6 +464,15 @@ export default function Command({ ctx }) {
           y={menu.y}
           onClose={() => setMenu(null)}
         >
+          <ContextMenu.Item
+            onClick={() => {
+              rowClickHandler(menu.channel.unique_key);
+              setMenu(null);
+            }}
+          >
+            Open chat
+          </ContextMenu.Item>
+          <ContextMenu.Separator />
           <ContextMenu.Item
             disabled={!menu.channel.is_live || playing.has(menu.channel.unique_key)}
             onClick={() => {
@@ -721,6 +712,51 @@ function IconRefresh({ spinning }) {
     </svg>
   );
 }
+function IconDensity({ compact }) {
+  // Comfortable: two spaced lines. Compact: three dense lines.
+  return (
+    <svg
+      width="12"
+      height="12"
+      viewBox="0 0 12 12"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1"
+      strokeLinecap="square"
+    >
+      {compact ? (
+        <>
+          <path d="M2 3 L10 3" />
+          <path d="M2 6 L10 6" />
+          <path d="M2 9 L10 9" />
+        </>
+      ) : (
+        <>
+          <path d="M2 4 L10 4" />
+          <path d="M2 8 L10 8" />
+        </>
+      )}
+    </svg>
+  );
+}
+function IconChevron({ pointing }) {
+  // pointing: 'left' or 'right' — the direction the chevron's tip points.
+  // We rotate a single path so the SVG itself stays identical.
+  const transform = pointing === 'right' ? 'rotate(180 6 6)' : '';
+  return (
+    <svg
+      width="12"
+      height="12"
+      viewBox="0 0 12 12"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1"
+      strokeLinecap="square"
+    >
+      <path d="M7.5 2.5 L3.5 6 L7.5 9.5" transform={transform} />
+    </svg>
+  );
+}
 
 /* ── icon button with optional caret + active state + themed tooltip ── */
 function IconBtn({ children, caret, active, onClick, title }) {
@@ -815,5 +851,171 @@ function Dropdown({ items, selected, onSelect, onClose, width = 150 }) {
         ))}
       </div>
     </>
+  );
+}
+
+/* ── Density toggle (next to Channels chiclet in the rail header) ── */
+function DensityIconBtn({ settings, patch }) {
+  const compact = settings?.appearance?.command_sidebar_density === 'compact';
+  return (
+    <IconBtn
+      title={compact ? 'Comfortable rows' : 'Compact rows'}
+      active={compact}
+      onClick={() =>
+        patch((prev) => ({
+          ...prev,
+          appearance: {
+            ...prev.appearance,
+            command_sidebar_density: compact ? 'comfortable' : 'compact',
+          },
+        }))
+      }
+    >
+      <IconDensity compact={compact} />
+    </IconBtn>
+  );
+}
+
+/* ── Drag-to-resize handle for the rail ────────────────────────────
+ * Uses TabStrip's canonical pattern: drag state in React, listeners
+ * attached via useEffect while drag is armed. Survives Alt-Tab, Esc
+ * cancels the drag, body cursor/userSelect saved-and-restored. */
+function DragResizeHandle({ patch }) {
+  const [drag, setDrag] = useState(null); // { startX, startW, isRight } | null
+
+  const onMouseDown = (e) => {
+    e.preventDefault();
+    const root = document.documentElement;
+    const startW = parseFloat(getComputedStyle(root).getPropertyValue('--cmd-sidebar-w')) || 240;
+    setDrag({
+      startX: e.clientX,
+      startW,
+      isRight: root.dataset.sidebarPosition === 'right',
+    });
+  };
+
+  // Document-level mousemove / mouseup / Escape, attached only while a
+  // drag is armed. Cleanup runs when drag flips back to null OR when the
+  // component unmounts — handling the Alt-Tab / focus-loss case naturally.
+  useEffect(() => {
+    if (!drag) return;
+    const root = document.documentElement;
+
+    const onMove = (e) => {
+      const dx = e.clientX - drag.startX;
+      const next = Math.max(220, Math.min(520, drag.startW + (drag.isRight ? -dx : dx)));
+      root.style.setProperty('--cmd-sidebar-w', `${next}px`);
+    };
+    const finalize = (persist) => {
+      if (persist) {
+        const final = parseFloat(getComputedStyle(root).getPropertyValue('--cmd-sidebar-w')) || 240;
+        const clamped = Math.max(220, Math.min(520, Math.round(final)));
+        patch((prev) => ({
+          ...prev,
+          appearance: { ...prev.appearance, command_sidebar_width: clamped },
+        }));
+      } else {
+        // Esc cancel — restore to the start width without persisting.
+        root.style.setProperty('--cmd-sidebar-w', `${drag.startW}px`);
+      }
+      setDrag(null);
+    };
+    const onUp = () => finalize(true);
+    const onKey = (e) => { if (e.key === 'Escape') finalize(false); };
+
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [drag, patch]);
+
+  // Lock body cursor + userSelect while drag is armed; save and restore
+  // prior values so concurrent drags (e.g. TabStrip) aren't clobbered.
+  useEffect(() => {
+    if (!drag) return;
+    const prevCursor = document.body.style.cursor;
+    const prevUserSelect = document.body.style.userSelect;
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    return () => {
+      document.body.style.cursor = prevCursor;
+      document.body.style.userSelect = prevUserSelect;
+    };
+  }, [drag]);
+
+  const onDoubleClick = () => {
+    document.documentElement.style.setProperty('--cmd-sidebar-w', '240px');
+    patch((prev) => ({
+      ...prev,
+      appearance: { ...prev.appearance, command_sidebar_width: 240 },
+    }));
+  };
+
+  return (
+    <Tooltip text="Drag to resize · double-click to reset">
+      <div
+        className="cmd-resize-handle"
+        onMouseDown={onMouseDown}
+        onDoubleClick={onDoubleClick}
+      />
+    </Tooltip>
+  );
+}
+
+/* ── Collapse / expand chevron in the rail header ──────────────────
+ * Reads collapsed + position from settings (not from documentElement.dataset)
+ * so the rendered glyph + tooltip don't lag the actual state — the dataset
+ * is updated by App.jsx's bridge effect AFTER render commits, which would
+ * leave this component visually stale by one frame on every toggle. */
+function CollapseChevron({ settings, patch }) {
+  const a = settings?.appearance;
+  const collapsed = a?.command_sidebar_collapsed === true;
+  const isRight = a?.command_sidebar_position === 'right';
+
+  // Chevron points toward the COLLAPSE direction:
+  //   left-mode + expanded   → points left   (clicking collapses leftward)
+  //   left-mode + collapsed  → points right  (clicking expands rightward)
+  //   right-mode + expanded  → points right  (clicking collapses rightward)
+  //   right-mode + collapsed → points left   (clicking expands leftward)
+  const pointing =
+    (isRight && !collapsed) || (!isRight && collapsed) ? 'right' : 'left';
+
+  return (
+    <Tooltip text={collapsed ? 'Expand sidebar' : 'Collapse sidebar'} align="right">
+      <button
+        type="button"
+        className="cmd-collapse-chevron"
+        aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+        onClick={() =>
+          patch((prev) => ({
+            ...prev,
+            appearance: {
+              ...prev.appearance,
+              command_sidebar_collapsed: !prev.appearance?.command_sidebar_collapsed,
+            },
+          }))
+        }
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          padding: '3px 5px',
+          background: 'transparent',
+          border: '1px solid transparent',
+          borderRadius: 3,
+          color: 'var(--zinc-500)',
+          cursor: 'pointer',
+          lineHeight: 0,
+          fontFamily: 'inherit',
+        }}
+        onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--zinc-300)'; }}
+        onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--zinc-500)'; }}
+      >
+        <IconChevron pointing={pointing} />
+      </button>
+    </Tooltip>
   );
 }
