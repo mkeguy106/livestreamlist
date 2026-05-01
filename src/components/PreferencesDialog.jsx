@@ -618,18 +618,12 @@ function AppearanceTab({ settings, patch }) {
     <>
       <GroupLabel>General</GroupLabel>
       <Row label="Default layout" hint="Which of the three dots is selected when the app starts.">
-        <select
+        <LayoutSegment
           value={a.default_layout}
-          onChange={(e) =>
-            patch((prev) => ({ ...prev, appearance: { ...prev.appearance, default_layout: e.target.value } }))
+          onChange={(v) =>
+            patch((prev) => ({ ...prev, appearance: { ...prev.appearance, default_layout: v } }))
           }
-          className="rx-input"
-          style={{ width: 200 }}
-        >
-          <option value="command">A · Command</option>
-          <option value="columns">B · Columns</option>
-          <option value="focus">C · Focus</option>
-        </select>
+        />
       </Row>
 
       <Divider />
@@ -860,6 +854,35 @@ function GroupLabel({ children }) {
 
 function Divider() {
   return <hr style={{ border: 'none', borderTop: 'var(--hair)', margin: 0 }} />;
+}
+
+function LayoutSegment({ value, onChange }) {
+  const opt = (k, label) => (
+    <button
+      type="button"
+      key={k}
+      onClick={() => onChange(k)}
+      style={{
+        background: value === k ? 'var(--zinc-900)' : 'transparent',
+        border: `1px solid ${value === k ? 'var(--zinc-800)' : 'transparent'}`,
+        borderRadius: 3,
+        padding: '5px 10px',
+        color: value === k ? 'var(--zinc-200)' : 'var(--zinc-500)',
+        cursor: 'pointer',
+        fontFamily: 'inherit',
+        fontSize: 'var(--t-12)',
+      }}
+    >
+      {label}
+    </button>
+  );
+  return (
+    <div style={{ display: 'inline-flex', gap: 2 }}>
+      {opt('command', 'A · Command')}
+      {opt('columns', 'B · Columns')}
+      {opt('focus',   'C · Focus')}
+    </div>
+  );
 }
 
 function DensitySegment({ value, onChange }) {
