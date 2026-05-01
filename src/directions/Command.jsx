@@ -82,7 +82,7 @@ export default function Command({ ctx }) {
   } = useCommandTabs({ livestreams });
 
   const playing = usePlayerState();
-  const { patch } = usePreferences();
+  const { settings, patch } = usePreferences();
   const [menu, setMenu] = useState(null); // { x, y, channel }
 
   const [filter, setFilter] = useState(() => loadPref(STORAGE_KEYS.filter, 'all'));
@@ -151,6 +151,8 @@ export default function Command({ ctx }) {
             >
               <IconRefresh spinning={loading} />
             </IconBtn>
+            {/* Collapse chevron — floats to the inner edge via .cmd-collapse-chevron order rule. */}
+            <CollapseChevron settings={settings} patch={patch} />
           </div>
           <div
             className="cmd-toolbar"
@@ -702,6 +704,24 @@ function IconRefresh({ spinning }) {
     </svg>
   );
 }
+function IconChevron({ pointing }) {
+  // pointing: 'left' or 'right' — the direction the chevron's tip points.
+  // We rotate a single path so the SVG itself stays identical.
+  const transform = pointing === 'right' ? 'rotate(180 6 6)' : '';
+  return (
+    <svg
+      width="12"
+      height="12"
+      viewBox="0 0 12 12"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1"
+      strokeLinecap="square"
+    >
+      <path d="M7.5 2.5 L3.5 6 L7.5 9.5" transform={transform} />
+    </svg>
+  );
+}
 
 /* ── icon button with optional caret + active state + themed tooltip ── */
 function IconBtn({ children, caret, active, onClick, title }) {
@@ -885,6 +905,60 @@ function DragResizeHandle({ patch }) {
         onMouseDown={onMouseDown}
         onDoubleClick={onDoubleClick}
       />
+    </Tooltip>
+  );
+}
+
+/* ── Collapse / expand chevron in the rail header ──────────────────
+ * Reads collapsed + position from settings (not from documentElement.dataset)
+ * so the rendered glyph + tooltip don't lag the actual state — the dataset
+ * is updated by App.jsx's bridge effect AFTER render commits, which would
+ * leave this component visually stale by one frame on every toggle. */
+function CollapseChevron({ settings, patch }) {
+  const a = settings?.appearance;
+  const collapsed = a?.command_sidebar_collapsed === true;
+  const isRight = a?.command_sidebar_position === 'right';
+
+  // Chevron points toward the COLLAPSE direction:
+  //   left-mode + expanded   → points left   (clicking collapses leftward)
+  //   left-mode + collapsed  → points right  (clicking expands rightward)
+  //   right-mode + expanded  → points right  (clicking collapses rightward)
+  //   right-mode + collapsed → points left   (clicking expands leftward)
+  const pointing =
+    (isRight && !collapsed) || (!isRight && collapsed) ? 'right' : 'left';
+
+  return (
+    <Tooltip text={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}>
+      <button
+        type="button"
+        className="cmd-collapse-chevron"
+        aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+        onClick={() =>
+          patch((prev) => ({
+            ...prev,
+            appearance: {
+              ...prev.appearance,
+              command_sidebar_collapsed: !prev.appearance?.command_sidebar_collapsed,
+            },
+          }))
+        }
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          padding: '3px 5px',
+          background: 'transparent',
+          border: '1px solid transparent',
+          borderRadius: 3,
+          color: 'var(--zinc-500)',
+          cursor: 'pointer',
+          lineHeight: 0,
+          fontFamily: 'inherit',
+        }}
+        onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--zinc-300)'; }}
+        onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--zinc-500)'; }}
+      >
+        <IconChevron pointing={pointing} />
+      </button>
     </Tooltip>
   );
 }
