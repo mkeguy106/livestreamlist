@@ -267,6 +267,86 @@ All three share the same data hook (`useLivestreams`). Each has its own chat bin
 
 Selection state (`selectedKey`) lives in `App`. Layout choice persists to `localStorage` under `livestreamlist.layout`.
 
+### Command layout — variable-driven sidebar (PR #82)
+
+The Command layout's rail responds to four user-tunable settings driven by a CSS-variable + data-attribute contract on `<html>`. **No JSX branches on collapsed/density/position state** — all four affordances are either CSS-attribute-selected or rendered conditionally based on a single `settings?.appearance?.command_sidebar_collapsed` read.
+
+**Settings shape** (in `src-tauri/src/settings.rs::AppearanceSettings`, all serde-defaulted):
+
+| Field | Type | Default | Range |
+|---|---|---|---|
+| `command_sidebar_position`  | `String` | `"left"`        | `"left"` \| `"right"` |
+| `command_sidebar_width`     | `u32`    | `240`           | clamped to 220–520 on read in JS |
+| `command_sidebar_collapsed` | `bool`   | `false`         | — |
+| `command_sidebar_density`   | `String` | `"comfortable"` | `"comfortable"` \| `"compact"` |
+
+**Settings → DOM bridge** (a `useEffect` in `App.jsx` after `usePreferences()`'s destructure): writes three `data-sidebar-*` attributes and one `--cmd-sidebar-w` CSS variable on `document.documentElement`. The bridge is the **single writer** — `tokens.css` reads, never writes.
+
+```js
+root.dataset.sidebarPosition  = a.command_sidebar_position === 'right' ? 'right' : 'left';
+root.dataset.sidebarCollapsed = a.command_sidebar_collapsed ? 'true' : '';
+root.dataset.sidebarDensity   = a.command_sidebar_density === 'compact' ? 'compact' : 'comfortable';
+const w = a.command_sidebar_collapsed
+  ? 40
+  : Math.max(220, Math.min(520, Number(a.command_sidebar_width) || 240));
+root.style.setProperty('--cmd-sidebar-w', `${w}px`);
+```
+
+Two non-obvious bits:
+
+1. `--cmd-sidebar-w` is declared on **`:root`**, not `.rx-root`. The latter would shadow the variable for all descendants because `<div class="rx-root">` is a *descendant* of `<html>`, and CSS-var inheritance gives a descendant's own declaration precedence over any value flowing in from `:root`. The collapsed-width override (`:root[data-sidebar-collapsed="true"] { --cmd-sidebar-w: 40px }`) and the drag-handle's `style.setProperty` would both be dead. Caught in code review during PR #82 and worth re-checking if anyone moves the var declaration.
+2. When `command_sidebar_collapsed` is true, the bridge writes **40 px directly** rather than relying on the CSS rule. Inline style on `:root` always beats class selectors targeting the same element (specificity), so the bridge has to write the right value itself when it's the source of width. The collapsed-state CSS rule is now redundant-but-harmless documentation of intent.
+
+**CSS Grid layout** (`tokens.css` — at the bottom under "Command layout (A) — variable-driven sidebar"):
+
+```css
+.cmd-row {
+  display: grid;
+  grid-template-columns: var(--cmd-sidebar-w) minmax(0, 1fr);
+  grid-template-areas: "sidebar main";
+}
+:root[data-sidebar-position="right"] .cmd-row {
+  grid-template-columns: minmax(0, 1fr) var(--cmd-sidebar-w);
+  grid-template-areas: "main sidebar";
+}
+```
+
+Sidebar/main get `grid-area` assignments. Position swap = template-areas swap. Border side flips via the same data-attribute selector. Active-row indicator on `.cmd-row-item.active` flips from `border-left` to `border-right` so the 2 px solid bar always sits on the **outer edge** of the row (the side touching the main pane).
+
+**Class names on Command markup** (in `src/directions/Command.jsx`):
+
+| Class | Purpose | Hidden when collapsed? |
+|---|---|---|
+| `.cmd-row` | grid wrapper | — |
+| `.cmd-sidebar` | rail (`grid-area: sidebar`, `position: relative` for resize anchor) | — |
+| `.cmd-main` | chat pane (`grid-area: main`) | — |
+| `.cmd-rail-header` | rail's top header (Channels chiclet / density toggle / live count / refresh / chevron) | — but contents JSX-conditional |
+| `.cmd-toolbar` | filter / sort / hide-offline icons row | yes |
+| `.cmd-search` | channel search input | yes |
+| `.cmd-row-item` | individual channel button (3-col grid: `10px 1fr auto`) | yes |
+| `.cmd-row-item.active` | active-row state (background + outer-edge border) | n/a |
+| `.cmd-row-text` | center column wrapper (name row + meta line) | yes |
+| `.cmd-row-meta` | game/offline line + viewers cluster | yes (also hidden by compact density) |
+| `.cmd-add` | "Add channel" button | yes |
+| `.cmd-resize-handle` | drag-resize strip on the rail's inner edge | yes |
+| `.cmd-collapse-chevron` | the chevron itself | always visible |
+
+The collapsed-mode hide rules use `display: none !important` because several of those elements have inline `style={{ display: 'flex', ... }}` that beats class selectors. Important is the standard fix when the override target is an inline-styled element.
+
+**Drag-resize handle** (`DragResizeHandle` inline in `Command.jsx`): mouse-event-based per the `TabStrip.jsx::TabStrip` canonical pattern. **Never use HTML5 dnd** — `dragenter`/`dragover` are unreliable on WebKitGTK (existing pitfall, see Pitfalls section). State is `useState`, listeners are managed via `useEffect([drag])` so the drag survives Alt-Tab / focus loss (cleanup runs when the component unmounts or `drag` resets to null), and Esc cancels the drag (restores start width without persisting). Body cursor + `userSelect` are saved-and-restored so concurrent drags from `TabStrip` aren't clobbered. Sign-flip handles right-mode: `next = startW + (isRight ? -dx : dx)`. Persists on mouseup via `usePreferences().patch`.
+
+**Collapse chevron** (`CollapseChevron`): reads `collapsed` and `isRight` from `settings.appearance.*` (NOT from `document.documentElement.dataset` — the dataset is updated by the bridge **after** render commits, which would leave the chevron's glyph + tooltip visually stale by one frame on every toggle). Glyph rotates per a 4-state table (left-mode + expanded → points left, etc.). Tooltip uses `align="right"` so the popup extends leftward into the rail rather than off-screen. The chevron's CSS class has `order: 99` (left-mode) / `order: -1` (right-mode) so it floats to the rail's inner edge — but in collapsed mode the rail header's other items are JSX-conditionally not rendered (Tooltip wrapping made the previous `> *:not(.cmd-collapse-chevron)` selector brittle), and `:root[data-sidebar-collapsed="true"] .cmd-rail-header { justify-content: center; }` centers the lone chevron.
+
+**Density toggle**: same setting (`command_sidebar_density`) flipped from two places — the Sidebar density row in Preferences (a segmented Comfortable / Compact control), and a small `DensityIconBtn` next to the "Channels" chiclet in the rail header (icon shows two horizontal lines for Comfortable, three for Compact; active state when compact). Both call `patch()` against the same field.
+
+**Collapsed-state UX cuts** made during PR #82's smoke testing (worth knowing if reverting / extending):
+
+- Original spec proposed a 48 px icon-rail with platform-letter chips next to live dots. In person the dot+chip column read as a barcode (too many marks competing for attention without the channel name to disambiguate). Shipped as a 40 px chevron-only strip with the channel list completely hidden — standard "minimize sidebar" pattern.
+- `--cmd-row-h` and `--cmd-row-fs` variables were declared and overridden but no rule consumed them (density actually works through a `:root[data-sidebar-density="compact"] .cmd-row-meta { display: none }` + tightened padding override). Variables removed during code review per YAGNI.
+- The dual-chip pattern (`.cmd-row-chip-collapsed` rendering a second chip outside `cmd-row-text` so it stayed visible when `cmd-row-text` hid in collapsed mode) was removed when the chip-in-collapsed UX was cut. If reintroducing icon-rail, the dual-chip pattern is the right approach — keeps the chip's expanded-mode position unchanged.
+
+**ContextMenu viewport-clamp** (`src/components/ContextMenu.jsx`): the right-click menu auto-flips off the right/bottom edge of the viewport. Position is `useState`-owned (NOT imperative `el.style.left/top`) and computed in **`useLayoutEffect`** so the clamp runs synchronously after DOM mutation but before paint — eliminates the visible flicker the previous `useEffect` + imperative-style approach had, and prevents React's reconciler from clobbering the fix on subsequent re-renders. Edge buffer is 8 px. Right-click on a channel row no longer auto-opens its chat tab; "Open chat" lives in the menu instead (PR #82).
+
 ### Design tokens (`src/tokens.css`)
 
 Everything that's colorful or sized is a CSS var. Categories:
