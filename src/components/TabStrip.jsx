@@ -15,6 +15,7 @@
 // @keyframes lands with that work.
 
 import { useEffect, useRef, useState } from 'react';
+import Tooltip from './Tooltip.jsx';
 
 // Pixels of mouse movement after mousedown before we treat the gesture as
 // a drag (vs. a click). Below this, the click-to-activate path wins.
@@ -329,16 +330,17 @@ function Tab({
         )}
       </span>
       <TabIconBtn
-        title="Detach"
+        title="Popout"
         onClick={(e) => {
           e.stopPropagation();
           if (onDetach) onDetach();
         }}
       >
         <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="square">
-          {/* down-arrow-into-tray glyph for "detach into its own window" */}
-          <path d="M5 1 L5 6 M3 4 L5 6 L7 4" />
-          <path d="M2 8 L8 8" />
+          {/* box (top-right corner open) + arrow exiting top-right — "open in new window" */}
+          <path d="M5 3 L2 3 L2 8 L7 8 L7 5" />
+          <path d="M5 5 L9 1" />
+          <path d="M6 1 L9 1 L9 4" />
         </svg>
       </TabIconBtn>
       <TabIconBtn
@@ -357,26 +359,29 @@ function Tab({
 }
 
 function TabIconBtn({ children, onClick, title }) {
+  // align="right" — these buttons sit at the right edge of each tab; rightmost
+  // tabs would overflow the viewport with a centered tooltip.
   return (
-    <button
-      type="button"
-      aria-label={title}
-      title={title}
-      onClick={onClick}
-      style={{
-        background: 'transparent',
-        border: 'none',
-        padding: 3,
-        color: 'var(--zinc-500)',
-        cursor: 'pointer',
-        lineHeight: 0,
-        display: 'inline-flex',
-        alignItems: 'center',
-      }}
-      onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--zinc-200)'; }}
-      onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--zinc-500)'; }}
-    >
-      {children}
-    </button>
+    <Tooltip text={title} align="right">
+      <button
+        type="button"
+        aria-label={title}
+        onClick={onClick}
+        style={{
+          background: 'transparent',
+          border: 'none',
+          padding: 3,
+          color: 'var(--zinc-500)',
+          cursor: 'pointer',
+          lineHeight: 0,
+          display: 'inline-flex',
+          alignItems: 'center',
+        }}
+        onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--zinc-200)'; }}
+        onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--zinc-500)'; }}
+      >
+        {children}
+      </button>
+    </Tooltip>
   );
 }
