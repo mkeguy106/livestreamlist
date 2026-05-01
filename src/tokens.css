@@ -283,6 +283,11 @@ body { background: var(--zinc-950); }
   overflow: hidden;
 }
 
+/* In collapsed mode the rail header keeps only the chevron — Channels chiclet,
+ * live-count, and refresh button overflow in 48px. The chevron's :not(...)
+ * exception keeps it visible. */
+:root[data-sidebar-collapsed="true"] .cmd-rail-header > *:not(.cmd-collapse-chevron) { display: none; }
+
 /* Resize handle sits on the inner edge of the rail. Position swaps via data-attr. */
 .cmd-resize-handle {
   position: absolute;

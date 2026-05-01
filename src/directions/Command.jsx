@@ -139,7 +139,7 @@ export default function Command({ ctx }) {
       <div className="cmd-row">
         {/* Sidebar */}
         <div className="cmd-sidebar">
-          <div style={{ padding: '10px 12px 4px', display: 'flex', alignItems: 'center', gap: 6 }}>
+          <div className="cmd-rail-header" style={{ padding: '10px 12px 4px', display: 'flex', alignItems: 'center', gap: 6 }}>
             <div className="rx-chiclet">Channels</div>
             <div style={{ flex: 1 }} />
             <div className="rx-chiclet" style={{ color: 'var(--zinc-400)' }}>
