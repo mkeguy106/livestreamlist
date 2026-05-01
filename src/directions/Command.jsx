@@ -799,47 +799,76 @@ function Dropdown({ items, selected, onSelect, onClose, width = 150 }) {
   );
 }
 
-/* ── Drag-to-resize handle for the rail ────────────────────────── */
+/* ── Drag-to-resize handle for the rail ────────────────────────────
+ * Uses TabStrip's canonical pattern: drag state in React, listeners
+ * attached via useEffect while drag is armed. Survives Alt-Tab, Esc
+ * cancels the drag, body cursor/userSelect saved-and-restored. */
 function DragResizeHandle({ patch }) {
-  const dragRef = useRef(null);
+  const [drag, setDrag] = useState(null); // { startX, startW, isRight } | null
 
   const onMouseDown = (e) => {
     e.preventDefault();
-    const startX = e.clientX;
     const root = document.documentElement;
     const startW = parseFloat(getComputedStyle(root).getPropertyValue('--cmd-sidebar-w')) || 240;
-    const isRight = root.dataset.sidebarPosition === 'right';
+    setDrag({
+      startX: e.clientX,
+      startW,
+      isRight: root.dataset.sidebarPosition === 'right',
+    });
+  };
 
-    dragRef.current = { startX, startW, isRight };
-    document.body.style.userSelect = 'none';
-    document.body.style.cursor = 'col-resize';
+  // Document-level mousemove / mouseup / Escape, attached only while a
+  // drag is armed. Cleanup runs when drag flips back to null OR when the
+  // component unmounts — handling the Alt-Tab / focus-loss case naturally.
+  useEffect(() => {
+    if (!drag) return;
+    const root = document.documentElement;
 
-    const onMove = (ev) => {
-      if (!dragRef.current) return;
-      const { startX, startW, isRight } = dragRef.current;
-      const dx = ev.clientX - startX;
-      const next = Math.max(220, Math.min(520, startW + (isRight ? -dx : dx)));
+    const onMove = (e) => {
+      const dx = e.clientX - drag.startX;
+      const next = Math.max(220, Math.min(520, drag.startW + (drag.isRight ? -dx : dx)));
       root.style.setProperty('--cmd-sidebar-w', `${next}px`);
     };
-    const onUp = () => {
-      if (!dragRef.current) return;
-      // Re-read whatever live value is on the root and persist it.
-      const final = parseFloat(getComputedStyle(root).getPropertyValue('--cmd-sidebar-w')) || 240;
-      const clamped = Math.max(220, Math.min(520, Math.round(final)));
-      patch((prev) => ({
-        ...prev,
-        appearance: { ...prev.appearance, command_sidebar_width: clamped },
-      }));
-      dragRef.current = null;
-      document.body.style.userSelect = '';
-      document.body.style.cursor = '';
-      document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseup', onUp);
+    const finalize = (persist) => {
+      if (persist) {
+        const final = parseFloat(getComputedStyle(root).getPropertyValue('--cmd-sidebar-w')) || 240;
+        const clamped = Math.max(220, Math.min(520, Math.round(final)));
+        patch((prev) => ({
+          ...prev,
+          appearance: { ...prev.appearance, command_sidebar_width: clamped },
+        }));
+      } else {
+        // Esc cancel — restore to the start width without persisting.
+        root.style.setProperty('--cmd-sidebar-w', `${drag.startW}px`);
+      }
+      setDrag(null);
     };
+    const onUp = () => finalize(true);
+    const onKey = (e) => { if (e.key === 'Escape') finalize(false); };
 
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', onUp);
-  };
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [drag, patch]);
+
+  // Lock body cursor + userSelect while drag is armed; save and restore
+  // prior values so concurrent drags (e.g. TabStrip) aren't clobbered.
+  useEffect(() => {
+    if (!drag) return;
+    const prevCursor = document.body.style.cursor;
+    const prevUserSelect = document.body.style.userSelect;
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    return () => {
+      document.body.style.cursor = prevCursor;
+      document.body.style.userSelect = prevUserSelect;
+    };
+  }, [drag]);
 
   const onDoubleClick = () => {
     document.documentElement.style.setProperty('--cmd-sidebar-w', '240px');
