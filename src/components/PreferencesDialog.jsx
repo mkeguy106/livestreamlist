@@ -3,6 +3,7 @@ import { useAuth } from '../hooks/useAuth.jsx';
 import { usePreferences } from '../hooks/usePreferences.jsx';
 import { formatRelative } from '../utils/format.js';
 import Tooltip from './Tooltip.jsx';
+import SidebarPositionPicker from './SidebarPositionPicker.jsx';
 import {
   importTwitchFollows,
   listBlockedUsers,
@@ -615,6 +616,7 @@ function AppearanceTab({ settings, patch }) {
   const a = settings.appearance;
   return (
     <>
+      <GroupLabel>General</GroupLabel>
       <Row label="Default layout" hint="Which of the three dots is selected when the app starts.">
         <select
           value={a.default_layout}
@@ -629,6 +631,36 @@ function AppearanceTab({ settings, patch }) {
           <option value="focus">C · Focus</option>
         </select>
       </Row>
+
+      <Divider />
+      <GroupLabel>Command layout</GroupLabel>
+
+      <Row
+        label="Sidebar position"
+        hint="Where the channel list sits in the Command layout."
+      >
+        <SidebarPositionPicker
+          value={a.command_sidebar_position === 'right' ? 'right' : 'left'}
+          onChange={(v) =>
+            patch((prev) => ({ ...prev, appearance: { ...prev.appearance, command_sidebar_position: v } }))
+          }
+        />
+      </Row>
+
+      <Row
+        label="Sidebar density"
+        hint="Compact halves the row height by hiding the secondary line. Width &amp; collapse: drag the rail edge in-app, or click the rail chevron."
+      >
+        <DensitySegment
+          value={a.command_sidebar_density === 'compact' ? 'compact' : 'comfortable'}
+          onChange={(v) =>
+            patch((prev) => ({ ...prev, appearance: { ...prev.appearance, command_sidebar_density: v } }))
+          }
+        />
+      </Row>
+
+      <Divider />
+      <GroupLabel>Colors</GroupLabel>
 
       <Row
         label="Primary accent"
@@ -804,6 +836,56 @@ function ColorField({ value, onChange, placeholder }) {
           Clear
         </button>
       )}
+    </div>
+  );
+}
+
+function GroupLabel({ children }) {
+  return (
+    <div
+      style={{
+        fontSize: 9,
+        letterSpacing: '0.12em',
+        textTransform: 'uppercase',
+        color: 'var(--zinc-500)',
+        fontWeight: 500,
+        padding: '2px 0',
+        marginTop: 0,
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+function Divider() {
+  return <hr style={{ border: 'none', borderTop: 'var(--hair)', margin: 0 }} />;
+}
+
+function DensitySegment({ value, onChange }) {
+  const opt = (k, label) => (
+    <button
+      type="button"
+      key={k}
+      onClick={() => onChange(k)}
+      style={{
+        background: value === k ? 'var(--zinc-900)' : 'transparent',
+        border: `1px solid ${value === k ? 'var(--zinc-800)' : 'transparent'}`,
+        borderRadius: 3,
+        padding: '5px 10px',
+        color: value === k ? 'var(--zinc-200)' : 'var(--zinc-500)',
+        cursor: 'pointer',
+        fontFamily: 'inherit',
+        fontSize: 'var(--t-12)',
+      }}
+    >
+      {label}
+    </button>
+  );
+  return (
+    <div style={{ display: 'inline-flex', gap: 2 }}>
+      {opt('comfortable', 'Comfortable')}
+      {opt('compact', 'Compact')}
     </div>
   );
 }
