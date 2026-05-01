@@ -426,11 +426,12 @@ async fn chat_detach(app: tauri::AppHandle, unique_key: String) -> Result<(), St
         .visible(false)              // dark-first-paint discipline (PR #70 lesson)
         .background_color(tauri::webview::Color(0x09, 0x09, 0x0b, 0xff));
 
-    // Linux: parent to main so KWin keeps the detached window stacked correctly
-    // (matches the pattern in login_popup.rs).
-    if let Some(main) = app.get_webview_window("main") {
-        builder = builder.transient_for(&main).map_err(err_string)?;
-    }
+    // No transient_for(&main) — the detached chat is a peer top-level window,
+    // not a subordinate dialog. Setting WM_TRANSIENT_FOR causes KWin (and most
+    // X11 WMs) to stack/raise main alongside the popout whenever the popout
+    // gets focus, which means clicking into the popout drags main forward too.
+    // login_popup.rs intentionally keeps transient_for because those popups
+    // *should* stay tied to main; chat detach is the opposite case.
 
     let window = builder.build().map_err(err_string)?;
 
