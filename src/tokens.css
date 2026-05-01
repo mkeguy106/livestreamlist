@@ -272,7 +272,16 @@ body { background: var(--zinc-950); }
 :root[data-sidebar-collapsed="true"] .cmd-add,
 :root[data-sidebar-collapsed="true"] .cmd-toolbar,
 :root[data-sidebar-collapsed="true"] .cmd-resize-handle { display: none; }
-:root[data-sidebar-collapsed="true"] .cmd-row-item    { padding: 6px 4px; column-gap: 4px; overflow: hidden; }
+:root[data-sidebar-collapsed="true"] .cmd-row-item {
+  /* In collapsed mode the only visible row children are the status dot and
+   * .cmd-row-chip-collapsed — override the 3-col grid to two auto columns and
+   * center the whole pair in the 48 px rail. */
+  grid-template-columns: auto auto;
+  justify-content: center;
+  padding: 6px 4px;
+  column-gap: 6px;
+  overflow: hidden;
+}
 
 /* Resize handle sits on the inner edge of the rail. Position swaps via data-attr. */
 .cmd-resize-handle {
