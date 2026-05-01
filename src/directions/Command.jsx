@@ -308,7 +308,6 @@ export default function Command({ ctx }) {
                     }}
                     onContextMenu={(e) => {
                       e.preventDefault();
-                      rowClickHandler(ch.unique_key);
                       setMenu({ x: e.clientX, y: e.clientY, channel: ch });
                     }}
                     style={{ opacity: ch.is_live ? 1 : 0.45 }}
@@ -465,6 +464,15 @@ export default function Command({ ctx }) {
           y={menu.y}
           onClose={() => setMenu(null)}
         >
+          <ContextMenu.Item
+            onClick={() => {
+              rowClickHandler(menu.channel.unique_key);
+              setMenu(null);
+            }}
+          >
+            Open chat
+          </ContextMenu.Item>
+          <ContextMenu.Separator />
           <ContextMenu.Item
             disabled={!menu.channel.is_live || playing.has(menu.channel.unique_key)}
             onClick={() => {
