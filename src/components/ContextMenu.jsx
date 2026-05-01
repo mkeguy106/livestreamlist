@@ -1,10 +1,15 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import ReactDOM from 'react-dom';
 
 /**
  * Fixed-position right-click menu. Anchored at `(x, y)` in viewport
- * coordinates, auto-flips if it would overflow the bottom/right edge.
+ * coordinates, auto-flips if it would overflow the right/bottom edge.
  * Closes on outside click, scroll, Escape, or any item activation.
+ *
+ * Position is state-driven and computed in a layout effect so the
+ * corrected coords are applied before paint — avoids the visible
+ * flicker the previous useEffect+imperative-style approach had, and
+ * keeps React's reconciler from clobbering the fix on re-renders.
  *
  * Usage:
  *   <ContextMenu x={e.clientX} y={e.clientY} onClose={…}>
@@ -15,6 +20,9 @@ import ReactDOM from 'react-dom';
  */
 export default function ContextMenu({ x, y, onClose, children }) {
   const ref = useRef(null);
+  // Track the applied position separately from the requested anchor so
+  // the layout effect can flip it without a tug-of-war with JSX inline.
+  const [pos, setPos] = useState({ x, y });
 
   useEffect(() => {
     const onKey = (e) => {
@@ -34,8 +42,10 @@ export default function ContextMenu({ x, y, onClose, children }) {
     };
   }, [onClose]);
 
-  // Flip to fit viewport.
-  useEffect(() => {
+  // Flip to fit viewport. useLayoutEffect runs synchronously after DOM
+  // mutation but BEFORE the browser paints — the corrected coords land
+  // in place without the menu briefly rendering off-screen first.
+  useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
     const rect = el.getBoundingClientRect();
@@ -43,11 +53,10 @@ export default function ContextMenu({ x, y, onClose, children }) {
     const vh = window.innerHeight;
     let nx = x;
     let ny = y;
-    if (rect.right > vw) nx = Math.max(8, vw - rect.width - 4);
-    if (rect.bottom > vh) ny = Math.max(8, vh - rect.height - 4);
-    el.style.left = `${nx}px`;
-    el.style.top = `${ny}px`;
-  }, [x, y]);
+    if (x + rect.width  > vw) nx = Math.max(8, vw - rect.width  - 8);
+    if (y + rect.height > vh) ny = Math.max(8, vh - rect.height - 8);
+    if (nx !== pos.x || ny !== pos.y) setPos({ x: nx, y: ny });
+  }, [x, y, pos.x, pos.y]);
 
   return ReactDOM.createPortal(
     <div
@@ -55,8 +64,8 @@ export default function ContextMenu({ x, y, onClose, children }) {
       role="menu"
       style={{
         position: 'fixed',
-        top: y,
-        left: x,
+        top: pos.y,
+        left: pos.x,
         zIndex: 200,
         minWidth: 180,
         background: 'var(--zinc-925)',
