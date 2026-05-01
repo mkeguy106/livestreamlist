@@ -198,7 +198,7 @@ body { background: var(--zinc-950); }
 }
 
 /* ── Command layout (A) — variable-driven sidebar ──────────────── */
-:root[data-sidebar-collapsed="true"] { --cmd-sidebar-w: 28px; }
+:root[data-sidebar-collapsed="true"] { --cmd-sidebar-w: 40px; }
 
 .cmd-row {
   display: grid;
@@ -273,7 +273,10 @@ body { background: var(--zinc-950); }
 /* In collapsed mode the rail header items (Channels chiclet / live count /
  * refresh / density toggle) are JSX-conditionally not rendered — only the
  * chevron stays. Doing it in JSX rather than CSS sidesteps Tooltip wrapping
- * making `> *:not(.cmd-collapse-chevron)` selector brittle. */
+ * making `> *:not(.cmd-collapse-chevron)` selector brittle.
+ * Center the lone chevron so it doesn't sit flush against either edge — the
+ * window's own resize zone lives near the outer edge and was eating clicks. */
+:root[data-sidebar-collapsed="true"] .cmd-rail-header { justify-content: center; }
 
 /* Resize handle sits on the inner edge of the rail. Position swaps via data-attr. */
 .cmd-resize-handle {
