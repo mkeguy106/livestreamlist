@@ -29,19 +29,19 @@ use player::PlayerManager;
 use settings::{Settings, SharedSettings};
 use users::{UserMetadata, UserMetadataPatch, UserStore};
 
-struct AppState {
-    store: SharedStore,
-    http: reqwest::Client,
-    notifier: Arc<NotifyTracker>,
-    settings: SharedSettings,
-    users: Arc<UserStore>,
-    pronouns: Arc<PronounsCache>,
-    twitch_anniversary_cache: platforms::twitch_anniversary::SharedCache,
-    share_windows: share_window::SharedShareWindowState,
+pub(crate) struct AppState {
+    pub(crate) store: SharedStore,
+    pub(crate) http: reqwest::Client,
+    pub(crate) notifier: Arc<NotifyTracker>,
+    pub(crate) settings: SharedSettings,
+    pub(crate) users: Arc<UserStore>,
+    pub(crate) pronouns: Arc<PronounsCache>,
+    pub(crate) twitch_anniversary_cache: platforms::twitch_anniversary::SharedCache,
+    pub(crate) share_windows: share_window::SharedShareWindowState,
 }
 
 impl AppState {
-    fn new() -> anyhow::Result<Self> {
+    pub(crate) fn new() -> anyhow::Result<Self> {
         let store = ChannelStore::load()?;
         let http = reqwest::Client::builder()
             .user_agent(concat!(
@@ -1412,13 +1412,43 @@ fn apply_linux_webkit_workarounds() {
 #[cfg(not(target_os = "linux"))]
 fn apply_linux_webkit_workarounds() {}
 
+/// Construct AppState + per-handle managers and `manage()` them on the App.
+///
+/// Shared between production `run()` and the smoke harness binary so both
+/// paths get the same state shape. Side-effecting setup (tray, window state
+/// plugin, GTK overlay, background async tasks) stays in production `run()`
+/// where it belongs.
+pub(crate) fn manage_all_state(app: &mut tauri::App) -> anyhow::Result<()> {
+    let state = AppState::new()?;
+    let http = state.http.clone();
+    let users = Arc::clone(&state.users);
+    app.manage(state);
+
+    let handle = app.handle().clone();
+    let chat_mgr = ChatManager::new(handle.clone(), http.clone(), users.clone());
+    app.manage(chat_mgr);
+
+    let player_mgr = Arc::new(PlayerManager::new(handle.clone()));
+    app.manage(player_mgr);
+
+    let embed_mgr = embed::EmbedHost::new();
+    app.manage(embed_mgr);
+
+    let login_popup_mgr = login_popup::LoginPopupManager::new();
+    app.manage(login_popup_mgr);
+
+    let personal_dict_path = crate::config::config_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from("."))
+        .join("personal_dict.json");
+    let spellchecker = Arc::new(crate::spellcheck::SpellChecker::new(personal_dict_path));
+    app.manage(spellchecker);
+
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     apply_linux_webkit_workarounds();
-    let state = AppState::new().expect("failed to initialize app state");
-
-    let http_for_chat = state.http.clone();
-    let users_for_chat = Arc::clone(&state.users);
     tauri::Builder::default()
         .plugin(
             tauri_plugin_window_state::Builder::new()
@@ -1436,8 +1466,7 @@ pub fn run() {
                 }
             },
         ))
-        .manage(state)
-        .setup(move |app| {
+        .setup(|app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(
                     tauri_plugin_log::Builder::default()
@@ -1445,22 +1474,13 @@ pub fn run() {
                         .build(),
                 )?;
             }
-            let chat_mgr = ChatManager::new(
-                app.handle().clone(),
-                http_for_chat.clone(),
-                users_for_chat.clone(),
-            );
-            app.manage(chat_mgr);
-            let player_mgr = Arc::new(PlayerManager::new(app.handle().clone()));
-            app.manage(player_mgr);
-            let embed_mgr = embed::EmbedHost::new();
-            app.manage(embed_mgr.clone());
+            crate::manage_all_state(app)?;
             #[cfg(target_os = "linux")]
             {
                 let main = app
                     .get_webview_window("main")
                     .expect("main window must exist by setup time");
-                let host_for_setup = embed_mgr.clone();
+                let host_for_setup = app.state::<Arc<embed::EmbedHost>>().inner().clone();
                 let main_for_closure = main.clone();
                 main.run_on_main_thread(move || {
                     if let Ok(gtk_window) = main_for_closure.gtk_window() {
@@ -1471,8 +1491,6 @@ pub fn run() {
                     }
                 })?;
             }
-            let login_popup_mgr = login_popup::LoginPopupManager::new();
-            app.manage(login_popup_mgr);
             // No focus-tracking hide: `transient_for(main)` makes the WM
             // stack the embed above the main window, so when the user
             // switches to another app it naturally goes behind. Manual
@@ -1487,7 +1505,8 @@ pub fn run() {
             // single GET; populates `auth_status.youtube.handle` so the
             // login chiclet shows it without waiting for a re-login.
             if auth::youtube::load().ok().flatten().is_some() {
-                spawn_youtube_user_info_refresh(&app.handle(), http_for_chat.clone());
+                let http = app.state::<AppState>().http.clone();
+                spawn_youtube_user_info_refresh(&app.handle(), http);
             }
             // Twitch web cookie auto-scrape (Qt parity, mirrors
             // gui/app.py:306-312::extract_twitch_auth_token). If OAuth
@@ -1500,7 +1519,7 @@ pub fn run() {
                 && auth::twitch_web::stored_token().ok().flatten().is_none()
             {
                 let app_handle = app.handle().clone();
-                let http_for_scrape = http_for_chat.clone();
+                let http_for_scrape = app.state::<AppState>().http.clone();
                 tauri::async_runtime::spawn(async move {
                     let Some(token) = auth::twitch_web::extract_from_browser() else {
                         log::debug!(
@@ -1536,13 +1555,6 @@ pub fn run() {
             if let Ok(res_dir) = app.path().resource_dir() {
                 std::env::set_var("LIVESTREAMLIST_RESOURCE_DIR", &res_dir);
             }
-            let personal_dict_path = crate::config::config_dir()
-                .unwrap_or_else(|_| std::path::PathBuf::from("."))
-                .join("personal_dict.json");
-            let spellchecker = std::sync::Arc::new(
-                crate::spellcheck::SpellChecker::new(personal_dict_path),
-            );
-            app.manage(spellchecker);
             tray::build(&app.handle())?;
             window_state::register(app)?;
             Ok(())
