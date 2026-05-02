@@ -337,3 +337,64 @@ body { background: var(--zinc-950); }
     box-shadow: inset 0 0 0 1px rgba(60, 200, 60, 0);
   }
 }
+
+/* Sub-anniversary banner — pinned above chat composer */
+.rx-sub-anniv-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  background: rgba(191, 148, 255, 0.06); /* subtle purple tint */
+  border-top: var(--hair);
+  border-bottom: var(--hair);
+  font-size: var(--t-12);
+  color: var(--zinc-200);
+}
+.rx-sub-anniv-banner__star {
+  font-size: 14px;
+  flex-shrink: 0;
+}
+.rx-sub-anniv-banner__text {
+  flex: 1;
+  min-width: 0;
+}
+.rx-sub-anniv-banner__sub {
+  display: block;
+  font-size: var(--t-11);
+  color: var(--zinc-400);
+  margin-top: 2px;
+}
+.rx-sub-anniv-banner__share {
+  flex-shrink: 0;
+}
+.rx-sub-anniv-banner__dismiss {
+  background: transparent;
+  border: 0;
+  color: var(--zinc-400);
+  cursor: pointer;
+  padding: 2px 6px;
+  font-size: 16px;
+  line-height: 1;
+  border-radius: var(--r-1);
+}
+.rx-sub-anniv-banner__dismiss:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--zinc-100);
+}
+
+/* "Connect web session" lazy prompt */
+.rx-twitch-web-prompt {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  background: rgba(255, 255, 255, 0.03);
+  border-top: var(--hair);
+  border-bottom: var(--hair);
+  font-size: var(--t-12);
+  color: var(--zinc-200);
+}
+.rx-twitch-web-prompt__text {
+  flex: 1;
+  min-width: 0;
+}
