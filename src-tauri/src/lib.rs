@@ -1467,6 +1467,48 @@ pub fn run() {
             if auth::youtube::load().ok().flatten().is_some() {
                 spawn_youtube_user_info_refresh(&app.handle(), http_for_chat.clone());
             }
+            // Twitch web cookie auto-scrape (Qt parity, mirrors
+            // gui/app.py:306-312::extract_twitch_auth_token). If OAuth
+            // is logged in but no web cookie cached, try to scrape it
+            // from the user's browser. Async because validate() does a
+            // GQL ping. Silent on failure — lazy WebView fallback in
+            // auth::twitch_web::login_via_webview handles unsupported
+            // browsers / Flatpak isolation.
+            if auth::twitch::stored_identity().is_some()
+                && auth::twitch_web::stored_token().ok().flatten().is_none()
+            {
+                let app_handle = app.handle().clone();
+                let http_for_scrape = http_for_chat.clone();
+                tauri::async_runtime::spawn(async move {
+                    let Some(token) = auth::twitch_web::extract_from_browser() else {
+                        log::debug!(
+                            "twitch-web auto-scrape: no auth-token cookie found in any browser"
+                        );
+                        return;
+                    };
+                    match auth::twitch_web::validate(&http_for_scrape, &token).await {
+                        Ok(identity) => {
+                            if let Err(e) = auth::twitch_web::save_pair(&token, &identity) {
+                                log::warn!("twitch-web auto-scrape: save_pair failed: {e:#}");
+                                return;
+                            }
+                            log::info!(
+                                "twitch-web auto-scrape: captured cookie for @{}",
+                                identity.login
+                            );
+                            use tauri::Emitter;
+                            let _ = app_handle
+                                .emit("twitch:web_status_changed", Some(identity));
+                            broadcast_auth_changed(&app_handle);
+                        }
+                        Err(e) => {
+                            log::debug!(
+                                "twitch-web auto-scrape: validate failed (cookie expired?): {e:#}"
+                            );
+                        }
+                    }
+                });
+            }
             // Set the resource dir env var so spellcheck::dict::bundled_en_us_path
             // can resolve it without needing AppHandle.
             if let Ok(res_dir) = app.path().resource_dir() {
