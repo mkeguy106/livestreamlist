@@ -439,6 +439,24 @@ Module-scope DEV asserts (matching the `commandTabs.js` pattern) cover every con
 - One correction per pass — break out of the loop after the first. The next render's misspellings naturally re-evaluate.
 - Esc keydown (when popup is closed) calls `undoLast()`; if it returns a restoration, Composer rewrites text to put `originalWord` back at `position`.
 
+### Spellcheck right-click menu (PR 4 — `src/components/SpellcheckContextMenu.jsx`)
+
+Right-click on a misspelled word OR a green-pill (recently-corrected) word in the chat composer pops the themed `ContextMenu` (the same one used by the channel rail's right-click menu, viewport-clamping per PR #82).
+
+**Hit-test pattern**: Composer's outer `<form>` has `onContextMenu={onContextMenu}`. The handler calls `document.elementsFromPoint(x, y)` and looks for an element with `class="spellcheck-misspelled"` or `class="spellcheck-corrected"`. Both classes carry `data-word` (and `corrected` also carries `data-original`). Composer matches the word back to its range via `misspellings` or `recentCorrections` (first-match semantics — multiple instances of the same word in a single message resolve to the first occurrence).
+
+**Menu contents** (`SpellcheckContextMenu`):
+- `misspelled`: top-5 hunspell suggestions (fetched async via `spellcheck_suggest` IPC; "Loading…" placeholder while in flight) + separator + `Add "word" to dictionary` + `Ignore in this message`.
+- `corrected`: `Undo correction (revert to "originalWord")`.
+
+**Per-message ignore set** (`useSpellcheck.markIgnored` / `clearIgnored`): Composer-session-scoped `Set<string>` (lowercased). Words in the set are filtered out of `misspellings` BEFORE the array is exposed to the overlay or autocorrect. The set is cleared on (a) successful message send (after `chatSend` + `setText('')`), (b) channel switch (alongside `clearRecent`). Not persisted; not language-scoped.
+
+**"Add to dictionary"** calls `spellcheck_add_word` IPC (PR 1). The Rust side appends to `~/.config/livestreamlist/personal_dict.json` and updates the in-memory `PersonalDict`. The next debounced `spellcheck_check` (within 150 ms) naturally drops the word from `misspellings` because Rust's `SpellChecker::check` applies the personal dict server-side. No client-side mirror of the dict is needed.
+
+**Manual suggestion-apply**: clicking a suggestion item rewrites text via `setText` + `setCaret` + `requestAnimationFrame(setSelectionRange)` (matching the autocorrect rewrite pattern). Also calls `recordCorrection` so the word shows the green pill briefly — manually-chosen corrections are visually equivalent to autocorrected ones.
+
+**`undoCorrection(positionKey)`** is distinct from `undoLast()`: undoLast only undoes the most recent autocorrect (Esc handler); undoCorrection takes a specific position key (the same key used by `recentCorrections.set()`) and undoes that specific entry. Used by the right-click "Undo correction" item which can target any visible green pill, not just the most recent.
+
 ## Configuration
 
 Data dir (XDG):
