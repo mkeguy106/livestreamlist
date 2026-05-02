@@ -46,6 +46,12 @@ pub struct SpellChecker {
 // instance is held behind `Arc<parking_lot::Mutex<Hunspell>>` in `by_lang`;
 // all access serializes on that Mutex, so no two threads can touch the
 // raw pointer concurrently. The impls are therefore sound.
+//
+// Lock ordering across the type: `check()` acquires `by_lang` (briefly,
+// inside `dict_for`), then the per-lang `Mutex<Hunspell>`, then
+// `personal.read()`. `add_to_personal()` only acquires `personal.write()`.
+// No path holds `by_lang` and `personal` simultaneously, so there is no
+// deadlock-prone sequence.
 unsafe impl Send for SpellChecker {}
 unsafe impl Sync for SpellChecker {}
 
@@ -69,6 +75,17 @@ impl SpellChecker {
 
     /// Load (or return cached) Hunspell instance for `code`. Returns
     /// `None` if no dict matches.
+    ///
+    /// CALLER CONTRACT: the returned `Arc<Mutex<Hunspell>>` MUST be locked
+    /// (`.lock()`) and used WITHOUT any `.await` point between acquisition
+    /// and the lock guard's drop. The inner `Hunspell` wraps a raw pointer
+    /// that is `!Send`; awaiting while a lock guard is alive could see the
+    /// future scheduled onto a different worker thread, which would (a) fail
+    /// to compile because the future itself wouldn't be `Send`, but (b) if
+    /// somehow waved through, would be unsound. Keep dict-lock scopes tight
+    /// and synchronous. The current callers (`check`, `suggest`) follow this
+    /// contract — both lock the dict and complete all work before any future
+    /// `.await`.
     fn dict_for(&self, code: &str) -> Option<Arc<Mutex<hunspell_rs::Hunspell>>> {
         let mut map = self.by_lang.lock();
         if let Some(d) = map.get(code) {

@@ -61,7 +61,9 @@ impl PersonalDict {
         Ok(true)
     }
 
+    #[cfg(test)]
     pub fn len(&self) -> usize { self.set.len() }
+    #[cfg(test)]
     pub fn is_empty(&self) -> bool { self.set.is_empty() }
 
     fn save(&self) -> Result<()> {
