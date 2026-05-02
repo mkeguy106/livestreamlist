@@ -96,8 +96,12 @@ fn is_url(token: &str) -> bool {
     if token.starts_with("https://") || token.starts_with("http://") {
         return true;
     }
-    // Bare domain heuristic: contains a `.`, the part before the last `.`
-    // is alphanumeric+hyphens, the part after is 2+ alpha (TLD-like).
+    // NOTE: Bare-domain heuristic. False-positive on `word.word` patterns
+    // like `cat.dog` or `Mr.Smith` (any 2+ alpha after a dot, with valid
+    // chars before). Acceptable for chat composer — preferable to missing
+    // real URLs like `twitch.tv/user`. The cost is the very rare misspelling
+    // of a multi-word punctuation pattern that happens to fit this shape;
+    // those slip through spellcheck unflagged.
     if let Some(dot_idx) = token.rfind('.') {
         let before = &token[..dot_idx];
         let after_dot = &token[dot_idx + 1..];
@@ -122,7 +126,9 @@ fn is_colon_emote(token: &str) -> bool {
 }
 
 fn is_all_caps_shorthand(token: &str) -> bool {
-    if token.chars().count() < 3 { return false; }
+    // Byte-len is sufficient: any non-ASCII char would also fail the
+    // is_ascii_uppercase test below, so the function returns false either way.
+    if token.len() < 3 { return false; }
     token.chars().all(|c| c.is_ascii_uppercase())
 }
 

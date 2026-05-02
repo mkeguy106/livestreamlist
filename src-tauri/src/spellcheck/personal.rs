@@ -8,7 +8,7 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 const SCHEMA_VERSION: u32 = 1;
 
@@ -52,6 +52,8 @@ impl PersonalDict {
     /// disk I/O occurs.
     pub fn add(&mut self, word: &str) -> Result<bool> {
         let normalized = word.to_lowercase();
+        // Insert first; if save() fails the in-memory set is ahead by one
+        // entry, which is acceptable — the next successful save will catch up.
         if !self.set.insert(normalized) {
             return Ok(false);
         }

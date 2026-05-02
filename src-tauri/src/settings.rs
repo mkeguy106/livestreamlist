@@ -149,8 +149,13 @@ fn default_true() -> bool {
 fn default_lang() -> String {
     std::env::var("LANG")
         .ok()
-        .and_then(|l| l.split('.').next().map(|s| s.to_string()))
-        .filter(|s| !s.is_empty() && s != "C" && s != "POSIX")
+        .and_then(|l| {
+            // Drop encoding suffix (`.UTF-8`) and locale modifier (`@euro`).
+            let no_enc = l.split('.').next().unwrap_or("");
+            let trimmed = no_enc.split('@').next().unwrap_or("");
+            if trimmed.is_empty() { None } else { Some(trimmed.to_string()) }
+        })
+        .filter(|s| s != "C" && s != "POSIX")
         .unwrap_or_else(|| "en_US".to_string())
 }
 
@@ -248,8 +253,8 @@ mod tests {
         assert!(!back.show_badges);
         assert!(!back.show_mod_badges);
         assert!(!back.show_timestamps);
-        assert_eq!(back.spellcheck_enabled, false);
-        assert_eq!(back.autocorrect_enabled, false);
+        assert!(!back.spellcheck_enabled);
+        assert!(!back.autocorrect_enabled);
         assert_eq!(back.spellcheck_language, "es_ES");
     }
 
@@ -259,8 +264,8 @@ mod tests {
         // with the new fields taking their default-true / default-lang values.
         let json = r#"{"timestamp_24h":true,"history_replay_count":100,"user_card_hover":true,"user_card_hover_delay_ms":400,"show_badges":true,"show_mod_badges":true,"show_timestamps":true}"#;
         let chat: ChatSettings = serde_json::from_str(json).unwrap();
-        assert_eq!(chat.spellcheck_enabled, true);
-        assert_eq!(chat.autocorrect_enabled, true);
+        assert!(chat.spellcheck_enabled);
+        assert!(chat.autocorrect_enabled);
         assert!(!chat.spellcheck_language.is_empty());
     }
 }

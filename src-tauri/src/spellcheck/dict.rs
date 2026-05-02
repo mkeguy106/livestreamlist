@@ -1,8 +1,8 @@
 //! Enumerate hunspell dictionaries available on the host.
 //!
 //! Linux: scans `/usr/share/hunspell`, `/usr/share/myspell/dicts`, and
-//! the Flatpak host paths (`/run/host/usr/share/hunspell`). Pairs `.aff`
-//! and `.dic` files by basename.
+//! the Flatpak paths (`/run/host/usr/share/hunspell`, `/app/share/hunspell`).
+//! Pairs `.aff` and `.dic` files by basename.
 //!
 //! macOS / Windows: returns the bundled `en_US` only (no system enchant
 //! integration in this PR).
@@ -67,6 +67,9 @@ pub fn search_paths() -> Vec<PathBuf> {
 
 /// Path to the bundled fallback `en_US.aff`. `None` if not present.
 pub fn bundled_en_us_path() -> Option<PathBuf> {
+    // Caller (SpellChecker::new in lib.rs) must set LIVESTREAMLIST_RESOURCE_DIR
+    // BEFORE calling SpellChecker::new in production builds; otherwise the
+    // production resource path branch silently falls through to the dev path.
     // Production: Tauri exposes resources via the resource_dir at runtime.
     // We can't reach AppHandle from this pure function, so we consult an
     // env var that's set by SpellChecker::new (which DOES have AppHandle).
