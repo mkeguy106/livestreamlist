@@ -9,6 +9,8 @@ import {
   listBlockedUsers,
   setUserMetadata,
   spellcheckListDicts,
+  twitchWebClear,
+  twitchWebLogin,
   youtubeDetectBrowsers,
 } from '../ipc.js';
 
@@ -127,12 +129,14 @@ export default function PreferencesDialog({ open, onClose }) {
 }
 
 function AccountsTab() {
-  const { twitch, kick, youtube, chaturbate, login, logout, loginYoutubePaste, refresh } = useAuth();
+  const { twitch, twitch_web, kick, youtube, chaturbate, login, logout, loginYoutubePaste, refresh } = useAuth();
   const { settings, patch } = usePreferences();
   const [importState, setImportState] = useState(null); // {running, result, error}
   const [ytLoginRunning, setYtLoginRunning] = useState(false);
   const [cbLoginRunning, setCbLoginRunning] = useState(false);
   const [cbError, setCbError] = useState(null);
+  const [twWebRunning, setTwWebRunning] = useState(false);
+  const [twWebError, setTwWebError] = useState(null);
 
   const runChaturbateLogin = async () => {
     setCbError(null);
@@ -145,6 +149,29 @@ function AccountsTab() {
       setCbLoginRunning(false);
     }
   };
+  const runTwitchWebLogin = async () => {
+    setTwWebError(null);
+    setTwWebRunning(true);
+    try {
+      await twitchWebLogin();
+      await refresh();
+    } catch (e) {
+      setTwWebError(String(e?.message ?? e));
+    } finally {
+      setTwWebRunning(false);
+    }
+  };
+
+  const runTwitchWebClear = async () => {
+    setTwWebError(null);
+    try {
+      await twitchWebClear();
+      await refresh();
+    } catch (e) {
+      setTwWebError(String(e?.message ?? e));
+    }
+  };
+
   const [ytPasteOpen, setYtPasteOpen] = useState(false);
   const [ytError, setYtError] = useState(null);
   const [ytAdvanced, setYtAdvanced] = useState(false);
@@ -214,6 +241,40 @@ function AccountsTab() {
           </button>
         )}
       </Row>
+
+      <Row
+        label="Twitch web session"
+        hint={
+          twitch_web
+            ? `Connected as @${twitch_web.login}`
+            : 'Sign in once for sub-anniversary detection (separate from chat login)'
+        }
+      >
+        {twitch_web ? (
+          <button type="button" className="rx-btn rx-btn-ghost" onClick={runTwitchWebClear}>
+            Disconnect
+          </button>
+        ) : (
+          <button
+            type="button"
+            className="rx-btn"
+            onClick={runTwitchWebLogin}
+            disabled={twWebRunning}
+          >
+            {twWebRunning ? 'Waiting on Twitch…' : 'Connect web session'}
+          </button>
+        )}
+      </Row>
+      {twWebError && (
+        <div style={{
+          color: 'var(--warn, #f59e0b)',
+          fontSize: 'var(--t-12, 12px)',
+          margin: '4px 0 8px 0',
+          paddingLeft: 8,
+        }}>
+          {twWebError}
+        </div>
+      )}
 
       <Row label="Kick" hint={kick ? `Logged in as @${kick.login}` : 'Not logged in'}>
         {kick ? (
