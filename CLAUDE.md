@@ -475,6 +475,55 @@ Three rows at the top of the Chat tab in Preferences:
 
 **On language change**: `useSpellcheck`'s reset effect (deps `[language, enabled]`) clears `recentCorrections` + `alreadyCorrected`. The next debounced `spellcheck_check` (within 150 ms) re-evaluates against the new dictionary, so misspelled-vs-correct flags update naturally.
 
+### Sub-anniversary detection + share (PRs #104–#109)
+
+Detects when a logged-in Twitch user has a sub anniversary in the ~8-day "share window" and surfaces a banner above the chat composer. Click "Share now" → an in-app signed-in popout of Twitch's native popout chat → user clicks Twitch's Share button → Twitch fires a `USERNOTICE` → our IRC client observes it → banner auto-dismisses + popout auto-closes. Achieves Qt parity with two meaningful UX improvements: cookie capture is automatic (no manual login when user is already signed in to Twitch in any major browser) and the share popout is in-app (no cross-browser-login dependency).
+
+**Why a separate web cookie**: `gql.twitch.tv/subscriptionBenefit` rejects Helix OAuth bearer tokens; only the web `auth-token` cookie that twitch.tv sets at login authenticates that GQL query. Same constraint Qt has. Tauri's existing OAuth flow (`auth::twitch`) uses Helix and remains the chat-IRC auth — these are separate accounts in principle and mismatch detection makes that explicit.
+
+**Backend modules**:
+
+| Module | Responsibility |
+|---|---|
+| `auth/twitch_web.rs` | Web cookie capture via `rookie` browser-scrape (`extract_from_browser`) at app launch, OR via WebView popup login (`login_via_webview`) as fallback. Validates via cheap GQL `CurrentUser` query; persists token + identity to keyring (`twitch_browser_auth_token` / `twitch_web_identity`). Mismatch detection compares web-login to OAuth-login at capture time. |
+| `platforms/twitch_anniversary.rs` | GQL `subscriptionBenefit` query + 6h/5min TTL cache + pure `compute_window` (renews_at + now → days remaining in share window) + pure `parse_response`. Returns `CheckResult { info: Option<SubAnniversaryInfo>, cookie_status: 'ok' \| 'missing' \| 'expired' }` so the React hook reads cookie status synchronously without racing the event listener. |
+| `share_window.rs` | Transient `WebviewWindow` opening `https://www.twitch.tv/popout/{login}/chat` with shared profile dir at `~/.local/share/livestreamlist/webviews/twitch_web/`. `Mutex<HashMap<channel_login, WebviewWindow>>` registry. On open, an init script injects the captured cookie into the WebView's cookie jar via `document.cookie` + `window.location.reload()` (no-op if profile dir already has the cookie — happens after first share or after a manual `login_via_webview`). |
+| `chat/twitch.rs::build_usernotice` | When a USERNOTICE arrives with `msg-id ∈ {resub, sub}` AND `login.eq_ignore_ascii_case(&own.login)`, emits `chat:resub_self:{channel_key}` event with `{months, login}` payload. Drives the auto-dismiss path on the React side. |
+
+**App-launch auto-scrape** (`lib.rs::setup`): if Twitch OAuth identity is present AND no web cookie cached, spawn a background task via `tauri::async_runtime::spawn` that calls `extract_from_browser()` (rookie) → `validate()` (GQL ping) → `save_pair()`. Silent on failure — lazy WebView fallback handles Flatpak / unsupported browsers. Mirrors Qt's `gui/app.py:306-312::extract_twitch_auth_token` flow.
+
+**IPC surface** (registered in `lib.rs`): `twitch_web_login`/`twitch_web_clear` (PR 1), `twitch_anniversary_check`/`twitch_anniversary_dismiss` (PR 2), `twitch_share_resub_open`/`twitch_share_window_close` (PR 3). The check command returns a `CheckResult` struct with both info AND `cookie_status` so React renders the right UI state synchronously off a single IPC response.
+
+**Events emitted to React**:
+- `chat:resub_self:{unique_key}` `{ months, login }` — own-resub USERNOTICE observed; consumed by `useSubAnniversary` for auto-dismiss
+- `twitch:web_cookie_required` `{ reason: "missing" \| "expired" }` — emitted by `check()` for mid-session expiry (initial check is handled synchronously via `cookie_status` in the IPC response; this event remains for the case where the cookie expires AFTER `useSubAnniversary` has been mounted)
+- `twitch:web_status_changed` `Option<TwitchWebIdentity>` — emitted on auto-scrape success, manual login, and clear
+
+**Frontend** (`src/`):
+
+- `hooks/useSubAnniversary.js` — owns `info` + `connectPromptVisible` state; three event listeners; reads `cookie_status` from IPC response + sets `connectPromptVisible` synchronously (race-free); uses an `infoRef` to avoid stale-closure issues in the `chat:resub_self` listener.
+- `components/SubAnniversaryBanner.jsx` — pinned-above-composer banner: ⭐ + months + display name + `Share now` (.rx-btn-primary) + × dismiss. Subtle purple tint (Twitch sub color).
+- `components/TwitchWebConnectPrompt.jsx` — lazy-mounted alternative when `cookie_status` is missing/expired AND the user hasn't connected via Preferences yet. One-shot per app session (Connect / Not now). Calls `twitchWebLogin()` (PR 1's WebView popup).
+- `components/ChatView.jsx` — mounts `<SubAnniversaryBanner>` and `<TwitchWebConnectPrompt>` immediately above the composer. Banner takes priority over connect prompt if both could be visible.
+- `components/PreferencesDialog.jsx` — Chat tab toggle for `chat.show_sub_anniversary_banner`; Accounts tab "Twitch web session" row showing the captured identity + Disconnect button.
+
+**Settings** (`settings.rs::ChatSettings`):
+- `show_sub_anniversary_banner: bool` (default `true`)
+- `dismissed_sub_anniversaries: HashMap<String, String>` — keyed by `unique_key`, value is `renews_at` string. Naturally resets next billing cycle because `renews_at` changes.
+
+**Auto-dismiss flow** (the satisfying bit):
+1. User clicks `Share now` → popout opens, signed in via captured cookie
+2. User clicks Twitch's native Share button + types optional message + submits
+3. Twitch broadcasts USERNOTICE on IRC (`msg-id=resub`)
+4. Our chat task is already connected (per-channel via `useChat`); `build_usernotice` emits `chat:resub_self:{channel_key}`
+5. React listener fires: persists per-cycle dismissal via `twitch_anniversary_dismiss`, closes popout via `twitch_share_window_close`, clears local state — banner unmounts
+6. The USERNOTICE itself still flows through the normal chat-message path so the user sees their resub fanfare in the chat stream
+
+**Caveats / known limitations** (documented in spec):
+- Twitch only (Kick has no equivalent share affordance — confirmed via spike during brainstorming)
+- 30-day cycle assumption — annual subs return a meaningless `days_remaining_in_window` (no crash, just nonsensical math)
+- Cross-client share (sharing on phone while our IRC isn't connected) → banner naturally clears when window closes (~8 days) or via × dismiss; no immediate auto-dismiss
+
 ## Configuration
 
 Data dir (XDG):
@@ -510,6 +559,7 @@ Files:
 | `webview.destroy()` requires the wry strong count to actually reach zero | `InnerWebView::Drop` (`wry-0.54.4/src/webkitgtk/mod.rs:96-99`) is what removes the GtkWidget from its parent — there's no public API to do it manually short of reaching for the underlying webkit2gtk widget. So any structural change that introduces an Arc cycle on a `wry::WebView` will manifest as "the embed visually stays after I call unmount." Audit Arc/Weak relationships carefully when wiring callback closures around WebViews |
 | **HTML5 drag-and-drop is broken in WebKitGTK** | `dragstart` fires (it's WebKit-internal) but `dragenter`/`dragover`/`drop` are never delivered to JS — GTK's drag-drop machinery captures events before they reach the webview. Standard workarounds don't help: `text/plain` shim alongside the custom MIME, container-level event delegation via `closest('[data-tab-key]')`, and `dragDropEnabled: false` in `tauri.conf.json` all leave dragover dead. **For drag UX, use mouse events instead of HTML5 dnd.** See `src/components/TabStrip.jsx::TabStrip` for the canonical pattern: `onMouseDown` arms a drag with source key + start coords; document-level `mousemove`/`mouseup` listeners (added via `useEffect` while a drag is armed) track the cursor and use `document.elementFromPoint(...).closest('[data-tab-key]')` for drop-target identification; a movement threshold distinguishes click from drag; `mousedown` calls `e.preventDefault()` to suppress text-selection initiation; body cursor + userSelect are locked while active to prevent visual bleed onto neighboring UI |
 | `EmbedSlot`'s register-effect must NOT include `active` in its dep array | The `active` prop on `<EmbedSlot active={isActiveTab}>` flows through TWO `useEffect`s: a `register` effect (registers the slot with `EmbedLayer`) and a separate `updateActive` effect (calls `layer.updateActive(...)` on changes). If `active` is in the register effect's deps, every change runs cleanup → setup, which calls `unregister` then `register`. With the chat-tab system having exactly one slot per channelKey, `unregister` hits the `entry.refs.size === 0` branch in `EmbedLayer` and fires `embedUnmount`, destroying the wry `WebView` via `wry::WebView::Drop`. The subsequent `register` triggers a fresh `embedMount` — the user sees the YT/CB chat reload on every tab switch. The register effect's deps must be `[channelKey, isLive, layer]` only; the `active` flag's actual change is handled by the separate `updateActive` effect, which doesn't unregister. (Fixed in PR #80; documented inline at `src/components/EmbedSlot.jsx`.) |
+| Locally-generated chat IDs that get persisted to disk MUST include a per-process nonce | `chat/twitch.rs::SELF_ECHO_SEQ: AtomicU64` is process-global and resets to 0 on every app launch. Self-echo `ChatMessage`s persist to the chat log file, so on next session `replay_chat_history` can load `self-0` from the previous run into React's `bufferRef`. The new session's first send → echo gets fresh `self-0` → `useChat`'s id-dedup drops the new one as an apparent duplicate → user's first message after restart silently fails to render, even though it sent successfully to Twitch. Fix (PR #110): `SELF_ECHO_PREFIX: OnceLock<String>` initialized to Unix-millis hex on first call; IDs become `self-{prefix}-{N}`. Same pattern needed for any future locally-generated message IDs that flow through both the chat log and the dedup buffer |
 
 ## Git workflow
 
