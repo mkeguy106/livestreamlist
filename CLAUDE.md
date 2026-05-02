@@ -138,6 +138,8 @@ Declared in `src-tauri/src/lib.rs` via `#[tauri::command]`, registered in `tauri
 | `embed_set_visible` | `uniqueKey, visible: bool` | Hide/show one embed (used for modal occlusion) |
 | `embed_unmount` | `uniqueKey` | Drop the child webview; the underlying GtkWidget destroys via `wry::WebView::Drop` |
 | `chaturbate_login` / `chaturbate_logout` | — | Open the CB login popup / wipe profile dir + clear stamp |
+| `twitch_web_login` | — | Open WebView popup at twitch.tv/login; capture + validate auth-token cookie; persist. Returns identity or rejects on mismatch with OAuth login |
+| `twitch_web_clear` | — | Wipe keyring entries for twitch web cookie + identity |
 | `spellcheck_check` | `text, language, channelEmotes` | Tokenize input + return `[{ start, end, word }, ...]` for misspellings (skips `@mentions`, URLs, emote codes, all-caps shorthand, personal-dict words) |
 | `spellcheck_suggest` | `word, language` | Top 5 hunspell suggestions for a word |
 | `spellcheck_add_word` | `word` | Append to `personal_dict.json`; returns `true` if newly added |
