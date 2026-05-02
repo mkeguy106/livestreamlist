@@ -80,6 +80,7 @@ export default function Composer({ channelKey, platform, auth, mentionCandidates
   const { settings } = usePreferences();
   const spellcheckEnabled = settings?.chat?.spellcheck_enabled ?? true;
   const spellcheckLanguage = settings?.chat?.spellcheck_language ?? 'en_US';
+  const autocorrectEnabled = settings?.chat?.autocorrect_enabled ?? true;
 
   const platformAuth =
     platform === 'twitch' ? auth?.twitch : platform === 'kick' ? auth?.kick : null;
@@ -138,6 +139,7 @@ export default function Composer({ channelKey, platform, auth, mentionCandidates
   // Personal dict is empty in PR 3; PR 4 wires user-specific entries.
   const personalDictRef = useRef(new Set());
   useEffect(() => {
+    if (!autocorrectEnabled) return;
     if (!misspellings || misspellings.length === 0) return;
     const inside = rangeAtCaret(misspellings, caret);
     for (const m of misspellings) {
@@ -164,7 +166,7 @@ export default function Composer({ channelKey, platform, auth, mentionCandidates
   // re-evaluate when text or misspellings change, not on every cursor
   // movement (cursor moves alone shouldn't trigger autocorrect).
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [text, misspellings, alreadyCorrected, recordCorrection]);
+  }, [autocorrectEnabled, text, misspellings, alreadyCorrected, recordCorrection]);
 
   const mentionsSorted = useMemo(
     () => Array.from(new Set(mentionCandidates ?? [])),

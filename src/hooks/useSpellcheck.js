@@ -174,6 +174,17 @@ export function useSpellcheck({ text, enabled, language, channelEmotes }) {
     };
   }, [recentCorrections]);
 
+  // Reset recent-correction state when language changes (different
+  // dictionary may flag/unflag different words; carrying the session
+  // memory across languages is misleading) OR when spellcheck is
+  // toggled off (visual cleanup; pills shouldn't persist after disable).
+  useEffect(() => {
+    setRecentCorrections(new Map());
+    setAlreadyCorrected(new Set());
+    lastCorrectionRef.current = null;
+    keystrokesSinceCorrectionRef.current = 0;
+  }, [language, enabled]);
+
   // ── Track keystrokes since last correction ────────────────────────────
   // Triggered by every text change. We count anything that ISN'T the
   // autocorrect rewrite itself; Composer is responsible for not bumping
