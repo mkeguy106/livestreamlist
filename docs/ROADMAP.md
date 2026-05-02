@@ -358,7 +358,7 @@ Gap analysis against the Qt app (`~/livestream.list.qt/`) — docs (`README.md`,
   - [x] PR 2: Anniversary detection backend (`platforms/twitch_anniversary.rs` GQL + cache + IPC) — pure `compute_window`/`parse_response` with 21 unit tests, 6h/5min TTL cache, 2 IPC commands (PR #105)
   - [x] PR 3: Share popout window (`share_window.rs` + 2 IPC commands) — opens `twitch.tv/popout/{login}/chat` in a transient signed-in WebviewWindow so user can click Twitch's native Share button (PR #106)
   - [x] PR 4: Banner UI + auto-dismiss + Preferences toggle (`SubAnniversaryBanner`/`TwitchWebConnectPrompt`/`useSubAnniversary` + `chat:resub_self:{key}` event) (PR #107)
-  - [x] PR 5: Browser cookie auto-scrape via `rookie` + race-fix (`extract_from_browser` at app launch + sync `cookie_status` in IPC response) — Qt parity, no manual login needed when user is already signed into Twitch in their browser (PR #N)
+  - [x] PR 5: Browser cookie auto-scrape via `rookie` + race-fix (`extract_from_browser` at app launch + sync `cookie_status` in IPC response) — Qt parity, no manual login needed when user is already signed into Twitch in their browser (PR #108)
 - [ ] **Custom highlight keywords** — user list of words that trigger the mention highlight style + optional notification. → Ph 3
 - [ ] **Local echo for sent Twitch messages** — Twitch does not echo own PRIVMSGs; synthesise a local echo using `USERSTATE` tags so the user sees their own send immediately. → Ph 2b (sending)
 - [ ] **Prediction badge tooltips** — parse the `predictions` badge version (`blue-1` etc.) and render a descriptive tooltip ("Predicted: Blue"). → Ph 3
