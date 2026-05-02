@@ -1162,10 +1162,17 @@ fn twitch_share_resub_open(
             channel.platform
         ));
     }
+    // Pull the captured cookie (if any) so the popout's profile dir
+    // gets it via init-script injection on first load. PR 1's manual
+    // login flow naturally seeds the profile dir; PR 5's browser
+    // auto-scrape goes straight to the keyring without touching the
+    // profile dir, leaving the popout anonymous without this bridge.
+    let cookie = auth::twitch_web::stored_token().ok().flatten();
     share_window::open(
         &app,
         &channel.channel_id,
         &channel.display_name,
+        cookie.as_deref(),
         &state.share_windows,
     )
     .map_err(err_string)
