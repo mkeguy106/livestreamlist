@@ -72,6 +72,14 @@ export const getUserMessages = (channelKey, userId, limit) =>
   invoke('get_user_messages', { channelKey, userId, limit });
 export const listBlockedUsers = () => invoke('list_blocked_users');
 
+// Spellcheck (PR 1 — engine + IPC only; UI lands in PR 2+)
+export const spellcheckCheck = (text, language, channelEmotes) =>
+  invoke('spellcheck_check', { text, language, channelEmotes: channelEmotes ?? [] });
+export const spellcheckSuggest = (word, language) =>
+  invoke('spellcheck_suggest', { word, language });
+export const spellcheckAddWord = (word) => invoke('spellcheck_add_word', { word });
+export const spellcheckListDicts = () => invoke('spellcheck_list_dicts');
+
 /**
  * Subscribe to a Tauri-side event. Returns an unlisten function.
  * In browser-dev mode this routes through our in-memory mock event bus so the
@@ -411,6 +419,18 @@ async function mockInvoke(name, args) {
           updated_at: new Date().toISOString(),
         },
       ];
+    case 'spellcheck_check':
+      // Browser-dev: return empty (no errors found).
+      return [];
+    case 'spellcheck_suggest':
+      // Browser-dev: return empty suggestions.
+      return [];
+    case 'spellcheck_add_word':
+      // Browser-dev: always succeeds silently.
+      return true;
+    case 'spellcheck_list_dicts':
+      // Browser-dev: return a sample dictionary.
+      return [{ code: 'en_US', name: 'English (US)' }];
     case 'embed_mount':
     case 'embed_bounds':
     case 'embed_set_visible':
