@@ -17,12 +17,34 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use tauri::webview::Cookie;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use tauri::utils::config::Color;
+use tauri::webview::{Cookie, PageLoadEvent, PageLoadPayload};
+use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
 
 use super::tokens;
 
 const KEYRING_TOKEN: &str = "twitch_browser_auth_token";
 const KEYRING_IDENTITY: &str = "twitch_web_identity";
+
+const LOGIN_WINDOW_LABEL: &str = "twitch-web-login";
+const LOGIN_URL: &str = "https://www.twitch.tv/login";
+const SITE_URL: &str = "https://www.twitch.tv/";
+const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(750);
+const LOGIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// Where the WebView keeps cookies / IndexedDB / cache. Shared with
+/// the share-popout window in PR 3 so the captured cookie is visible
+/// to that window without a re-login.
+pub fn webview_profile_dir() -> Result<std::path::PathBuf> {
+    let dir = crate::config::data_dir()?
+        .join("webviews")
+        .join("twitch_web");
+    std::fs::create_dir_all(&dir)
+        .with_context(|| format!("creating webview profile dir {}", dir.display()))?;
+    Ok(dir)
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TwitchWebIdentity {
@@ -161,6 +183,123 @@ pub async fn status(client: &reqwest::Client) -> Result<Option<TwitchWebIdentity
             let _ = clear();
             Ok(None)
         }
+    }
+}
+
+/// Open the popup, poll for the auth-token cookie, validate it via
+/// GQL, and persist it. Returns the resolved identity. Errors when the
+/// user closes the window before signing in or when the 5-min timeout
+/// elapses.
+///
+/// Re-entry: if the login window is already open (user double-clicked),
+/// we focus the existing one and start a parallel poll loop against it
+/// — closing it would race the first invocation's poll.
+pub async fn login_via_webview(
+    app: AppHandle,
+    client: reqwest::Client,
+) -> Result<TwitchWebIdentity> {
+    let initial_login = stored_identity().map(|i| i.login);
+
+    let closed = Arc::new(AtomicBool::new(false));
+
+    let window = if let Some(existing) = app.get_webview_window(LOGIN_WINDOW_LABEL) {
+        let _ = existing.set_focus();
+        existing
+    } else {
+        let profile_dir = webview_profile_dir()?;
+        let main = app.get_webview_window("main");
+        let zinc_950 = Color(9, 9, 11, 255);
+        let mut builder = WebviewWindowBuilder::new(
+            &app,
+            LOGIN_WINDOW_LABEL,
+            WebviewUrl::External(LOGIN_URL.parse()?),
+        )
+        .title("Sign in to Twitch (web)")
+        .inner_size(520.0, 760.0)
+        .min_inner_size(480.0, 640.0)
+        .data_directory(profile_dir)
+        .visible(false)
+        .background_color(zinc_950)
+        .center()
+        .devtools(cfg!(debug_assertions))
+        .on_page_load(|w: WebviewWindow, payload: PageLoadPayload<'_>| {
+            if matches!(payload.event(), PageLoadEvent::Finished) {
+                let _ = w.show();
+            }
+        });
+        if let Some(main) = main.as_ref() {
+            builder = builder
+                .transient_for(main)
+                .context("transient_for(main) on Twitch web login window")?;
+        }
+        builder.build().context("opening Twitch web login window")?
+    };
+
+    let closed_for_event = closed.clone();
+    window.on_window_event(move |event| {
+        if matches!(event, WindowEvent::Destroyed | WindowEvent::CloseRequested { .. }) {
+            closed_for_event.store(true, Ordering::Relaxed);
+        }
+    });
+
+    let site: url::Url = SITE_URL.parse()?;
+    let started = std::time::Instant::now();
+
+    loop {
+        // Close check FIRST — see chaturbate.rs comment for why this
+        // ordering matters (cookies_for_url on a destroyed webview
+        // can hang indefinitely).
+        if closed.load(Ordering::Relaxed)
+            || app.get_webview_window(LOGIN_WINDOW_LABEL).is_none()
+        {
+            if let Some(id) = stored_identity() {
+                if Some(id.login.clone()) != initial_login {
+                    return Ok(id);
+                }
+            }
+            anyhow::bail!("login window closed before sign-in completed");
+        }
+
+        match window.cookies_for_url(site.clone()) {
+            Ok(jar) => {
+                if let Some(token) = extract_auth_token(&jar) {
+                    // Got the cookie — validate immediately. If validate
+                    // fails (e.g. 2FA partway through and we caught a
+                    // half-set cookie) keep polling; the user will
+                    // either complete login (success next iteration) or
+                    // close the window (close-check will bail).
+                    match validate(&client, &token).await {
+                        Ok(identity) => {
+                            save_pair(&token, &identity)?;
+                            let _ = window.close();
+                            return Ok(identity);
+                        }
+                        Err(e) => {
+                            log::debug!("cookie present but validate failed (probably mid-login): {e:#}");
+                        }
+                    }
+                }
+            }
+            Err(e) => log::debug!("cookies_for_url(twitch.tv): {e}"),
+        }
+
+        if closed.load(Ordering::Relaxed)
+            || app.get_webview_window(LOGIN_WINDOW_LABEL).is_none()
+        {
+            if let Some(id) = stored_identity() {
+                if Some(id.login.clone()) != initial_login {
+                    return Ok(id);
+                }
+            }
+            anyhow::bail!("login window closed before sign-in completed");
+        }
+
+        if started.elapsed() > LOGIN_TIMEOUT {
+            let _ = window.close();
+            anyhow::bail!("Twitch web login timed out after 5 minutes");
+        }
+
+        tokio::time::sleep(POLL_INTERVAL).await;
     }
 }
 
