@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { chatOpenInBrowser, chatSend, listEmotes } from '../ipc.js';
 import Tooltip from './Tooltip.jsx';
+import SpellcheckOverlay from './SpellcheckOverlay.jsx';
+import { useSpellcheck } from '../hooks/useSpellcheck.js';
+import { usePreferences } from '../hooks/usePreferences.jsx';
 
 const MAX_LEN = 500;
 const SUGGESTION_CAP = 75;
@@ -16,6 +19,10 @@ export default function Composer({ channelKey, platform, auth, mentionCandidates
   const [emotes, setEmotes] = useState([]);
   const [popup, setPopup] = useState(null); // { kind, query, start, items, index }
   const inputRef = useRef(null);
+
+  const { settings } = usePreferences();
+  const spellcheckEnabled = settings?.chat?.spellcheck_enabled ?? true;
+  const spellcheckLanguage = settings?.chat?.spellcheck_language ?? 'en_US';
 
   const platformAuth =
     platform === 'twitch' ? auth?.twitch : platform === 'kick' ? auth?.kick : null;
@@ -36,9 +43,21 @@ export default function Composer({ channelKey, platform, auth, mentionCandidates
     return () => { cancelled = true; };
   }, [channelKey]);
 
+  // Memoize the names array so useSpellcheck's dep array sees a stable
+  // reference across re-renders (the array identity changes when the
+  // underlying emotes change, which is the right time to re-check).
+  const emoteNames = useMemo(() => emotes.map((e) => e.name), [emotes]);
+
   useEffect(() => {
     if (!authed) setError(null);
   }, [authed, channelKey]);
+
+  const { misspellings } = useSpellcheck({
+    text,
+    enabled: spellcheckEnabled && authed,
+    language: spellcheckLanguage,
+    channelEmotes: emoteNames,
+  });
 
   const mentionsSorted = useMemo(
     () => Array.from(new Set(mentionCandidates ?? [])),
@@ -158,35 +177,44 @@ export default function Composer({ channelKey, platform, auth, mentionCandidates
         <div className="rx-mono rx-chiclet" style={{ color: 'var(--zinc-600)' }}>
           {authed ? `@${platformAuth.login}` : platform}
         </div>
-        <input
-          ref={inputRef}
-          type="text"
-          className="rx-input"
-          style={{ flex: 1 }}
-          placeholder={placeholder}
-          value={text}
-          onChange={onChange}
-          onKeyDown={onKey}
-          onKeyUp={(e) => {
-            // Popup-navigation keys (↑↓ Tab Enter Esc) are handled by
-            // onKeyDown — recomputing here would clobber the index
-            // increment with a fresh `index: 0`.
-            if (
-              popup &&
-              (e.key === 'ArrowUp' ||
-                e.key === 'ArrowDown' ||
-                e.key === 'Tab' ||
-                e.key === 'Enter' ||
-                e.key === 'Escape')
-            ) {
-              return;
-            }
-            recomputePopup(e.currentTarget.value, e.currentTarget.selectionStart);
-          }}
-          onClick={(e) => recomputePopup(e.currentTarget.value, e.currentTarget.selectionStart)}
-          disabled={!authed || busy}
-          maxLength={MAX_LEN}
-        />
+        <div style={{ position: 'relative', flex: 1, minWidth: 0 }}>
+          <input
+            ref={inputRef}
+            type="text"
+            className="rx-input"
+            style={{ width: '100%' }}
+            placeholder={placeholder}
+            value={text}
+            onChange={onChange}
+            onKeyDown={onKey}
+            onKeyUp={(e) => {
+              // Popup-navigation keys (↑↓ Tab Enter Esc) are handled by
+              // onKeyDown — recomputing here would clobber the index
+              // increment with a fresh `index: 0`.
+              if (
+                popup &&
+                (e.key === 'ArrowUp' ||
+                  e.key === 'ArrowDown' ||
+                  e.key === 'Tab' ||
+                  e.key === 'Enter' ||
+                  e.key === 'Escape')
+              ) {
+                return;
+              }
+              recomputePopup(e.currentTarget.value, e.currentTarget.selectionStart);
+            }}
+            onClick={(e) => recomputePopup(e.currentTarget.value, e.currentTarget.selectionStart)}
+            disabled={!authed || busy}
+            maxLength={MAX_LEN}
+          />
+          {spellcheckEnabled && authed && (
+            <SpellcheckOverlay
+              inputRef={inputRef}
+              text={text}
+              misspellings={misspellings}
+            />
+          )}
+        </div>
         {channelKey && (
           <Tooltip
             placement="top"
