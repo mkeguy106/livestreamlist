@@ -14,6 +14,7 @@ mod platforms;
 mod player;
 mod refresh;
 mod settings;
+mod share_window;
 mod spellcheck;
 mod streamlink;
 mod tray;
@@ -36,6 +37,7 @@ struct AppState {
     users: Arc<UserStore>,
     pronouns: Arc<PronounsCache>,
     twitch_anniversary_cache: platforms::twitch_anniversary::SharedCache,
+    share_windows: share_window::SharedShareWindowState,
 }
 
 impl AppState {
@@ -70,6 +72,7 @@ impl AppState {
             users,
             pronouns,
             twitch_anniversary_cache: Arc::new(platforms::twitch_anniversary::Cache::new()),
+            share_windows: Arc::new(share_window::ShareWindowState::new()),
         })
     }
 }
