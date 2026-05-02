@@ -46,13 +46,56 @@ fn label_for(channel_login: &str) -> String {
     format!("share-resub-{channel_login}")
 }
 
+/// Build the cookie-injection init script. If the WebView profile dir
+/// already has the auth-token cookie (e.g. from a prior PR 1 manual
+/// login flow that ran in this same profile dir), the script is a
+/// no-op. Otherwise it sets the cookie via `document.cookie` and
+/// reloads — the second load sends the cookie and Twitch authenticates.
+///
+/// This bridges the gap between PR 5's browser-cookie auto-scrape
+/// (which captures the value into the keyring but never deposits it
+/// into the WebView profile dir) and PR 3's share popout (which needs
+/// the cookie in the profile dir to load signed-in).
+///
+/// Twitch's `auth-token` cookie is normally `Secure; HttpOnly;
+/// SameSite=None` server-set; HttpOnly cannot be set via JS so the
+/// flag is dropped, but Twitch's server doesn't care about cookie
+/// flags on incoming requests — the value is what authenticates.
+fn build_cookie_injection_script(token: &str) -> String {
+    // Defensive: JSON-encode the token to neutralise any quote/semicolon
+    // shenanigans. Real Twitch auth-tokens are JWT-shaped (no special
+    // chars) but this is one-line cheap insurance.
+    let encoded = serde_json::to_string(token).unwrap_or_else(|_| "\"\"".to_string());
+    format!(
+        r#"
+(function() {{
+    try {{
+        var has = document.cookie.split(';').some(function(c) {{
+            return c.trim().indexOf('auth-token=') === 0;
+        }});
+        if (has) return;
+        var v = {encoded};
+        document.cookie = 'auth-token=' + v + '; domain=.twitch.tv; path=/; secure; samesite=lax';
+        window.location.reload();
+    }} catch (e) {{}}
+}})();
+"#
+    )
+}
+
 /// Open Twitch's popout chat for the given channel. If a window for
 /// this channel is already open, focus it instead of creating a
 /// duplicate.
+///
+/// `cookie`: if `Some`, the WebView is initialised with a script that
+/// deposits the cookie into the profile dir on first load (only when
+/// the profile dir doesn't already have it). Pass the value from
+/// `auth::twitch_web::stored_token()`.
 pub fn open(
     app: &AppHandle,
     channel_login: &str,
     display_name: &str,
+    cookie: Option<&str>,
     state: &ShareWindowState,
 ) -> Result<()> {
     let label = label_for(channel_login);
@@ -90,6 +133,9 @@ pub fn open(
             let _ = w.show();
         }
     });
+    if let Some(token) = cookie {
+        builder = builder.initialization_script(build_cookie_injection_script(token));
+    }
     if let Some(main) = main.as_ref() {
         builder = builder
             .transient_for(main)
