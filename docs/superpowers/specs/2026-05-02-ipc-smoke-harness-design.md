@@ -96,11 +96,13 @@ open_in_browser, open_url,
 
 The dispatch order is:
 
-1. **Parse JSON args** → fail with `"kind":"deserialize"` error if shape is wrong (this is what catches marshalling bugs).
+1. **Parse the input JSON syntactically** → fail with `"kind":"input"` if it isn't valid JSON.
 2. **Check denylist** → if hit, return `{"ok":false,"error":"command 'X' is blocked in smoke harness; use --allow-side-effects to dispatch","kind":"blocked"}`.
-3. **Call `get_ipc_response`** → dispatch through Tauri's real IPC machinery.
+3. **Call `get_ipc_response`** → dispatch through Tauri's real IPC machinery. Tauri's serde-based command-arg deserialization runs here and produces `"kind":"deserialize"` on shape mismatches; command bodies that return `Err` produce `"kind":"command"`.
 
-So marshalling is verified for **every** command including denied ones — the agent sees the right error class for the right kind of failure. A denylist hit means the args were valid; a deserialize error means the args were wrong; a successful response means the command actually ran.
+For **unblocked** commands all three checks fire, so marshalling is fully verified. For **denied** commands only steps 1–2 run — the marshalling check (step 3) is gated on actually dispatching, which we deliberately don't do. Agents who want marshalling-only verification on a denied command pass `--allow-side-effects` (which logs a warning per dispatch but otherwise runs the full pipeline).
+
+This is a small departure from "marshalling for all 62 for free." The alternative (running Tauri's deserializer without the command body) would require maintaining per-command arg-shape stubs and is not worth the maintenance cost.
 
 `--allow-side-effects` opt-out lets the agent fire one anyway. Each side-effecting command logs a clear stderr warning when dispatched in this mode (`WARN: dispatching side-effecting command 'chat_send' under --allow-side-effects`).
 
