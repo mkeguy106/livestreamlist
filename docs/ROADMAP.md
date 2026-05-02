@@ -353,11 +353,12 @@ Gap analysis against the Qt app (`~/livestream.list.qt/`) — docs (`README.md`,
 - [ ] **ROOMSTATE → chat-mode banners** — parse `slow`, `subs-only`, `emote-only`, `followers-only` (minutes; `-1` = off), `r9k` and surface as a dismissible banner row above the message list. → Ph 3
 - [ ] **`/me` action messages** — detect `\x01ACTION …\x01` payload and render in italic with the username coloured like the body. → Ph 3
 - [ ] **First-message (`first-msg=1`) highlight** — shipped? (check current chat rendering); if not, add a subtle left accent / tinted row. → shipped?
-- [x] **Sub-anniversary banner** — when the logged-in user's Twitch anniversary is detected via GraphQL (the IRC mention is a roadmap artifact; ready-to-share is detected via GQL `subscriptionBenefit`, not IRC), show a one-shot dismissible banner per billing cycle. (PRs #104, #105, #106, #N)
+- [x] **Sub-anniversary banner** — when the logged-in user's Twitch anniversary is detected via GraphQL (the IRC mention is a roadmap artifact; ready-to-share is detected via GQL `subscriptionBenefit`, not IRC), show a one-shot dismissible banner per billing cycle. (PRs #104, #105, #106, #107, #N)
   - [x] PR 1: Twitch web cookie infrastructure (`auth/twitch_web.rs` + Preferences row) — foundation for GQL `subscriptionBenefit` queries that reject Helix bearers (PR #104)
   - [x] PR 2: Anniversary detection backend (`platforms/twitch_anniversary.rs` GQL + cache + IPC) — pure `compute_window`/`parse_response` with 21 unit tests, 6h/5min TTL cache, 2 IPC commands (PR #105)
   - [x] PR 3: Share popout window (`share_window.rs` + 2 IPC commands) — opens `twitch.tv/popout/{login}/chat` in a transient signed-in WebviewWindow so user can click Twitch's native Share button (PR #106)
   - [x] PR 4: Banner UI + auto-dismiss + Preferences toggle (`SubAnniversaryBanner`/`TwitchWebConnectPrompt`/`useSubAnniversary` + `chat:resub_self:{key}` event) (PR #107)
+  - [x] PR 5: Browser cookie auto-scrape via `rookie` + race-fix (`extract_from_browser` at app launch + sync `cookie_status` in IPC response) — Qt parity, no manual login needed when user is already signed into Twitch in their browser (PR #N)
 - [ ] **Custom highlight keywords** — user list of words that trigger the mention highlight style + optional notification. → Ph 3
 - [ ] **Local echo for sent Twitch messages** — Twitch does not echo own PRIVMSGs; synthesise a local echo using `USERSTATE` tags so the user sees their own send immediately. → Ph 2b (sending)
 - [ ] **Prediction badge tooltips** — parse the `predictions` badge version (`blue-1` etc.) and render a descriptive tooltip ("Predicted: Blue"). → Ph 3
