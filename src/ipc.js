@@ -51,6 +51,10 @@ export const twitchLogin = () => invoke('twitch_login');
 export const twitchLogout = () => invoke('twitch_logout');
 export const twitchWebLogin = () => invoke('twitch_web_login');
 export const twitchWebClear = () => invoke('twitch_web_clear');
+export const twitchAnniversaryCheck = (uniqueKey) =>
+  invoke('twitch_anniversary_check', { uniqueKey });
+export const twitchAnniversaryDismiss = (uniqueKey, renewsAt) =>
+  invoke('twitch_anniversary_dismiss', { uniqueKey, renewsAt });
 export const kickLogin = () => invoke('kick_login');
 export const kickLogout = () => invoke('kick_logout');
 export const youtubeLogin = () => invoke('youtube_login');
@@ -276,6 +280,12 @@ async function mockInvoke(name, args) {
       return mockAuth.twitch_web;
     case 'twitch_web_clear':
       mockAuth = { ...mockAuth, twitch_web: null };
+      return null;
+    case 'twitch_anniversary_check':
+      // Mock: always return null (no anniversary in browser-only dev).
+      // PR 4 brainstorming may want a "force show" flag for visual testing.
+      return null;
+    case 'twitch_anniversary_dismiss':
       return null;
     case 'kick_login':
       mockAuth = { ...mockAuth, kick: { login: 'mock_kick', user_id: '0' } };

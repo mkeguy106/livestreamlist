@@ -354,7 +354,8 @@ Gap analysis against the Qt app (`~/livestream.list.qt/`) — docs (`README.md`,
 - [ ] **`/me` action messages** — detect `\x01ACTION …\x01` payload and render in italic with the username coloured like the body. → Ph 3
 - [ ] **First-message (`first-msg=1`) highlight** — shipped? (check current chat rendering); if not, add a subtle left accent / tinted row. → shipped?
 - [ ] **Sub-anniversary banner** — when the logged-in user's Twitch anniversary is detected via GraphQL (the IRC mention is a roadmap artifact; ready-to-share is detected via GQL `subscriptionBenefit`, not IRC), show a one-shot dismissible banner per billing cycle. → Ph 3
-  - [x] PR 1: Twitch web cookie infrastructure (`auth/twitch_web.rs` + Preferences row) — foundation for GQL `subscriptionBenefit` queries that reject Helix bearers (PR #N)
+  - [x] PR 1: Twitch web cookie infrastructure (`auth/twitch_web.rs` + Preferences row) — foundation for GQL `subscriptionBenefit` queries that reject Helix bearers (PR #104)
+  - [x] PR 2: Anniversary detection backend (`platforms/twitch_anniversary.rs` GQL + cache + IPC) — pure `compute_window`/`parse_response` with 21 unit tests, 6h/5min TTL cache, 2 IPC commands (PR #105)
 - [ ] **Custom highlight keywords** — user list of words that trigger the mention highlight style + optional notification. → Ph 3
 - [ ] **Local echo for sent Twitch messages** — Twitch does not echo own PRIVMSGs; synthesise a local echo using `USERSTATE` tags so the user sees their own send immediately. → Ph 2b (sending)
 - [ ] **Prediction badge tooltips** — parse the `predictions` badge version (`blue-1` etc.) and render a descriptive tooltip ("Predicted: Blue"). → Ph 3

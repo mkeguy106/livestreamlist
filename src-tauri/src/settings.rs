@@ -129,6 +129,10 @@ pub struct ChatSettings {
     pub autocorrect_enabled: bool,
     #[serde(default = "default_lang")]
     pub spellcheck_language: String,
+    #[serde(default = "default_true")]
+    pub show_sub_anniversary_banner: bool,
+    #[serde(default)]
+    pub dismissed_sub_anniversaries: std::collections::HashMap<String, String>,
 }
 
 fn default_timestamp_24h() -> bool {
@@ -172,6 +176,8 @@ impl Default for ChatSettings {
             spellcheck_enabled: default_true(),
             autocorrect_enabled: default_true(),
             spellcheck_language: default_lang(),
+            show_sub_anniversary_banner: default_true(),
+            dismissed_sub_anniversaries: std::collections::HashMap::new(),
         }
     }
 }
@@ -247,6 +253,8 @@ mod tests {
             spellcheck_enabled: false,
             autocorrect_enabled: false,
             spellcheck_language: "es_ES".to_string(),
+            show_sub_anniversary_banner: true,
+            dismissed_sub_anniversaries: std::collections::HashMap::new(),
         };
         let json = serde_json::to_string(&chat).unwrap();
         let back: ChatSettings = serde_json::from_str(&json).unwrap();

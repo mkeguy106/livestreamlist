@@ -35,6 +35,7 @@ struct AppState {
     settings: SharedSettings,
     users: Arc<UserStore>,
     pronouns: Arc<PronounsCache>,
+    twitch_anniversary_cache: platforms::twitch_anniversary::SharedCache,
 }
 
 impl AppState {
@@ -68,6 +69,7 @@ impl AppState {
             settings: Arc::new(parking_lot::RwLock::new(settings)),
             users,
             pronouns,
+            twitch_anniversary_cache: Arc::new(platforms::twitch_anniversary::Cache::new()),
         })
     }
 }
@@ -1066,6 +1068,75 @@ fn twitch_web_clear(app: tauri::AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+async fn twitch_anniversary_check(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    unique_key: String,
+) -> Result<Option<platforms::twitch_anniversary::SubAnniversaryInfo>, String> {
+    // Setting check
+    let enabled = state.settings.read().chat.show_sub_anniversary_banner;
+    if !enabled {
+        return Ok(None);
+    }
+
+    // Resolve channel — may have :video_id suffix from YT multi-stream;
+    // canonical key for store lookup is via channel_key_of.
+    let channel_key = channels::channel_key_of(&unique_key).to_string();
+    let channel = state
+        .store
+        .lock()
+        .channels()
+        .iter()
+        .find(|c| c.unique_key() == channel_key)
+        .cloned();
+
+    let Some(channel) = channel else {
+        return Ok(None);
+    };
+
+    if channel.platform != Platform::Twitch {
+        return Ok(None);
+    }
+
+    let info = platforms::twitch_anniversary::check(
+        &state.http,
+        &channel.channel_id,
+        &state.twitch_anniversary_cache,
+        &app,
+    )
+    .await;
+
+    // Dismissal check — keyed by unique_key (NOT channel_key) since the
+    // dismissal map's keys come from frontend invokes which use the
+    // unique_key directly, including any :video_id suffix.
+    if let Some(ref i) = info {
+        let settings = state.settings.read();
+        if let Some(dismissed_renews) = settings.chat.dismissed_sub_anniversaries.get(&unique_key) {
+            if dismissed_renews == &i.renews_at {
+                return Ok(None);
+            }
+        }
+    }
+
+    Ok(info)
+}
+
+#[tauri::command]
+fn twitch_anniversary_dismiss(
+    state: State<'_, AppState>,
+    unique_key: String,
+    renews_at: String,
+) -> Result<(), String> {
+    {
+        let mut s = state.settings.write();
+        s.chat.dismissed_sub_anniversaries.insert(unique_key, renews_at);
+    }
+    let snapshot = state.settings.read().clone();
+    settings::save(&snapshot).map_err(err_string)?;
+    Ok(())
+}
+
+#[tauri::command]
 async fn kick_login(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
@@ -1401,6 +1472,8 @@ pub fn run() {
             twitch_logout,
             twitch_web_login,
             twitch_web_clear,
+            twitch_anniversary_check,
+            twitch_anniversary_dismiss,
             kick_login,
             kick_logout,
             youtube_login,
