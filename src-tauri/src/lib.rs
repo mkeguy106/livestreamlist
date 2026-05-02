@@ -35,6 +35,7 @@ struct AppState {
     settings: SharedSettings,
     users: Arc<UserStore>,
     pronouns: Arc<PronounsCache>,
+    twitch_anniversary_cache: platforms::twitch_anniversary::SharedCache,
 }
 
 impl AppState {
@@ -68,6 +69,7 @@ impl AppState {
             settings: Arc::new(parking_lot::RwLock::new(settings)),
             users,
             pronouns,
+            twitch_anniversary_cache: Arc::new(platforms::twitch_anniversary::Cache::new()),
         })
     }
 }
