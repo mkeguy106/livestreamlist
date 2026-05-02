@@ -29,3 +29,55 @@ pub struct TwitchWebIdentity {
     /// When we last successfully validated the cookie via GQL.
     pub last_verified_at: DateTime<Utc>,
 }
+
+use tauri::webview::Cookie;
+
+/// Find the `auth-token` cookie's value if it's both present and
+/// non-empty. The Twitch web app sets this cookie post-login and clears
+/// the value (but leaves the cookie) on logout, so an empty value is
+/// semantically "missing".
+pub(crate) fn extract_auth_token(jar: &[Cookie<'_>]) -> Option<String> {
+    jar.iter()
+        .find(|c| c.name() == "auth-token" && !c.value().is_empty())
+        .map(|c| c.value().to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tauri::webview::Cookie;
+
+    fn cookie(name: &str, value: &str, domain: &str) -> Cookie<'static> {
+        // tauri re-exports cookie::Cookie; build via the public builder API.
+        Cookie::build((name.to_string(), value.to_string()))
+            .domain(domain.to_string())
+            .build()
+    }
+
+    #[test]
+    fn extract_auth_token_present() {
+        let jar = vec![
+            cookie("foo", "bar", "twitch.tv"),
+            cookie("auth-token", "abcd1234", "twitch.tv"),
+        ];
+        assert_eq!(extract_auth_token(&jar), Some("abcd1234".to_string()));
+    }
+
+    #[test]
+    fn extract_auth_token_empty_value_treated_as_missing() {
+        let jar = vec![cookie("auth-token", "", "twitch.tv")];
+        assert_eq!(extract_auth_token(&jar), None);
+    }
+
+    #[test]
+    fn extract_auth_token_absent() {
+        let jar = vec![cookie("session", "x", "twitch.tv")];
+        assert_eq!(extract_auth_token(&jar), None);
+    }
+
+    #[test]
+    fn extract_auth_token_empty_jar() {
+        let jar: Vec<Cookie<'static>> = vec![];
+        assert_eq!(extract_auth_token(&jar), None);
+    }
+}
