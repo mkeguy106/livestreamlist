@@ -9,7 +9,7 @@
 
 use parking_lot::Mutex;
 use std::collections::HashMap;
-use tauri::AppHandle;
+use tauri::Runtime;
 use tauri_plugin_notification::NotificationExt;
 
 use crate::channels::{Channel, Livestream};
@@ -43,9 +43,9 @@ impl NotifyTracker {
     /// Note: `channels` drives the `dont_notify` lookup; snapshot supplies
     /// the transient live state. Caller supplies both so we don't need to
     /// hold the store lock.
-    pub fn detect_and_notify(
+    pub fn detect_and_notify<R: Runtime>(
         &self,
-        app: &AppHandle,
+        app: &tauri::AppHandle<R>,
         channels: &[Channel],
         snapshot: &[Livestream],
     ) {
@@ -81,7 +81,7 @@ impl NotifyTracker {
     }
 }
 
-fn send_go_live(app: &AppHandle, ls: &Livestream) {
+fn send_go_live<R: Runtime>(app: &tauri::AppHandle<R>, ls: &Livestream) {
     let title = format!("{} is live", ls.display_name);
     let body = match (&ls.title, &ls.game) {
         (Some(t), Some(g)) => format!("{t} · {g}"),

@@ -212,11 +212,11 @@ query SubAnniversary($login: String!) {
 /// Emits `twitch:web_cookie_required` events on missing/expired cookie (for
 /// mid-session expiry handling); cookie_status in the return value eliminates
 /// the race where the event fires before the React listener attaches.
-pub async fn check(
+pub async fn check<R: tauri::Runtime>(
     client: &reqwest::Client,
     channel_login: &str,
     cache: &Cache,
-    app: &tauri::AppHandle,
+    app: &tauri::AppHandle<R>,
 ) -> CheckResult {
     // Cache hit (positive or negative)
     if let Some((status, value)) = cache.get(channel_login) {
