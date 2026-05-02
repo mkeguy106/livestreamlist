@@ -1418,6 +1418,11 @@ fn apply_linux_webkit_workarounds() {}
 /// paths get the same state shape. Side-effecting setup (tray, window state
 /// plugin, GTK overlay, background async tasks) stays in production `run()`
 /// where it belongs.
+///
+/// **Non-generic constraint:** the signature uses concrete `tauri::App`
+/// (= `App<Wry>`) because `ChatManager::new` and `PlayerManager::new`
+/// take concrete `AppHandle`. The smoke harness uses `MockRuntime` and
+/// constructs state directly (see `crate::smoke::build_smoke_app`).
 pub(crate) fn manage_all_state(app: &mut tauri::App) -> anyhow::Result<()> {
     let state = AppState::new()?;
     let http = state.http.clone();
