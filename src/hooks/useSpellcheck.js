@@ -39,6 +39,7 @@ export function useSpellcheck({ text, enabled, language, channelEmotes }) {
   const [misspellings, setMisspellings] = useState([]);
   const [recentCorrections, setRecentCorrections] = useState(() => new Map());
   const [alreadyCorrected, setAlreadyCorrected] = useState(() => new Set());
+  const [ignoreSet, setIgnoreSet] = useState(() => new Set());
   // The most recent correction, for Esc-to-undo. Includes a timestamp.
   const lastCorrectionRef = useRef(null);
   // Counts keystrokes since the last correction; reset on each correction.
@@ -58,7 +59,10 @@ export function useSpellcheck({ text, enabled, language, channelEmotes }) {
       try {
         const result = await spellcheckCheck(text, language, channelEmotes ?? []);
         if (requestIdRef.current === myRequestId) {
-          setMisspellings(Array.isArray(result) ? result : []);
+          const filtered = Array.isArray(result)
+            ? result.filter((m) => !ignoreSet.has(m.word.toLowerCase()))
+            : [];
+          setMisspellings(filtered);
         }
       } catch (e) {
         if (requestIdRef.current === myRequestId) {
@@ -69,7 +73,7 @@ export function useSpellcheck({ text, enabled, language, channelEmotes }) {
       }
     }, DEBOUNCE_MS);
     return () => clearTimeout(handle);
-  }, [text, enabled, language, channelEmotes]);
+  }, [text, enabled, language, channelEmotes, ignoreSet]);
 
   // ── Record an autocorrect: add green pill + remember for Esc-to-undo ──
   const recordCorrection = useCallback(({ originalWord, replacementWord, position }) => {
@@ -134,6 +138,42 @@ export function useSpellcheck({ text, enabled, language, channelEmotes }) {
     keystrokesSinceCorrectionRef.current = 0;
   }, []);
 
+  const markIgnored = useCallback((word) => {
+    setIgnoreSet((prev) => {
+      const next = new Set(prev);
+      next.add(word.toLowerCase());
+      return next;
+    });
+  }, []);
+
+  const clearIgnored = useCallback(() => {
+    setIgnoreSet(new Set());
+  }, []);
+
+  // Undo a SPECIFIC correction (used by the right-click "Undo correction"
+  // item — distinct from undoLast() which only undoes the most recent).
+  // Returns the restoration info, or null if not found.
+  const undoCorrection = useCallback((positionKey) => {
+    const entry = recentCorrections.get(positionKey);
+    if (!entry) return null;
+    setRecentCorrections((prev) => {
+      if (!prev.has(positionKey)) return prev;
+      const next = new Map(prev);
+      next.delete(positionKey);
+      return next;
+    });
+    setAlreadyCorrected((prev) => {
+      const next = new Set(prev);
+      next.add(entry.originalWord.toLowerCase());
+      return next;
+    });
+    return {
+      originalWord: entry.originalWord,
+      replacementWord: entry.word,
+      position: entry.start,
+    };
+  }, [recentCorrections]);
+
   // ── Track keystrokes since last correction ────────────────────────────
   // Triggered by every text change. We count anything that ISN'T the
   // autocorrect rewrite itself; Composer is responsible for not bumping
@@ -148,8 +188,12 @@ export function useSpellcheck({ text, enabled, language, channelEmotes }) {
     misspellings,
     recentCorrections,
     alreadyCorrected,
+    ignoreSet,
     recordCorrection,
     undoLast,
+    undoCorrection,
     clearRecent,
+    markIgnored,
+    clearIgnored,
   };
 }
