@@ -1075,11 +1075,13 @@ async fn twitch_anniversary_check(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
     unique_key: String,
-) -> Result<Option<platforms::twitch_anniversary::SubAnniversaryInfo>, String> {
+) -> Result<platforms::twitch_anniversary::CheckResult, String> {
+    use platforms::twitch_anniversary::{CheckResult, CookieStatus};
+
     // Setting check
     let enabled = state.settings.read().chat.show_sub_anniversary_banner;
     if !enabled {
-        return Ok(None);
+        return Ok(CheckResult { info: None, cookie_status: CookieStatus::Ok });
     }
 
     // Resolve channel — may have :video_id suffix from YT multi-stream;
@@ -1094,14 +1096,14 @@ async fn twitch_anniversary_check(
         .cloned();
 
     let Some(channel) = channel else {
-        return Ok(None);
+        return Ok(CheckResult { info: None, cookie_status: CookieStatus::Ok });
     };
 
     if channel.platform != Platform::Twitch {
-        return Ok(None);
+        return Ok(CheckResult { info: None, cookie_status: CookieStatus::Ok });
     }
 
-    let info = platforms::twitch_anniversary::check(
+    let mut result = platforms::twitch_anniversary::check(
         &state.http,
         &channel.channel_id,
         &state.twitch_anniversary_cache,
@@ -1112,16 +1114,16 @@ async fn twitch_anniversary_check(
     // Dismissal check — keyed by unique_key (NOT channel_key) since the
     // dismissal map's keys come from frontend invokes which use the
     // unique_key directly, including any :video_id suffix.
-    if let Some(ref i) = info {
+    if let Some(ref i) = result.info {
         let settings = state.settings.read();
         if let Some(dismissed_renews) = settings.chat.dismissed_sub_anniversaries.get(&unique_key) {
             if dismissed_renews == &i.renews_at {
-                return Ok(None);
+                result.info = None;
             }
         }
     }
 
-    Ok(info)
+    Ok(result)
 }
 
 #[tauri::command]

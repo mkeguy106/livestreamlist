@@ -286,9 +286,8 @@ async function mockInvoke(name, args) {
       mockAuth = { ...mockAuth, twitch_web: null };
       return null;
     case 'twitch_anniversary_check':
-      // Mock: always return null (no anniversary in browser-only dev).
-      // PR 4 brainstorming may want a "force show" flag for visual testing.
-      return null;
+      // Returns the new richer shape { info, cookie_status }.
+      return { info: null, cookie_status: 'ok' };
     case 'twitch_anniversary_dismiss':
       return null;
     case 'twitch_share_resub_open':
