@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use chrono::Utc;
 use futures_util::{SinkExt, StreamExt};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use tauri::{AppHandle, Emitter};
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message as WsMessage;
@@ -22,6 +22,24 @@ use crate::platforms::Platform;
 const IRC_URL: &str = "wss://irc-ws.chat.twitch.tv";
 
 static SELF_ECHO_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// Process-startup nonce mixed into self-echo IDs so they can't collide
+/// with `self-N` IDs persisted to the chat log by previous sessions.
+/// Without this, after app restart the counter resets to 0; the first
+/// echo gets `self-0` and is silently deduped on the React side against
+/// a `self-0` loaded from the chat log file (replay_chat_history). Bug
+/// surfaces as "first message after restart doesn't show in our chat
+/// even though it sent successfully to Twitch."
+static SELF_ECHO_PREFIX: OnceLock<String> = OnceLock::new();
+
+fn self_echo_prefix() -> &'static str {
+    SELF_ECHO_PREFIX.get_or_init(|| {
+        // Unix-millis at first call. Stable for the process lifetime,
+        // unique across processes (and almost certainly across restarts
+        // even on hot-reload — devloop relaunch takes >1ms).
+        format!("{:x}", chrono::Utc::now().timestamp_millis())
+    })
+}
 
 /// Auth context passed into a chat connection. When `None` the task falls
 /// back to an anonymous `justinfan*` read-only session (no sending).
@@ -234,7 +252,17 @@ async fn read_loop(
                         // Local echo: IRC doesn't echo own PRIVMSG. Synthesize so
                         // the user sees their own message and badges.
                         if let Some(echo) = build_self_echo(cfg, &text) {
+                            log::info!(
+                                "self-echo emit channel={} id={}",
+                                cfg.channel_key, echo.id
+                            );
                             persist_and_emit(cfg, log.as_deref_mut(), echo);
+                        } else {
+                            log::warn!(
+                                "self-echo skipped channel={} (auth missing? cfg.auth.is_some()={})",
+                                cfg.channel_key,
+                                cfg.auth.is_some()
+                            );
                         }
                         Ok(())
                     }
@@ -514,7 +542,11 @@ fn build_self_echo(cfg: &TwitchChatConfig, text: &str) -> Option<ChatMessage> {
     emote_ranges.sort_by_key(|r| r.start);
 
     Some(ChatMessage {
-        id: format!("self-{}", SELF_ECHO_SEQ.fetch_add(1, Ordering::Relaxed)),
+        id: format!(
+            "self-{}-{}",
+            self_echo_prefix(),
+            SELF_ECHO_SEQ.fetch_add(1, Ordering::Relaxed)
+        ),
         channel_key: cfg.channel_key.clone(),
         platform: Platform::Twitch,
         timestamp: chrono::Utc::now(),
