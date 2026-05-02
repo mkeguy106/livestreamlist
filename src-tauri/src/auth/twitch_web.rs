@@ -112,7 +112,7 @@ pub async fn validate(client: &reqwest::Client, cookie: &str) -> Result<TwitchWe
     }
 
     let body = serde_json::json!({
-        "query": "query CurrentUser { currentUser { login id } }",
+        "query": "query CurrentUser { currentUser { login } }",
     });
     let resp = client
         .post(GQL_URL)
