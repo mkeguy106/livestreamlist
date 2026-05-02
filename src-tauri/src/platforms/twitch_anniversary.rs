@@ -173,6 +173,132 @@ pub fn compute_window(renews_at: DateTime<Utc>, now: DateTime<Utc>) -> Option<u3
     Some(days_remaining)
 }
 
+const GQL_QUERY: &str = r#"
+query SubAnniversary($login: String!) {
+  user(login: $login) {
+    id
+    displayName
+    self {
+      subscriptionBenefit {
+        id
+        tier
+        renewsAt
+        purchasedWithPrime
+        gift { isGift }
+      }
+      subscriptionTenure(tenureMethod: CUMULATIVE) {
+        months
+        daysRemaining
+      }
+    }
+  }
+}"#;
+
+/// Run the full anniversary detection: cache → cookie → GQL → parse →
+/// window math → cache. Returns `Some(info)` only if the share window
+/// is open. Caller should additionally check the dismissal map.
+/// Emits `twitch:web_cookie_required` events on missing/expired cookie.
+pub async fn check(
+    client: &reqwest::Client,
+    channel_login: &str,
+    cache: &Cache,
+    app: &tauri::AppHandle,
+) -> Option<SubAnniversaryInfo> {
+    // Cache hit (positive or negative)
+    if let Some(cached) = cache.get(channel_login) {
+        return cached;
+    }
+
+    // Cookie required
+    let cookie = match crate::auth::twitch_web::stored_token() {
+        Ok(Some(c)) => c,
+        _ => {
+            use tauri::Emitter;
+            let _ = app.emit("twitch:web_cookie_required",
+                serde_json::json!({ "reason": "missing" }));
+            cache.set(channel_login, None);
+            return None;
+        }
+    };
+
+    let body = serde_json::json!({
+        "query": GQL_QUERY,
+        "variables": { "login": channel_login },
+    });
+
+    let resp = match client
+        .post(GQL_URL)
+        .header("Client-Id", PUBLIC_CLIENT_ID)
+        .header("Authorization", format!("OAuth {cookie}"))
+        .header("Content-Type", "application/json")
+        .json(&body)
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            log::warn!("gql.twitch.tv (anniversary) network error: {e}");
+            cache.set(channel_login, None);
+            return None;
+        }
+    };
+
+    let status = resp.status();
+    if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+        log::warn!("anniversary GQL {status} — cookie expired, clearing");
+        let _ = crate::auth::twitch_web::clear();
+        use tauri::Emitter;
+        let _ = app.emit("twitch:web_cookie_required",
+            serde_json::json!({ "reason": "expired" }));
+        let payload: Option<crate::auth::twitch_web::TwitchWebIdentity> = None;
+        let _ = app.emit("twitch:web_status_changed", payload);
+        cache.set(channel_login, None);
+        return None;
+    }
+    if !status.is_success() {
+        log::warn!("anniversary GQL {status}: {}", resp.text().await.unwrap_or_default());
+        cache.set(channel_login, None);
+        return None;
+    }
+
+    let json: serde_json::Value = match resp.json().await {
+        Ok(j) => j,
+        Err(e) => {
+            log::warn!("anniversary GQL JSON parse: {e}");
+            cache.set(channel_login, None);
+            return None;
+        }
+    };
+
+    let mut info = match parse_response(&json, channel_login) {
+        Some(i) => i,
+        None => {
+            cache.set(channel_login, None);
+            return None;
+        }
+    };
+
+    // Window check
+    let renews_at = match DateTime::parse_from_rfc3339(&info.renews_at) {
+        Ok(dt) => dt.with_timezone(&Utc),
+        Err(_) => {
+            cache.set(channel_login, None);
+            return None;
+        }
+    };
+    let days_remaining = match compute_window(renews_at, Utc::now()) {
+        Some(d) => d,
+        None => {
+            cache.set(channel_login, None);
+            return None;
+        }
+    };
+    info.days_remaining_in_window = days_remaining;
+
+    cache.set(channel_login, Some(info.clone()));
+    Some(info)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
