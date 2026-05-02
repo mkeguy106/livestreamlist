@@ -388,6 +388,27 @@ For elements near the right edge of the viewport (rightmost icon in a titlebar, 
 
 When reviewing or writing any new feature that has buttons, icons, or hover-text affordances, audit for `title=""` and replace with `Tooltip` — and check `aria-label`-only elements for whether they should also have a themed tooltip for visual discoverability.
 
+### Spellcheck overlay (PR 2 — `src/components/SpellcheckOverlay.jsx`)
+
+The chat Composer's red squiggles use a transparent-text overlay layered on top of the existing `<input>`. The input keeps all its existing behavior (typing, autocomplete popup, caret, paste, undo); the overlay renders the same text in `color: transparent` with `<span class="spellcheck-misspelled">` wrapping each misspelled range. CSS `text-decoration: underline wavy` survives `color: transparent` (decorations are styled independently of color per the CSS spec), so the squiggles are visible even though the overlay's text is invisible. The input's actual text shows through from the layer below.
+
+**Sync mechanics**:
+- The overlay's font / padding / line-height / letter-spacing are copied from the input via `getComputedStyle` in `useLayoutEffect` (synchronous before paint, no flash of misalignment).
+- A `ResizeObserver` re-copies on input resize (the composer flexes to fill the row; system fonts settle late after first paint).
+- A `scroll` event listener on the input mirrors `scrollLeft` so when text overflows and the input scrolls horizontally, the overlay's squiggles track with it. Applied via `transform: translateX(-${scrollLeft}px)` on the overlay (transform is GPU-cheap; preserves subpixel precision).
+- Overlay has `pointer-events: none` so right-clicks, drags, and selections all reach the input below.
+
+**Why not contenteditable**: would require rewriting the autocomplete popup, caret tracking (`input.selectionStart`), and `onChange` handling. Contenteditable is also notoriously buggy (caret jump on programmatic edits, paste sanitization, IME composition). The overlay pattern is the standard "highlight while typing" approach (Slack, Linear, etc).
+
+**Hook contract** (`src/hooks/useSpellcheck.js`):
+- Inputs: `text, enabled, language, channelEmotes`
+- Output: `{ misspellings: Array<{ start, end, word }> }`
+- 150 ms debounce (matches Qt). Cleared on every text change and unmount.
+- Stale-response guard: each check kickoff increments a `requestIdRef`; in-flight responses compare against the current value before applying — so a slow IPC return for old text never overwrites a fresh result.
+- `enabled === false` (preference off, or channel not authed) clears `misspellings` immediately and skips the IPC call.
+
+**Composer wiring**: `Composer.jsx` wraps the `<input>` in `<div style={{ position: 'relative', flex: 1, minWidth: 0 }}>`. The `minWidth: 0` is critical so the flex child can shrink below content size — without it the @me chiclet and Browser button get pushed out of the row at narrow widths. The overlay only renders when `spellcheckEnabled && authed`, so the disabled (logged-out) state shows no squiggles.
+
 ## Configuration
 
 Data dir (XDG):
