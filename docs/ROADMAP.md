@@ -359,7 +359,7 @@ Gap analysis against the Qt app (`~/livestream.list.qt/`) — docs (`README.md`,
   - [x] PR 3: Share popout window (`share_window.rs` + 2 IPC commands) — opens `twitch.tv/popout/{login}/chat` in a transient signed-in WebviewWindow so user can click Twitch's native Share button (PR #106)
   - [x] PR 4: Banner UI + auto-dismiss + Preferences toggle (`SubAnniversaryBanner`/`TwitchWebConnectPrompt`/`useSubAnniversary` + `chat:resub_self:{key}` event) (PR #107)
   - [x] PR 5: Browser cookie auto-scrape via `rookie` + race-fix (`extract_from_browser` at app launch + sync `cookie_status` in IPC response) — Qt parity, no manual login needed when user is already signed into Twitch in their browser (PR #108)
-  - [x] PR 6: Cookie injection into share popout's WebView profile dir — fixes "popout opens but isn't signed in" when cookie was browser-scraped via PR 5 (which puts it in the keyring) but never deposited in the profile dir (PR 1's manual login did this naturally) (PR #N)
+  - [x] PR 6: Cookie injection into share popout's WebView profile dir — fixes "popout opens but isn't signed in" when cookie was browser-scraped via PR 5 (which puts it in the keyring) but never deposited in the profile dir (PR 1's manual login did this naturally) (PR #109)
 - [ ] **Custom highlight keywords** — user list of words that trigger the mention highlight style + optional notification. → Ph 3
 - [ ] **Local echo for sent Twitch messages** — Twitch does not echo own PRIVMSGs; synthesise a local echo using `USERSTATE` tags so the user sees their own send immediately. → Ph 2b (sending)
 - [ ] **Prediction badge tooltips** — parse the `predictions` badge version (`blue-1` etc.) and render a descriptive tooltip ("Predicted: Blue"). → Ph 3
