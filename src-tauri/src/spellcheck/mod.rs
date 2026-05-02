@@ -11,3 +11,4 @@
 
 pub mod tokenize;
 pub mod personal;
+pub mod dict;
