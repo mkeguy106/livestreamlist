@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { chatOpenInBrowser, chatSend, listEmotes, spellcheckSuggest } from '../ipc.js';
+import { chatOpenInBrowser, chatSend, listEmotes, spellcheckAddWord, spellcheckSuggest } from '../ipc.js';
 import { shouldAutocorrect, isPastWord, rangeAtCaret } from '../utils/autocorrect.js';
 import Tooltip from './Tooltip.jsx';
 import SpellcheckOverlay from './SpellcheckOverlay.jsx';
+import SpellcheckContextMenu from './SpellcheckContextMenu.jsx';
 import { useSpellcheck } from '../hooks/useSpellcheck.js';
 import { usePreferences } from '../hooks/usePreferences.jsx';
 
@@ -72,6 +73,10 @@ export default function Composer({ channelKey, platform, auth, mentionCandidates
   const inputRef = useRef(null);
   const [caret, setCaret] = useState(0);
 
+  // Right-click menu state. null = closed; object = open.
+  // { kind, word, originalWord?, start, end, x, y }
+  const [ctxMenu, setCtxMenu] = useState(null);
+
   const { settings } = usePreferences();
   const spellcheckEnabled = settings?.chat?.spellcheck_enabled ?? true;
   const spellcheckLanguage = settings?.chat?.spellcheck_language ?? 'en_US';
@@ -110,7 +115,10 @@ export default function Composer({ channelKey, platform, auth, mentionCandidates
     alreadyCorrected,
     recordCorrection,
     undoLast,
+    undoCorrection,
     clearRecent,
+    markIgnored,
+    clearIgnored,
   } = useSpellcheck({
     text,
     enabled: spellcheckEnabled && authed,
@@ -121,7 +129,8 @@ export default function Composer({ channelKey, platform, auth, mentionCandidates
   // Per-channel reset of autocorrect memory.
   useEffect(() => {
     clearRecent();
-  }, [channelKey, clearRecent]);
+    clearIgnored();
+  }, [channelKey, clearRecent, clearIgnored]);
 
   // Autocorrect: on every text/misspellings change, look for a misspelled
   // word that meets all the autocorrect conditions. Skip the word the
@@ -204,6 +213,115 @@ export default function Composer({ channelKey, platform, auth, mentionCandidates
     });
   };
 
+  const onContextMenu = (e) => {
+    if (!spellcheckEnabled || !authed) return;
+    // Hit-test the overlay spans at the click coords. We use
+    // elementsFromPoint (plural) because the overlay sits on top of the
+    // input — we walk the stack to find the nearest spellcheck span.
+    const targets = document.elementsFromPoint(e.clientX, e.clientY);
+    const hit = targets.find((el) =>
+      el.classList?.contains('spellcheck-misspelled') ||
+      el.classList?.contains('spellcheck-corrected'),
+    );
+    if (!hit) return;
+    e.preventDefault();
+    const word = hit.dataset.word ?? '';
+    const originalWord = hit.dataset.original ?? '';
+    const isCorrected = hit.classList.contains('spellcheck-corrected');
+    // Find the matching range in misspellings/recentCorrections by word
+    // text. There may be multiple instances of the same word; we take
+    // the first match for simplicity (right-click should be precise
+    // enough that the user gets a sensible result).
+    let start = -1;
+    let end = -1;
+    if (isCorrected) {
+      for (const r of recentCorrections.values()) {
+        if (r.word === word && r.originalWord === originalWord) {
+          start = r.start;
+          end = r.end;
+          break;
+        }
+      }
+    } else {
+      for (const m of misspellings) {
+        if (m.word === word) {
+          start = m.start;
+          end = m.end;
+          break;
+        }
+      }
+    }
+    if (start < 0) return;
+    setCtxMenu({
+      kind: isCorrected ? 'corrected' : 'misspelled',
+      word,
+      originalWord,
+      start,
+      end,
+      x: e.clientX,
+      y: e.clientY,
+    });
+  };
+
+  const onApplySuggestion = (suggestion) => {
+    if (!ctxMenu) return;
+    const before = text.slice(0, ctxMenu.start);
+    const after = text.slice(ctxMenu.end);
+    const newText = `${before}${suggestion}${after}`;
+    setText(newText);
+    const newCaret = ctxMenu.start + suggestion.length;
+    setCaret(newCaret);
+    requestAnimationFrame(() => {
+      const el = inputRef.current;
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(newCaret, newCaret);
+    });
+    // Manually-applied suggestions also count as "corrected" — show
+    // the green pill briefly + add to alreadyCorrected.
+    recordCorrection({
+      originalWord: ctxMenu.word,
+      replacementWord: suggestion,
+      position: ctxMenu.start,
+    });
+  };
+
+  const onAddToDict = async () => {
+    if (!ctxMenu) return;
+    try {
+      await spellcheckAddWord(ctxMenu.word);
+      // The next debounced spellcheck_check will naturally drop this
+      // word from misspellings (Rust applies personal dict server-side).
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn('spellcheckAddWord failed:', e);
+    }
+  };
+
+  const onIgnore = () => {
+    if (!ctxMenu) return;
+    markIgnored(ctxMenu.word);
+  };
+
+  const onUndoCorrection = () => {
+    if (!ctxMenu) return;
+    const positionKey = `${ctxMenu.start}:${ctxMenu.end}:${ctxMenu.word}`;
+    const restored = undoCorrection(positionKey);
+    if (!restored) return;
+    const before = text.slice(0, restored.position);
+    const after = text.slice(restored.position + restored.replacementWord.length);
+    const newText = `${before}${restored.originalWord}${after}`;
+    setText(newText);
+    const newCaret = restored.position + restored.originalWord.length;
+    setCaret(newCaret);
+    requestAnimationFrame(() => {
+      const el = inputRef.current;
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(newCaret, newCaret);
+    });
+  };
+
   const submit = async (e) => {
     e?.preventDefault?.();
     const body = text.trim();
@@ -214,6 +332,7 @@ export default function Composer({ channelKey, platform, auth, mentionCandidates
       await chatSend(channelKey, body);
       setText('');
       setPopup(null);
+      clearIgnored();
     } catch (e) {
       setError(String(e?.message ?? e));
     } finally {
@@ -272,6 +391,7 @@ export default function Composer({ channelKey, platform, auth, mentionCandidates
   return (
     <form
       onSubmit={submit}
+      onContextMenu={onContextMenu}
       style={{
         borderTop: 'var(--hair)',
         padding: '6px 10px',
@@ -359,6 +479,21 @@ export default function Composer({ channelKey, platform, auth, mentionCandidates
       </div>
       {error && (
         <div style={{ color: '#f87171', fontSize: 'var(--t-11)' }}>{error}</div>
+      )}
+      {ctxMenu && (
+        <SpellcheckContextMenu
+          kind={ctxMenu.kind}
+          word={ctxMenu.word}
+          originalWord={ctxMenu.originalWord}
+          language={spellcheckLanguage}
+          x={ctxMenu.x}
+          y={ctxMenu.y}
+          onClose={() => setCtxMenu(null)}
+          onApplySuggestion={onApplySuggestion}
+          onAddToDict={onAddToDict}
+          onIgnore={onIgnore}
+          onUndoCorrection={onUndoCorrection}
+        />
       )}
     </form>
   );
