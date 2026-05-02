@@ -49,6 +49,8 @@ export const replayChatHistory = (uniqueKey, limit = 100) =>
 export const authStatus = () => invoke('auth_status');
 export const twitchLogin = () => invoke('twitch_login');
 export const twitchLogout = () => invoke('twitch_logout');
+export const twitchWebLogin = () => invoke('twitch_web_login');
+export const twitchWebClear = () => invoke('twitch_web_clear');
 export const kickLogin = () => invoke('kick_login');
 export const kickLogout = () => invoke('kick_logout');
 export const youtubeLogin = () => invoke('youtube_login');
@@ -114,7 +116,7 @@ const MOCK_LIVE = {
 };
 
 let mockChannels = [...MOCK_CHANNELS];
-let mockAuth = { twitch: null, kick: null, chaturbate: null };
+let mockAuth = { twitch: null, twitch_web: null, kick: null, chaturbate: null };
 const mockPlaying = new Set();
 let mockSettings = {
   general: { refresh_interval_seconds: 60, notify_on_live: true, close_to_tray: false },
@@ -252,7 +254,10 @@ async function mockInvoke(name, args) {
       ];
     case 'auth_status':
       return {
-        ...mockAuth,
+        twitch: mockAuth.twitch,
+        twitch_web: mockAuth.twitch_web,
+        kick: mockAuth.kick,
+        youtube: { browser: null, has_paste: false, handle: null },
         chaturbate: mockAuth.chaturbate
           ? mockAuth.chaturbate
           : { signed_in: false, last_verified_at: null },
@@ -262,6 +267,15 @@ async function mockInvoke(name, args) {
       return mockAuth.twitch;
     case 'twitch_logout':
       mockAuth = { ...mockAuth, twitch: null };
+      return null;
+    case 'twitch_web_login':
+      mockAuth = {
+        ...mockAuth,
+        twitch_web: { login: 'mock_user', last_verified_at: new Date().toISOString() },
+      };
+      return mockAuth.twitch_web;
+    case 'twitch_web_clear':
+      mockAuth = { ...mockAuth, twitch_web: null };
       return null;
     case 'kick_login':
       mockAuth = { ...mockAuth, kick: { login: 'mock_kick', user_id: '0' } };
