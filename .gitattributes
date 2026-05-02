@@ -1,0 +1,2 @@
+src-tauri/dictionaries/*.dic text eol=lf
+src-tauri/dictionaries/*.aff text eol=lf
