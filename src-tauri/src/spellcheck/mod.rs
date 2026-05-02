@@ -41,6 +41,12 @@ pub struct SpellChecker {
     personal: RwLock<PersonalDict>,
 }
 
+// hunspell_rs::Hunspell holds a raw pointer that is not marked Send/Sync
+// by the upstream crate.  All access is serialized via parking_lot::Mutex,
+// so concurrent use is safe and the impls are sound.
+unsafe impl Send for SpellChecker {}
+unsafe impl Sync for SpellChecker {}
+
 impl SpellChecker {
     /// Construct from app-state context. `personal_dict_path` is
     /// usually `~/.config/livestreamlist/personal_dict.json` (computed
