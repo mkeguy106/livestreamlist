@@ -62,26 +62,13 @@ export default function SpellcheckContextMenu({
   }
 
   // kind === 'misspelled'
+  // The menu flips upward when the chat composer is at the bottom of
+  // the window (which is the common case), so the BOTTOM of the menu
+  // is closest to the misspelled word. Layout puts the most-likely
+  // suggestion at the bottom (least cursor travel for the most common
+  // action) and pushes the meta items (Add/Ignore) to the top.
   return (
     <ContextMenu x={x} y={y} onClose={onClose}>
-      {suggestions === null ? (
-        <ContextMenu.Item disabled>Loading suggestions…</ContextMenu.Item>
-      ) : suggestions.length === 0 ? (
-        <ContextMenu.Item disabled>No suggestions</ContextMenu.Item>
-      ) : (
-        suggestions.map((s) => (
-          <ContextMenu.Item
-            key={s}
-            onClick={() => {
-              onApplySuggestion?.(s);
-              onClose();
-            }}
-          >
-            {s}
-          </ContextMenu.Item>
-        ))
-      )}
-      <ContextMenu.Separator />
       <ContextMenu.Item
         onClick={() => {
           onAddToDict?.();
@@ -98,6 +85,27 @@ export default function SpellcheckContextMenu({
       >
         Ignore in this message
       </ContextMenu.Item>
+      <ContextMenu.Separator />
+      {suggestions === null ? (
+        <ContextMenu.Item disabled>Loading suggestions…</ContextMenu.Item>
+      ) : suggestions.length === 0 ? (
+        <ContextMenu.Item disabled>No suggestions</ContextMenu.Item>
+      ) : (
+        // Reverse so the highest-confidence suggestion (hunspell index 0)
+        // is at the BOTTOM of the menu — adjacent to the misspelled word
+        // when the menu has flipped upward.
+        [...suggestions].reverse().map((s) => (
+          <ContextMenu.Item
+            key={s}
+            onClick={() => {
+              onApplySuggestion?.(s);
+              onClose();
+            }}
+          >
+            {s}
+          </ContextMenu.Item>
+        ))
+      )}
     </ContextMenu>
   );
 }

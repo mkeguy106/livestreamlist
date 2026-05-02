@@ -312,10 +312,15 @@ body { background: var(--zinc-950); }
 
 .spellcheck-corrected {
   background: rgba(60, 200, 60, 0.12);
-  border: 1px solid rgba(60, 200, 60, 0.6);
+  /* `box-shadow: inset` instead of `border` so the 1 px outline does NOT
+     contribute to the layout box. The previous `border + padding + margin`
+     combination added 4 px of horizontal width to the span, which shifted
+     the overlay's text right relative to the input below — visually
+     misaligning the pill with the word it's supposed to highlight (the
+     symptom: pill appears on the space + first letter of the next word).
+     Pill is now purely decorative — zero layout footprint. */
+  box-shadow: inset 0 0 0 1px rgba(60, 200, 60, 0.6);
   border-radius: 3px;
-  padding: 0 3px;
-  margin: 0 -1px;
   /* Hold for 80% (= 2.4 s of 3 s), then fade. `forwards` keeps the */
   /* final transparent state after the animation completes — the React */
   /* side removes the span entirely after PILL_LIFETIME_MS (3.1 s). */
@@ -325,10 +330,10 @@ body { background: var(--zinc-950); }
 @keyframes spellcheck-corrected-fade {
   0%, 80% {
     background: rgba(60, 200, 60, 0.12);
-    border-color: rgba(60, 200, 60, 0.6);
+    box-shadow: inset 0 0 0 1px rgba(60, 200, 60, 0.6);
   }
   100% {
     background: transparent;
-    border-color: transparent;
+    box-shadow: inset 0 0 0 1px rgba(60, 200, 60, 0);
   }
 }
