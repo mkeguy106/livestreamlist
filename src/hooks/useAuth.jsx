@@ -25,6 +25,7 @@ export function AuthProvider({ children }) {
   const [state, setState] = useState({
     loading: true,
     twitch: null,
+    twitch_web: null,
     kick: null,
     youtube: { browser: null, has_paste: false },
     chaturbate: { signed_in: false, last_verified_at: null },
@@ -37,6 +38,7 @@ export function AuthProvider({ children }) {
       setState({
         loading: false,
         twitch: data?.twitch ?? null,
+        twitch_web: data?.twitch_web ?? null,
         kick: data?.kick ?? null,
         youtube: data?.youtube ?? { browser: null, has_paste: false },
         chaturbate: data?.chaturbate ?? { signed_in: false, last_verified_at: null },

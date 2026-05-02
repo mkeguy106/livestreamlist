@@ -946,6 +946,7 @@ async fn chat_send(
 #[derive(serde::Serialize)]
 struct AuthStatus {
     twitch: Option<auth::twitch::TwitchIdentity>,
+    twitch_web: Option<auth::twitch_web::TwitchWebIdentity>,
     kick: Option<auth::kick::KickIdentity>,
     youtube: YoutubeAuthStatus,
     chaturbate: ChaturbateAuthStatus,
@@ -980,6 +981,9 @@ async fn auth_status(state: State<'_, AppState>) -> Result<AuthStatus, String> {
     let twitch = auth::twitch::status(&state.http)
         .await
         .map_err(err_string)?;
+    let twitch_web = auth::twitch_web::status(&state.http)
+        .await
+        .map_err(err_string)?;
     let kick = auth::kick::status(&state.http).await.map_err(err_string)?;
     let browser = state
         .settings
@@ -1005,6 +1009,7 @@ async fn auth_status(state: State<'_, AppState>) -> Result<AuthStatus, String> {
     };
     Ok(AuthStatus {
         twitch,
+        twitch_web,
         kick,
         youtube: YoutubeAuthStatus {
             browser,
@@ -1037,6 +1042,25 @@ fn twitch_logout(
 ) -> Result<(), String> {
     auth::twitch::logout().map_err(err_string)?;
     chat.reconnect_platform(Platform::Twitch, &state.store);
+    broadcast_auth_changed(&app);
+    Ok(())
+}
+
+#[tauri::command]
+async fn twitch_web_login(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<auth::twitch_web::TwitchWebIdentity, String> {
+    let identity = auth::twitch_web::login_with_match_check(app.clone(), state.http.clone())
+        .await
+        .map_err(|e| e.to_string())?;
+    broadcast_auth_changed(&app);
+    Ok(identity)
+}
+
+#[tauri::command]
+fn twitch_web_clear(app: tauri::AppHandle) -> Result<(), String> {
+    auth::twitch_web::clear().map_err(err_string)?;
     broadcast_auth_changed(&app);
     Ok(())
 }
@@ -1375,6 +1399,8 @@ pub fn run() {
             auth_status,
             twitch_login,
             twitch_logout,
+            twitch_web_login,
+            twitch_web_clear,
             kick_login,
             kick_logout,
             youtube_login,
