@@ -6,6 +6,8 @@ dist
 .env
 .env.local
 .worktrees
+.superpowers
+.claude
 
 # Rust / Tauri
 src-tauri/target
