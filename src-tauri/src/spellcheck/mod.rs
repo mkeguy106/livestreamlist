@@ -10,3 +10,4 @@
 //!   the hunspell crate. Lands in Task 5.
 
 pub mod tokenize;
+pub mod personal;
