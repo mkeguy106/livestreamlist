@@ -59,6 +59,13 @@ pub fn stored_identity() -> Option<TwitchWebIdentity> {
 /// Persist the validated cookie + identity. Both must succeed; if
 /// identity-save fails we roll back the token so we never have a
 /// partial state ("token present but identity says not logged in").
+///
+/// If the rollback itself fails (rare — typically a keyring-daemon
+/// hiccup), the rollback error is discarded so the caller receives the
+/// original identity-save error (the actionable one). The transient
+/// "token present, identity stale/missing" state self-corrects on the
+/// next `status()` call: `validate` succeeds against the stored token,
+/// then re-runs `save_pair` with a fresh identity.
 pub(crate) fn save_pair(token: &str, identity: &TwitchWebIdentity) -> Result<()> {
     tokens::save(KEYRING_TOKEN, token).context("saving twitch web token")?;
     let identity_json = serde_json::to_string(identity).context("serialising identity")?;
@@ -69,6 +76,11 @@ pub(crate) fn save_pair(token: &str, identity: &TwitchWebIdentity) -> Result<()>
     Ok(())
 }
 
+/// Wipe both keyring entries. Token-entry failure is propagated (the
+/// caller should surface "clear failed" so the UI doesn't keep showing
+/// "connected"). Identity-entry failure is silently ignored — a stale
+/// identity self-corrects on the next `status()` call. Mirrors the
+/// asymmetric pattern in `auth::twitch::logout`.
 pub fn clear() -> Result<()> {
     tokens::clear(KEYRING_TOKEN)?;
     tokens::clear(KEYRING_IDENTITY).ok();
