@@ -28,16 +28,21 @@ async function runAutocorrectFor(
   } catch {
     return;
   }
-  // Re-confirm against the LATEST input value — text state may be one
-  // render behind by the time the await resolves.
-  const latestText = inputRef.current?.value ?? text;
+  // Re-confirm against the LATEST input state — both text AND caret may
+  // have moved during the await window (the user keeps typing while we
+  // wait on the IPC).
+  const el = inputRef.current;
+  const latestText = el?.value ?? text;
+  const latestCaret = el?.selectionStart ?? caret;
   const wordAtPos = latestText.slice(misspelled.start, misspelled.end);
   if (wordAtPos !== misspelled.word) return;
   const replacement = shouldAutocorrect({
     word: misspelled.word,
     suggestions,
     isPast: true,  // confirmed by caller before await
-    caretInside: caret > misspelled.start && caret < misspelled.end + 1,
+    // Re-check cursor-position guard against the LATEST caret — user
+    // may have moved INTO the word after the effect was scheduled.
+    caretInside: latestCaret > misspelled.start && latestCaret < misspelled.end + 1,
     alreadyCorrected,
     personalDict,
   });
@@ -46,12 +51,32 @@ async function runAutocorrectFor(
   const after = latestText.slice(misspelled.end);
   const newText = `${before}${replacement}${after}`;
   setText(newText);
-  const newCaret = misspelled.start + replacement.length;
+  // Preserve the user's cursor position relative to the substitution.
+  // The common case is the user is typing PAST the corrected word
+  // (e.g. typed "teh hello world" — autocorrect fires on "teh" while
+  // the cursor is at " world|"). Jerking the caret back to the end of
+  // "the" interrupts their typing and causes subsequent characters to
+  // land inside the corrected word, breaking it again. Instead, shift
+  // the caret by the length delta so it stays at the same visible
+  // character.
+  const lengthDelta = replacement.length - misspelled.word.length;
+  let newCaret;
+  if (latestCaret <= misspelled.start) {
+    // Before the word — substitution doesn't affect cursor.
+    newCaret = latestCaret;
+  } else if (latestCaret >= misspelled.end) {
+    // After the word — shift by length delta to track the same character.
+    newCaret = latestCaret + lengthDelta;
+  } else {
+    // Inside the word — defensive fallback (shouldn't happen because
+    // the caretInside guard above would have returned null).
+    newCaret = misspelled.start + replacement.length;
+  }
   setCaret(newCaret);
   requestAnimationFrame(() => {
-    const el = inputRef.current;
-    if (!el) return;
-    el.setSelectionRange(newCaret, newCaret);
+    const el2 = inputRef.current;
+    if (!el2) return;
+    el2.setSelectionRange(newCaret, newCaret);
   });
   recordCorrection({
     originalWord: misspelled.word,
@@ -217,49 +242,47 @@ export default function Composer({ channelKey, platform, auth, mentionCandidates
 
   const onContextMenu = (e) => {
     if (!spellcheckEnabled || !authed) return;
-    // Hit-test the overlay spans at the click coords. We use
-    // elementsFromPoint (plural) because the overlay sits on top of the
-    // input — we walk the stack to find the nearest spellcheck span.
-    const targets = document.elementsFromPoint(e.clientX, e.clientY);
-    const hit = targets.find((el) =>
-      el.classList?.contains('spellcheck-misspelled') ||
-      el.classList?.contains('spellcheck-corrected'),
-    );
-    if (!hit) return;
-    e.preventDefault();
-    const word = hit.dataset.word ?? '';
-    const originalWord = hit.dataset.original ?? '';
-    const isCorrected = hit.classList.contains('spellcheck-corrected');
-    // Find the matching range in misspellings/recentCorrections by word
-    // text. There may be multiple instances of the same word; we take
-    // the first match for simplicity (right-click should be precise
-    // enough that the user gets a sensible result).
-    let start = -1;
-    let end = -1;
-    if (isCorrected) {
-      for (const r of recentCorrections.values()) {
-        if (r.word === word && r.originalWord === originalWord) {
-          start = r.start;
-          end = r.end;
-          break;
-        }
+    // Hit-test by reading the input's `selectionStart` after the right-
+    // click. The browser updates the caret to the click position before
+    // the contextmenu event fires; we then look up which misspelling /
+    // correction range contains that position.
+    //
+    // Why not document.elementsFromPoint on the overlay's spans:
+    // WebKitGTK excludes elements with `pointer-events: none` (and their
+    // descendants) from elementsFromPoint, so the overlay's spans are
+    // invisible to the hit-test. Reading the input's selectionStart is
+    // hit-test-via-the-actual-text — robust across engines and ignores
+    // overlay/CSS positioning entirely.
+    const el = inputRef.current;
+    if (!el) return;
+    const pos = el.selectionStart ?? 0;
+    // Try corrected first (precedence per the overlay's segment build).
+    let hit = null;
+    let kind = null;
+    for (const r of recentCorrections.values()) {
+      if (pos >= r.start && pos <= r.end) {
+        hit = r;
+        kind = 'corrected';
+        break;
       }
-    } else {
+    }
+    if (!hit) {
       for (const m of misspellings) {
-        if (m.word === word) {
-          start = m.start;
-          end = m.end;
+        if (pos >= m.start && pos <= m.end) {
+          hit = { ...m, originalWord: '' };
+          kind = 'misspelled';
           break;
         }
       }
     }
-    if (start < 0) return;
+    if (!hit) return;  // No spellcheck word at click — let the native menu show
+    e.preventDefault();
     setCtxMenu({
-      kind: isCorrected ? 'corrected' : 'misspelled',
-      word,
-      originalWord,
-      start,
-      end,
+      kind,
+      word: hit.word,
+      originalWord: hit.originalWord ?? '',
+      start: hit.start,
+      end: hit.end,
       x: e.clientX,
       y: e.clientY,
     });

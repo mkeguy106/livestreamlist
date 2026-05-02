@@ -42,21 +42,43 @@ export default function ContextMenu({ x, y, onClose, children }) {
     };
   }, [onClose]);
 
-  // Flip to fit viewport. useLayoutEffect runs synchronously after DOM
-  // mutation but BEFORE the browser paints — the corrected coords land
-  // in place without the menu briefly rendering off-screen first.
+  // Flip to fit viewport. Re-runs on mount AND whenever the menu's size
+  // changes (via ResizeObserver) — important because content can arrive
+  // async (e.g. spellcheck suggestions fetched after first paint) and
+  // the menu's height grows; a one-shot useLayoutEffect would miss that.
+  //
+  // Y axis: prefer below the click point. If it would overflow the
+  // bottom (typical for the chat composer at the bottom of the window),
+  // FLIP the menu so its bottom edge sits just above the click point —
+  // standard desktop right-click behavior (vs. simply clamping to the
+  // bottom edge, which obscures the very element the user right-clicked).
+  // X axis: simple clamp inside the viewport.
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
-    const rect = el.getBoundingClientRect();
-    const vw = window.innerWidth;
-    const vh = window.innerHeight;
-    let nx = x;
-    let ny = y;
-    if (x + rect.width  > vw) nx = Math.max(8, vw - rect.width  - 8);
-    if (y + rect.height > vh) ny = Math.max(8, vh - rect.height - 8);
-    if (nx !== pos.x || ny !== pos.y) setPos({ x: nx, y: ny });
-  }, [x, y, pos.x, pos.y]);
+    const reposition = () => {
+      const rect = el.getBoundingClientRect();
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+      let nx = x;
+      let ny = y;
+      if (x + rect.width > vw) nx = Math.max(8, vw - rect.width - 8);
+      if (y + rect.height + 8 > vh) {
+        // Flip-up. 6 px buffer keeps the menu's bottom edge slightly
+        // above the click point (visual breathing room around the word).
+        ny = Math.max(8, y - rect.height - 6);
+      }
+      // Functional setState + identity guard — safe even though pos isn't
+      // in the dep array (resize callback can re-fire and we don't want a
+      // setState→re-render→setState loop).
+      setPos((prev) => (nx !== prev.x || ny !== prev.y ? { x: nx, y: ny } : prev));
+    };
+    reposition();
+    if (typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(reposition);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [x, y]);
 
   return ReactDOM.createPortal(
     <div
@@ -68,6 +90,11 @@ export default function ContextMenu({ x, y, onClose, children }) {
         left: pos.x,
         zIndex: 200,
         minWidth: 180,
+        // Hard cap so the menu can NEVER be taller than the viewport —
+        // worst case it gets a scroll bar instead of cutting items off.
+        // 16 px = 8 px buffer top + 8 px bottom.
+        maxHeight: 'calc(100vh - 16px)',
+        overflowY: 'auto',
         background: 'var(--zinc-925)',
         border: '1px solid var(--zinc-800)',
         borderRadius: 6,
