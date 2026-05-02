@@ -123,6 +123,12 @@ pub struct ChatSettings {
     pub show_mod_badges: bool,
     #[serde(default = "default_true")]
     pub show_timestamps: bool,
+    #[serde(default = "default_true")]
+    pub spellcheck_enabled: bool,
+    #[serde(default = "default_true")]
+    pub autocorrect_enabled: bool,
+    #[serde(default = "default_lang")]
+    pub spellcheck_language: String,
 }
 
 fn default_timestamp_24h() -> bool {
@@ -140,6 +146,13 @@ fn default_user_card_hover_delay_ms() -> u32 {
 fn default_true() -> bool {
     true
 }
+fn default_lang() -> String {
+    std::env::var("LANG")
+        .ok()
+        .and_then(|l| l.split('.').next().map(|s| s.to_string()))
+        .filter(|s| !s.is_empty() && s != "C" && s != "POSIX")
+        .unwrap_or_else(|| "en_US".to_string())
+}
 
 impl Default for ChatSettings {
     fn default() -> Self {
@@ -151,6 +164,9 @@ impl Default for ChatSettings {
             show_badges: default_true(),
             show_mod_badges: default_true(),
             show_timestamps: default_true(),
+            spellcheck_enabled: default_true(),
+            autocorrect_enabled: default_true(),
+            spellcheck_language: default_lang(),
         }
     }
 }
@@ -223,11 +239,28 @@ mod tests {
             show_badges: false,
             show_mod_badges: false,
             show_timestamps: false,
+            spellcheck_enabled: false,
+            autocorrect_enabled: false,
+            spellcheck_language: "es_ES".to_string(),
         };
         let json = serde_json::to_string(&chat).unwrap();
         let back: ChatSettings = serde_json::from_str(&json).unwrap();
         assert!(!back.show_badges);
         assert!(!back.show_mod_badges);
         assert!(!back.show_timestamps);
+        assert_eq!(back.spellcheck_enabled, false);
+        assert_eq!(back.autocorrect_enabled, false);
+        assert_eq!(back.spellcheck_language, "es_ES");
+    }
+
+    #[test]
+    fn chat_settings_defaults_for_missing_fields() {
+        // Old config files without the new fields must still deserialize cleanly,
+        // with the new fields taking their default-true / default-lang values.
+        let json = r#"{"timestamp_24h":true,"history_replay_count":100,"user_card_hover":true,"user_card_hover_delay_ms":400,"show_badges":true,"show_mod_badges":true,"show_timestamps":true}"#;
+        let chat: ChatSettings = serde_json::from_str(json).unwrap();
+        assert_eq!(chat.spellcheck_enabled, true);
+        assert_eq!(chat.autocorrect_enabled, true);
+        assert!(!chat.spellcheck_language.is_empty());
     }
 }
