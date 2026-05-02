@@ -3,13 +3,16 @@ import { readableColor } from '../utils/color.js';
 import { useAuth } from '../hooks/useAuth.jsx';
 import { useChat } from '../hooks/useChat.js';
 import { usePreferences } from '../hooks/usePreferences.jsx';
+import { useSubAnniversary } from '../hooks/useSubAnniversary.js';
 import ChaturbateAuthBanner from './ChaturbateAuthBanner.jsx';
 import ChatModeBanner from './ChatModeBanner.jsx';
 import Composer from './Composer.jsx';
 import ConversationDialog from './ConversationDialog.jsx';
 import EmbedSlot from './EmbedSlot.jsx';
 import EmoteText from './EmoteText.jsx';
+import { SubAnniversaryBanner } from './SubAnniversaryBanner.jsx';
 import Tooltip from './Tooltip.jsx';
+import { TwitchWebConnectPrompt } from './TwitchWebConnectPrompt.jsx';
 import UserBadges from './UserBadges.jsx';
 
 // Qt-style auto-scroll: when the user scrolls up, pause auto-follow for 5
@@ -39,6 +42,11 @@ export default function ChatView({
   onUsernameContext,
   onUsernameHover,
 }) {
+  // Sub-anniversary banner + web-session connect prompt (Twitch only).
+  // Hook must be called unconditionally before any early returns.
+  const { info: anniversaryInfo, connectPromptVisible, share: shareAnniversary, dismiss: dismissAnniversary, dismissPrompt } =
+    useSubAnniversary(channelKey);
+
   // YouTube and Chaturbate don't have a built-in chat client — we mount the
   // platform's own /live_chat (or room) page as a child webview overlaid on
   // the chat pane. Branch out before the IRC-style state machinery runs.
@@ -497,6 +505,18 @@ export default function ChatView({
         )}
       </div>
       <ChatModeBanner channelKey={channelKey} variant={variant} />
+      {anniversaryInfo && (
+        <SubAnniversaryBanner
+          info={anniversaryInfo}
+          onShare={shareAnniversary}
+          onDismiss={dismissAnniversary}
+        />
+      )}
+      {connectPromptVisible && !anniversaryInfo && (
+        <TwitchWebConnectPrompt
+          onDismiss={dismissPrompt}
+        />
+      )}
       {footer ?? (
         <Composer
           channelKey={channelKey}

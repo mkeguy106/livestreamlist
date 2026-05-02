@@ -854,6 +854,18 @@ function ChatTab({ settings, patch }) {
       </Row>
 
       <Row
+        label="Show sub anniversary banner"
+        hint="When you have a Twitch sub anniversary ready to share, show a banner above chat with a one-click Share button."
+      >
+        <Toggle
+          checked={c.show_sub_anniversary_banner !== false}
+          onChange={(v) =>
+            patch((prev) => ({ ...prev, chat: { ...c, show_sub_anniversary_banner: v } }))
+          }
+        />
+      </Row>
+
+      <Row
         label="Open user card on hover"
         hint="When off, only clicking the username opens the card."
       >

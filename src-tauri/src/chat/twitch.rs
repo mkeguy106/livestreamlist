@@ -601,6 +601,37 @@ fn build_usernotice(cfg: &TwitchChatConfig, msg: &IrcMessage<'_>) -> Option<Chat
     cfg.badges
         .resolve(Platform::Twitch, room_snapshot.as_deref(), &mut badges);
 
+    // Own-resub detection: when the logged-in user shares their resub
+    // anniversary, Twitch broadcasts a USERNOTICE with msg-id=resub
+    // (or msg-id=sub for first-time subs). Emit a separate event so
+    // the React useSubAnniversary hook can auto-dismiss the banner
+    // without filtering every chat message itself.
+    if matches!(kind.as_str(), "resub" | "sub") {
+        if let Some(ref own) = cfg.auth {
+            if own.login.eq_ignore_ascii_case(&login) {
+                use tauri::Emitter;
+                let months = msg
+                    .tags
+                    .get("msg-param-cumulative-months")
+                    .and_then(|s| s.parse::<u32>().ok())
+                    .or_else(|| {
+                        msg.tags
+                            .get("msg-param-months")
+                            .and_then(|s| s.parse::<u32>().ok())
+                    })
+                    .unwrap_or(0);
+                let payload = serde_json::json!({
+                    "months": months,
+                    "login": login,
+                });
+                let _ = cfg.app.emit(
+                    &format!("chat:resub_self:{}", cfg.channel_key),
+                    payload,
+                );
+            }
+        }
+    }
+
     Some(ChatMessage {
         id,
         channel_key: cfg.channel_key.clone(),
