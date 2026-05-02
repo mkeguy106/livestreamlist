@@ -319,6 +319,37 @@ pub async fn login_via_webview(
     }
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum LoginError {
+    #[error("Web login is @{web} but app is logged in as @{oauth}. Log out of one before continuing.")]
+    AccountMismatch { web: String, oauth: String },
+    #[error("{0}")]
+    Other(#[from] anyhow::Error),
+}
+
+/// Same as `login_via_webview` but rejects mismatched accounts.
+/// On mismatch the freshly-captured cookie is cleared so we don't
+/// half-store the wrong account.
+pub async fn login_with_match_check(
+    app: AppHandle,
+    client: reqwest::Client,
+) -> Result<TwitchWebIdentity, LoginError> {
+    let identity = login_via_webview(app, client).await?;
+    if let Some(oauth) = super::twitch::stored_identity() {
+        if oauth.login.eq_ignore_ascii_case(&identity.login) {
+            return Ok(identity);
+        }
+        // Mismatch: roll back the keyring writes login_via_webview did.
+        let _ = clear();
+        return Err(LoginError::AccountMismatch {
+            web: identity.login,
+            oauth: oauth.login,
+        });
+    }
+    // No OAuth login → no comparison possible. Allow.
+    Ok(identity)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
