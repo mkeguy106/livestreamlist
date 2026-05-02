@@ -6,6 +6,7 @@ use tauri::{Emitter, Manager, State};
 mod auth;
 mod channels;
 mod chat;
+mod spellcheck;
 mod config;
 mod embed;
 mod login_popup;
