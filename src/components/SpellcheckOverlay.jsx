@@ -21,7 +21,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
  *   text           current input value
  *   misspellings   Array<{ start, end, word }> from useSpellcheck
  */
-export default function SpellcheckOverlay({ inputRef, text, misspellings }) {
+export default function SpellcheckOverlay({ inputRef, text, misspellings, recentCorrections }) {
   const overlayRef = useRef(null);
   const [style, setStyle] = useState(null);
   const [scrollLeft, setScrollLeft] = useState(0);
@@ -85,7 +85,7 @@ export default function SpellcheckOverlay({ inputRef, text, misspellings }) {
 
   if (!style) return null;
 
-  const segments = buildSegments(text, misspellings);
+  const segments = buildSegments(text, misspellings, recentCorrections);
 
   return (
     <div
@@ -113,39 +113,85 @@ export default function SpellcheckOverlay({ inputRef, text, misspellings }) {
         transform: `translateX(-${scrollLeft}px)`,
       }}
     >
-      {segments.map((seg, i) =>
-        seg.kind === 'plain' ? (
-          <span key={i}>{seg.text}</span>
-        ) : (
+      {segments.map((seg, i) => {
+        if (seg.kind === 'plain') {
+          return <span key={i}>{seg.text}</span>;
+        }
+        if (seg.kind === 'corrected') {
+          // Use a key that incorporates `originalWord` + position, so
+          // when a word fades and a new correction lands at a similar
+          // position, React doesn't accidentally re-use the DOM node
+          // (which would inherit the in-progress animation timer).
+          return (
+            <span
+              key={`c:${seg.start}:${seg.originalWord}`}
+              className="spellcheck-corrected"
+              data-word={seg.word}
+              data-original={seg.originalWord}
+            >
+              {seg.text}
+            </span>
+          );
+        }
+        return (
           <span key={i} className="spellcheck-misspelled" data-word={seg.word}>
             {seg.text}
           </span>
-        ),
-      )}
+        );
+      })}
     </div>
   );
 }
 
 /**
- * Slice `text` into alternating plain / misspelled segments based on
- * `ranges`. Out-of-bounds or overlapping ranges are tolerated — last
- * one wins per byte.
+ * Slice `text` into alternating plain / misspelled / corrected segments.
+ *
+ * Precedence: corrected > misspelled (a recently-corrected word that
+ * hunspell would still flag — perhaps the user typed a non-dict word
+ * that got autocorrected to another non-dict word — should show the
+ * green pill, not red squiggle, until the pill fades).
+ *
+ * Out-of-bounds or overlapping ranges of the SAME kind are tolerated;
+ * cross-kind overlap resolves per the precedence above.
  */
-function buildSegments(text, ranges) {
-  if (!ranges || ranges.length === 0) {
+function buildSegments(text, misspellings, recentCorrections) {
+  const corrected = [];
+  if (recentCorrections) {
+    for (const c of recentCorrections.values()) {
+      corrected.push({ ...c, kind: 'corrected' });
+    }
+  }
+  const flagged = (misspellings ?? []).map((m) => ({ ...m, kind: 'misspelled' }));
+
+  // Filter out misspelled ranges that overlap a corrected range.
+  const survivors = flagged.filter((m) =>
+    !corrected.some((c) => rangesOverlap(m, c)),
+  );
+
+  const all = [...corrected, ...survivors].sort((a, b) => a.start - b.start);
+
+  if (all.length === 0) {
     return [{ kind: 'plain', text }];
   }
-  const sorted = [...ranges].sort((a, b) => a.start - b.start);
+
   const out = [];
   let cursor = 0;
-  for (const r of sorted) {
+  for (const r of all) {
     const start = Math.max(0, Math.min(r.start, text.length));
     const end = Math.max(start, Math.min(r.end, text.length));
     if (start > cursor) {
       out.push({ kind: 'plain', text: text.slice(cursor, start) });
     }
     if (end > start) {
-      out.push({ kind: 'misspelled', text: text.slice(start, end), word: r.word });
+      out.push({
+        kind: r.kind,
+        text: text.slice(start, end),
+        word: r.word,
+        // corrected ranges carry the original (pre-correction) word
+        // for the green pill's data-original attribute.
+        originalWord: r.originalWord,
+        start,
+      });
     }
     cursor = end;
   }
@@ -153,4 +199,8 @@ function buildSegments(text, ranges) {
     out.push({ kind: 'plain', text: text.slice(cursor) });
   }
   return out;
+}
+
+function rangesOverlap(a, b) {
+  return a.start < b.end && b.start < a.end;
 }
