@@ -87,6 +87,83 @@ pub fn clear() -> Result<()> {
     Ok(())
 }
 
+const GQL_URL: &str = "https://gql.twitch.tv/gql";
+/// Same anonymous public web client ID Twitch's own site sends for
+/// non-Helix GQL calls. Already used by `platforms::twitch` for
+/// unauthenticated reads.
+const PUBLIC_CLIENT_ID: &str = "kimne78kx3ncx6brgo4mv6wki5h1ko";
+
+/// Validate the cookie and return the identity it resolves to. Errors
+/// on HTTP/JSON failures or when the response has no `currentUser`
+/// (the 401-equivalent: GQL returns 200 with `currentUser: null`).
+pub async fn validate(client: &reqwest::Client, cookie: &str) -> Result<TwitchWebIdentity> {
+    #[derive(Deserialize)]
+    struct Resp {
+        data: Option<Data>,
+    }
+    #[derive(Deserialize)]
+    struct Data {
+        #[serde(rename = "currentUser")]
+        current_user: Option<CurrentUser>,
+    }
+    #[derive(Deserialize)]
+    struct CurrentUser {
+        login: String,
+    }
+
+    let body = serde_json::json!({
+        "query": "query CurrentUser { currentUser { login id } }",
+    });
+    let resp = client
+        .post(GQL_URL)
+        .header("Client-Id", PUBLIC_CLIENT_ID)
+        .header("Authorization", format!("OAuth {cookie}"))
+        .header("Content-Type", "application/json")
+        .json(&body)
+        .send()
+        .await
+        .context("POST gql.twitch.tv (CurrentUser)")?;
+
+    if !resp.status().is_success() {
+        anyhow::bail!(
+            "gql.twitch.tv {}: {}",
+            resp.status(),
+            resp.text().await.unwrap_or_default()
+        );
+    }
+    let parsed: Resp = resp.json().await.context("parsing CurrentUser response")?;
+    let login = parsed
+        .data
+        .and_then(|d| d.current_user)
+        .map(|u| u.login)
+        .ok_or_else(|| anyhow::anyhow!("currentUser is null — cookie no longer valid"))?;
+    Ok(TwitchWebIdentity {
+        login,
+        last_verified_at: Utc::now(),
+    })
+}
+
+/// Boot-time status: returns `Some` if both keyring entries exist AND
+/// the cookie still validates. Mirrors `auth::twitch::status` semantics.
+/// Failures clear the stored cookie so the UI doesn't keep lying.
+pub async fn status(client: &reqwest::Client) -> Result<Option<TwitchWebIdentity>> {
+    let Some(token) = stored_token()? else {
+        return Ok(None);
+    };
+    match validate(client, &token).await {
+        Ok(id) => {
+            // Refresh the stored identity with the new last_verified_at.
+            let _ = save_pair(&token, &id);
+            Ok(Some(id))
+        }
+        Err(e) => {
+            log::warn!("Twitch web cookie invalid, clearing: {e:#}");
+            let _ = clear();
+            Ok(None)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
