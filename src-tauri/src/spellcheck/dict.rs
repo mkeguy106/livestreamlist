@@ -67,16 +67,19 @@ pub fn search_paths() -> Vec<PathBuf> {
 
 /// Path to the bundled fallback `en_US.aff`. `None` if not present.
 pub fn bundled_en_us_path() -> Option<PathBuf> {
-    // At runtime, the bundled dict ships alongside the executable.
-    // Tauri places resources under the resource_dir; for dev we look
-    // relative to the manifest dir.
-    let candidates = [
-        // Dev: walk up from CARGO_MANIFEST_DIR
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("dictionaries/en_US.aff"),
-        // Production bundles will copy here via tauri.conf.json resources.
-        // Resolved at runtime by SpellChecker::new — see Task 6.
-    ];
-    candidates.into_iter().find(|p| p.exists())
+    // Production: Tauri exposes resources via the resource_dir at runtime.
+    // We can't reach AppHandle from this pure function, so we consult an
+    // env var that's set by SpellChecker::new (which DOES have AppHandle).
+    if let Ok(resolved) = std::env::var("LIVESTREAMLIST_RESOURCE_DIR") {
+        let p = PathBuf::from(resolved).join("dictionaries/en_US.aff");
+        if p.exists() {
+            return Some(p);
+        }
+    }
+    // Dev: walk up from CARGO_MANIFEST_DIR.
+    let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("dictionaries/en_US.aff");
+    if dev.exists() { Some(dev) } else { None }
 }
 
 /// Scan a directory for `.aff` files, pair them with their matching
@@ -226,5 +229,19 @@ mod tests {
     #[test]
     fn pretty_name_unknown_falls_back() {
         assert_eq!(pretty_name("xx_YY"), "xx_YY");
+    }
+
+    #[test]
+    fn bundled_en_us_path_resolves_in_dev() {
+        // After Task 5, the bundled dict files exist under
+        // CARGO_MANIFEST_DIR/dictionaries/. This test verifies dev-mode
+        // fallback. (Production resource resolution is tested by
+        // SpellChecker::new in Task 6.)
+        let path = bundled_en_us_path()
+            .expect("bundled en_US.aff should be present after Task 5");
+        assert!(path.ends_with("en_US.aff"));
+        assert!(path.exists());
+        let dic = path.with_extension("dic");
+        assert!(dic.exists(), "matching .dic should also exist");
     }
 }
