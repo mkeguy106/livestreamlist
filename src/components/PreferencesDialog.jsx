@@ -268,7 +268,7 @@ function AccountsTab() {
       {twWebError && (
         <div style={{
           color: 'var(--warn, #f59e0b)',
-          fontSize: 'var(--t-12, 12px)',
+          fontSize: 'var(--t-11)',
           margin: '4px 0 8px 0',
           paddingLeft: 8,
         }}>
