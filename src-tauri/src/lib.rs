@@ -1140,6 +1140,56 @@ fn twitch_anniversary_dismiss(
 }
 
 #[tauri::command]
+fn twitch_share_resub_open(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    unique_key: String,
+) -> Result<(), String> {
+    let channel_key = channels::channel_key_of(&unique_key).to_string();
+    let channel = state
+        .store
+        .lock()
+        .channels()
+        .iter()
+        .find(|c| c.unique_key() == channel_key)
+        .cloned()
+        .ok_or_else(|| format!("unknown channel {unique_key}"))?;
+    if channel.platform != Platform::Twitch {
+        return Err(format!(
+            "share popout only supported for Twitch; got {:?}",
+            channel.platform
+        ));
+    }
+    share_window::open(
+        &app,
+        &channel.channel_id,
+        &channel.display_name,
+        &state.share_windows,
+    )
+    .map_err(err_string)
+}
+
+#[tauri::command]
+fn twitch_share_window_close(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    unique_key: String,
+) -> Result<(), String> {
+    let channel_key = channels::channel_key_of(&unique_key).to_string();
+    let channel_login = state
+        .store
+        .lock()
+        .channels()
+        .iter()
+        .find(|c| c.unique_key() == channel_key)
+        .map(|c| c.channel_id.clone());
+    if let Some(login) = channel_login {
+        share_window::close(&app, &login, &state.share_windows);
+    }
+    Ok(())
+}
+
+#[tauri::command]
 async fn kick_login(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
@@ -1477,6 +1527,8 @@ pub fn run() {
             twitch_web_clear,
             twitch_anniversary_check,
             twitch_anniversary_dismiss,
+            twitch_share_resub_open,
+            twitch_share_window_close,
             kick_login,
             kick_logout,
             youtube_login,

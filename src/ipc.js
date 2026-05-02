@@ -55,6 +55,10 @@ export const twitchAnniversaryCheck = (uniqueKey) =>
   invoke('twitch_anniversary_check', { uniqueKey });
 export const twitchAnniversaryDismiss = (uniqueKey, renewsAt) =>
   invoke('twitch_anniversary_dismiss', { uniqueKey, renewsAt });
+export const twitchShareResubOpen = (uniqueKey) =>
+  invoke('twitch_share_resub_open', { uniqueKey });
+export const twitchShareWindowClose = (uniqueKey) =>
+  invoke('twitch_share_window_close', { uniqueKey });
 export const kickLogin = () => invoke('kick_login');
 export const kickLogout = () => invoke('kick_logout');
 export const youtubeLogin = () => invoke('youtube_login');
@@ -286,6 +290,11 @@ async function mockInvoke(name, args) {
       // PR 4 brainstorming may want a "force show" flag for visual testing.
       return null;
     case 'twitch_anniversary_dismiss':
+      return null;
+    case 'twitch_share_resub_open':
+      // Mock: noop in browser-only dev (no native window).
+      return null;
+    case 'twitch_share_window_close':
       return null;
     case 'kick_login':
       mockAuth = { ...mockAuth, kick: { login: 'mock_kick', user_id: '0' } };
