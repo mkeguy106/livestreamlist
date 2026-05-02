@@ -457,6 +457,15 @@ Right-click on a misspelled word OR a green-pill (recently-corrected) word in th
 
 **`undoCorrection(positionKey)`** is distinct from `undoLast()`: undoLast only undoes the most recent autocorrect (Esc handler); undoCorrection takes a specific position key (the same key used by `recentCorrections.set()`) and undoes that specific entry. Used by the right-click "Undo correction" item which can target any visible green pill, not just the most recent.
 
+### Spellcheck Preferences (PR 5 — `PreferencesDialog.jsx::SpellcheckSection`)
+
+Three rows at the top of the Chat tab in Preferences:
+- **Enable spellcheck** — `settings.chat.spellcheck_enabled` (default `true`). When off, the SpellcheckOverlay unmounts entirely (Composer's conditional render); the hook clears `recentCorrections` + `alreadyCorrected` so pills/squiggles disappear immediately.
+- **Auto-correct misspelled words** — `settings.chat.autocorrect_enabled` (default `true`). **Chained-disable**: when spellcheck is off, this toggle is `disabled` and shown greyed; the hint text changes to "Requires spellcheck to be enabled." When spellcheck is on but autocorrect is off, squiggles still render but Composer's autocorrect effect bails before any rewrite.
+- **Language** — `settings.chat.spellcheck_language` (default = system locale via `default_lang()` in `settings.rs`, falls back to `en_US`). Dropdown options fetched on mount via `spellcheck_list_dicts` IPC; cached in component-local state. Disabled when spellcheck is off OR while the IPC is in flight.
+
+**On language change**: `useSpellcheck`'s reset effect (deps `[language, enabled]`) clears `recentCorrections` + `alreadyCorrected`. The next debounced `spellcheck_check` (within 150 ms) re-evaluates against the new dictionary, so misspelled-vs-correct flags update naturally.
+
 ## Configuration
 
 Data dir (XDG):
