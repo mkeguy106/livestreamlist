@@ -297,3 +297,15 @@ body { background: var(--zinc-950); }
 /* Collapse chevron — order pushes it to the inner edge of the rail header. */
 .cmd-collapse-chevron { order: 99; }
 :root[data-sidebar-position="right"] .cmd-collapse-chevron { order: -1; }
+
+/* ── Spellcheck — PR 2 (red squiggle on misspelled words; */
+/*    green-pill for autocorrected words lands in PR 3) ── */
+
+.spellcheck-misspelled {
+  text-decoration: underline wavy rgba(255, 80, 80, 0.85);
+  text-underline-offset: 3px;
+  /* Native text-decoration renders even when color is transparent, */
+  /* which is how the overlay-on-top-of-input pattern works (the */
+  /* overlay's text is `color: transparent` so the input's text shows */
+  /* through, but the squiggle stays visible). */
+}
