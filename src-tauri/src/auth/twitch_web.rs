@@ -133,6 +133,12 @@ pub async fn validate(client: &reqwest::Client, cookie: &str) -> Result<TwitchWe
         login: String,
     }
 
+    // We deliberately query `currentUser { login }` only — no `id`.
+    // TwitchWebIdentity stores only `login`, and PRs 2-4 don't need
+    // user_id either (anniversary GQL takes $login: String!, the
+    // share-popout URL is /popout/{login}/chat, and auto-dismiss
+    // matches on login). If a future PR needs user_id cheaply, add
+    // `id` back here and an `id: String` field on TwitchWebIdentity.
     let body = serde_json::json!({
         "query": "query CurrentUser { currentUser { login } }",
     });
@@ -235,6 +241,11 @@ pub async fn login_via_webview(
         builder.build().context("opening Twitch web login window")?
     };
 
+    // Attach (or re-attach for re-entry) the close listener on the
+    // window we're about to poll against. Tauri's `on_window_event`
+    // takes owned listeners; calling it twice on the same window
+    // stacks listeners, which is fine — both invocations' atomics
+    // get flipped on close. Pattern mirrors auth::chaturbate.
     let closed_for_event = closed.clone();
     window.on_window_event(move |event| {
         if matches!(event, WindowEvent::Destroyed | WindowEvent::CloseRequested { .. }) {
@@ -283,6 +294,11 @@ pub async fn login_via_webview(
             Err(e) => log::debug!("cookies_for_url(twitch.tv): {e}"),
         }
 
+        // No about:blank cancel path here: Twitch uses native window
+        // decorations, so the user's close click fires WindowEvent::Destroyed
+        // (handled by the AtomicBool above). The chaturbate reference has
+        // a non-HTTPS-URL fallback because its custom titlebar used to
+        // navigate to about:blank on cancel — we have no equivalent.
         if closed.load(Ordering::Relaxed)
             || app.get_webview_window(LOGIN_WINDOW_LABEL).is_none()
         {
