@@ -14,6 +14,7 @@ mod platforms;
 mod player;
 mod refresh;
 mod settings;
+mod spellcheck;
 mod streamlink;
 mod tray;
 mod users;
@@ -472,6 +473,40 @@ async fn chat_focus_detached(app: tauri::AppHandle, unique_key: String) -> Resul
         let _ = window.set_focus();
     }
     Ok(())
+}
+
+#[tauri::command]
+async fn spellcheck_check(
+    state: tauri::State<'_, std::sync::Arc<crate::spellcheck::SpellChecker>>,
+    text: String,
+    language: String,
+    channel_emotes: Vec<String>,
+) -> Result<Vec<crate::spellcheck::MisspelledRange>, String> {
+    Ok(state.check(&text, &language, &channel_emotes))
+}
+
+#[tauri::command]
+async fn spellcheck_suggest(
+    state: tauri::State<'_, std::sync::Arc<crate::spellcheck::SpellChecker>>,
+    word: String,
+    language: String,
+) -> Result<Vec<String>, String> {
+    Ok(state.suggest(&word, &language))
+}
+
+#[tauri::command]
+async fn spellcheck_add_word(
+    state: tauri::State<'_, std::sync::Arc<crate::spellcheck::SpellChecker>>,
+    word: String,
+) -> Result<bool, String> {
+    state.add_to_personal(&word).map_err(err_string)
+}
+
+#[tauri::command]
+async fn spellcheck_list_dicts(
+    state: tauri::State<'_, std::sync::Arc<crate::spellcheck::SpellChecker>>,
+) -> Result<Vec<crate::spellcheck::dict::DictInfo>, String> {
+    Ok(state.list_dicts())
 }
 
 fn yt_id_from_thumbnail(url: &str) -> Option<String> {
@@ -1284,6 +1319,18 @@ pub fn run() {
             if auth::youtube::load().ok().flatten().is_some() {
                 spawn_youtube_user_info_refresh(&app.handle(), http_for_chat.clone());
             }
+            // Set the resource dir env var so spellcheck::dict::bundled_en_us_path
+            // can resolve it without needing AppHandle.
+            if let Ok(res_dir) = app.path().resource_dir() {
+                std::env::set_var("LIVESTREAMLIST_RESOURCE_DIR", &res_dir);
+            }
+            let personal_dict_path = crate::config::config_dir()
+                .unwrap_or_else(|_| std::path::PathBuf::from("."))
+                .join("personal_dict.json");
+            let spellchecker = std::sync::Arc::new(
+                crate::spellcheck::SpellChecker::new(personal_dict_path),
+            );
+            app.manage(spellchecker);
             tray::build(&app.handle())?;
             window_state::register(app)?;
             Ok(())
@@ -1337,6 +1384,10 @@ pub fn run() {
             chaturbate_login,
             chaturbate_logout,
             import_twitch_follows,
+            spellcheck_check,
+            spellcheck_suggest,
+            spellcheck_add_word,
+            spellcheck_list_dicts,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
