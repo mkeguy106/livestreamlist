@@ -41,6 +41,40 @@ pub(crate) fn extract_auth_token(jar: &[Cookie<'_>]) -> Option<String> {
         .map(|c| c.value().to_string())
 }
 
+/// Token currently stored in the keyring (if any). Used by callers
+/// (anniversary GQL, future web-cookie consumers) to authenticate.
+pub fn stored_token() -> Result<Option<String>> {
+    tokens::load(KEYRING_TOKEN)
+}
+
+/// Last-validated identity from the keyring without re-validating
+/// against Twitch. Used at boot for an instant "Connected as @X" UI.
+pub fn stored_identity() -> Option<TwitchWebIdentity> {
+    tokens::load(KEYRING_IDENTITY)
+        .ok()
+        .flatten()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+}
+
+/// Persist the validated cookie + identity. Both must succeed; if
+/// identity-save fails we roll back the token so we never have a
+/// partial state ("token present but identity says not logged in").
+pub(crate) fn save_pair(token: &str, identity: &TwitchWebIdentity) -> Result<()> {
+    tokens::save(KEYRING_TOKEN, token).context("saving twitch web token")?;
+    let identity_json = serde_json::to_string(identity).context("serialising identity")?;
+    if let Err(e) = tokens::save(KEYRING_IDENTITY, &identity_json) {
+        let _ = tokens::clear(KEYRING_TOKEN);
+        return Err(e.context("saving twitch web identity"));
+    }
+    Ok(())
+}
+
+pub fn clear() -> Result<()> {
+    tokens::clear(KEYRING_TOKEN)?;
+    tokens::clear(KEYRING_IDENTITY).ok();
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
