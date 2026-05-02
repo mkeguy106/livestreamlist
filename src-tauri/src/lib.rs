@@ -1321,6 +1321,19 @@ fn replay_chat_history(
     for m in &mut msgs {
         m.is_log_replay = true;
     }
+    // Diagnostic: count self-echo IDs in the replayed history. If a future
+    // self-echo emit hits the React-side dedup against one of these,
+    // it'll be silently dropped (this used to bite first-message-after-
+    // restart before SELF_ECHO_PREFIX was added in chat/twitch.rs).
+    let self_count = msgs.iter().filter(|m| m.id.starts_with("self-")).count();
+    if self_count > 0 {
+        log::info!(
+            "replay_chat_history channel={} loaded {} messages including {} self-* IDs",
+            unique_key,
+            msgs.len(),
+            self_count
+        );
+    }
     Ok(msgs)
 }
 

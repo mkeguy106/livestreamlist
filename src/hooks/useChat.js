@@ -85,6 +85,13 @@ export function useChat(channelKey) {
         // replayChatHistory resolves, and React StrictMode double-mount
         // creating overlapping subscriptions in dev.
         if (payload?.id && bufferRef.current.some((m) => m.id === payload.id)) {
+          // Diagnostic: log dedup drops so silent message-loss bugs
+          // (e.g. self-N collision against chat-log replay) leave a
+          // breadcrumb. Visible in devtools console.
+          // eslint-disable-next-line no-console
+          console.debug(
+            `[useChat ${channelKey}] dedup dropped incoming id=${payload.id} (already in buffer)`
+          );
           return;
         }
         const next = [...bufferRef.current, payload];
