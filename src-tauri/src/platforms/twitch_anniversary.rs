@@ -80,6 +80,63 @@ pub type SharedCache = Arc<Cache>;
 /// Some with a meaningless `days_remaining_in_window` — documented
 /// limitation. Future work could inspect a `renewalIntervalDays`
 /// field if Twitch ever exposes it via GQL.
+/// Parse a GQL `SubAnniversary` response into `SubAnniversaryInfo`.
+/// Returns `None` if the user isn't subbed (no `self.subscriptionBenefit`)
+/// or if required fields are missing/malformed.
+///
+/// `days_remaining_in_window` is initialized to 0 here; callers that
+/// have access to `now` should fill it via `compute_window`.
+pub fn parse_response(json: &serde_json::Value, channel_login: &str) -> Option<SubAnniversaryInfo> {
+    let user = json.get("data")?.get("user")?;
+    if user.is_null() {
+        return None;
+    }
+    let self_data = user.get("self")?;
+    if self_data.is_null() {
+        return None;
+    }
+    let benefit = self_data.get("subscriptionBenefit")?;
+    if benefit.is_null() {
+        return None;
+    }
+
+    let renews_at_str = benefit.get("renewsAt")?.as_str()?.to_string();
+    // Validate ISO 8601 — reject malformed timestamps.
+    let _: DateTime<Utc> = DateTime::parse_from_rfc3339(&renews_at_str).ok()?.into();
+
+    let tier = benefit.get("tier").and_then(|v| v.as_str()).unwrap_or("1000").to_string();
+    let is_prime = benefit.get("purchasedWithPrime").and_then(|v| v.as_bool()).unwrap_or(false);
+    let is_gift = benefit.get("gift")
+        .and_then(|g| g.as_object())
+        .and_then(|g| g.get("isGift"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    let tenure = self_data.get("subscriptionTenure");
+    let months = tenure
+        .and_then(|t| t.as_object())
+        .and_then(|t| t.get("months"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0) as u32;
+
+    let display_name = user
+        .get("displayName")
+        .and_then(|v| v.as_str())
+        .unwrap_or(channel_login)
+        .to_string();
+
+    Some(SubAnniversaryInfo {
+        months,
+        days_remaining_in_window: 0,
+        tier,
+        is_prime,
+        is_gift,
+        channel_login: channel_login.to_string(),
+        channel_display_name: display_name,
+        renews_at: renews_at_str,
+    })
+}
+
 pub fn compute_window(renews_at: DateTime<Utc>, now: DateTime<Utc>) -> Option<u32> {
     let days_until_renewal = (renews_at - now).num_seconds() as f64 / 86400.0;
     if days_until_renewal < SHARE_WINDOW_THRESHOLD_DAYS {
@@ -93,6 +150,109 @@ pub fn compute_window(renews_at: DateTime<Utc>, now: DateTime<Utc>) -> Option<u3
 mod tests {
     use super::*;
     use chrono::TimeZone;
+    use serde_json::json;
+
+    fn full_response() -> serde_json::Value {
+        json!({
+            "data": {
+                "user": {
+                    "id": "12345",
+                    "displayName": "millyyy314",
+                    "self": {
+                        "subscriptionBenefit": {
+                            "id": "abc",
+                            "tier": "1000",
+                            "renewsAt": "2026-05-23T15:00:00Z",
+                            "purchasedWithPrime": false,
+                            "gift": { "isGift": false }
+                        },
+                        "subscriptionTenure": {
+                            "months": 14,
+                            "daysRemaining": 22
+                        }
+                    }
+                }
+            }
+        })
+    }
+
+    #[test]
+    fn parse_response_full_returns_some() {
+        let info = parse_response(&full_response(), "millyyy314").unwrap();
+        assert_eq!(info.months, 14);
+        assert_eq!(info.tier, "1000");
+        assert!(!info.is_prime);
+        assert!(!info.is_gift);
+        assert_eq!(info.channel_login, "millyyy314");
+        assert_eq!(info.channel_display_name, "millyyy314");
+        assert_eq!(info.renews_at, "2026-05-23T15:00:00Z");
+    }
+
+    #[test]
+    fn parse_response_no_user_returns_none() {
+        let resp = json!({ "data": { "user": null } });
+        assert!(parse_response(&resp, "anyone").is_none());
+    }
+
+    #[test]
+    fn parse_response_no_self_returns_none() {
+        let resp = json!({ "data": { "user": { "id": "1", "displayName": "X", "self": null } } });
+        assert!(parse_response(&resp, "x").is_none());
+    }
+
+    #[test]
+    fn parse_response_no_subscription_benefit_returns_none() {
+        let mut resp = full_response();
+        resp["data"]["user"]["self"]["subscriptionBenefit"] = json!(null);
+        assert!(parse_response(&resp, "millyyy314").is_none());
+    }
+
+    #[test]
+    fn parse_response_missing_tenure_uses_default_months() {
+        let mut resp = full_response();
+        resp["data"]["user"]["self"]["subscriptionTenure"] = json!(null);
+        let info = parse_response(&resp, "millyyy314").unwrap();
+        assert_eq!(info.months, 0);
+    }
+
+    #[test]
+    fn parse_response_malformed_renews_at_returns_none() {
+        let mut resp = full_response();
+        resp["data"]["user"]["self"]["subscriptionBenefit"]["renewsAt"] = json!("not-a-date");
+        assert!(parse_response(&resp, "millyyy314").is_none());
+    }
+
+    #[test]
+    fn parse_response_prime_flag_propagates() {
+        let mut resp = full_response();
+        resp["data"]["user"]["self"]["subscriptionBenefit"]["purchasedWithPrime"] = json!(true);
+        let info = parse_response(&resp, "millyyy314").unwrap();
+        assert!(info.is_prime);
+    }
+
+    #[test]
+    fn parse_response_gift_flag_propagates() {
+        let mut resp = full_response();
+        resp["data"]["user"]["self"]["subscriptionBenefit"]["gift"] = json!({ "isGift": true });
+        let info = parse_response(&resp, "millyyy314").unwrap();
+        assert!(info.is_gift);
+    }
+
+    #[test]
+    fn parse_response_missing_gift_object_treats_as_not_gift() {
+        let mut resp = full_response();
+        resp["data"]["user"]["self"]["subscriptionBenefit"]["gift"] = json!(null);
+        let info = parse_response(&resp, "millyyy314").unwrap();
+        assert!(!info.is_gift);
+    }
+
+    #[test]
+    fn parse_response_days_remaining_in_window_initialized_to_zero() {
+        // parse_response doesn't have access to `now`; the caller (check)
+        // computes days_remaining_in_window via compute_window.
+        let info = parse_response(&full_response(), "millyyy314").unwrap();
+        assert_eq!(info.days_remaining_in_window, 0);
+    }
 
     fn dt(year: i32, month: u32, day: u32, hour: u32) -> DateTime<Utc> {
         Utc.with_ymd_and_hms(year, month, day, hour, 0, 0).unwrap()
