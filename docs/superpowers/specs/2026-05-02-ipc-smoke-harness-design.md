@@ -54,18 +54,17 @@ pub fn build_smoke_app(temp_root: &Path) -> Result<App<MockRuntime>, anyhow::Err
 What it does, in order:
 
 1. **Sets `XDG_CONFIG_HOME` and `XDG_DATA_HOME`** to subdirectories of `temp_root` so `config::config_dir()` and `config::data_dir()` (the existing helpers) resolve under the temp root. This must happen before any code reads those paths. Enforced structurally: `build_smoke_app` is the first thing called in `main`, before any state-touching code; the env-var setup is the first thing inside `build_smoke_app`. If `config::config_dir()` ever migrates from "read env on each call" to "OnceLock-cached", this contract breaks silently — call out as an audit item if that refactor lands.
-2. **Constructs `AppState`** using the same code path as production setup, lifted out of `lib.rs::run()` setup-closure into a new function `livestreamlist_lib::build_app_state() -> AppState`. Production setup also gets refactored to call `build_app_state()` so there's exactly one construction path.
-3. **Builds `mock_builder()`** with the same `invoke_handler!` block. The block is extracted to a public macro `livestreamlist_lib::register_handlers!()` so the smoke binary doesn't drift from production — adding a new command means editing one place.
-4. **Manages** the constructed `AppState`, `Arc<PlayerManager>`, `Arc<SpellChecker>`.
-5. **Skips** all side-effecting setup: tray (`tray::build`), window state plugin (`window_state::register`), async background tasks (the deferred raise-to-front, the launch-time browser cookie scrape), GTK overlay (`embed::install_overlay`).
-6. **Calls** `.build(mock_context(noop_assets()))` to produce the `App<MockRuntime>`.
-7. **Creates one mock `WebviewWindow`** named `"main"` (some commands take `tauri::WebviewWindow` as a parameter — they need *something* to receive).
+2. **Builds `mock_builder()`** with the same `invoke_handler!` block as production. The block is extracted to a public macro `livestreamlist_lib::register_handlers!()` so the smoke binary doesn't drift from production — adding a new command means editing one place.
+3. **Constructs and manages the runtime-agnostic subset of state**: `AppState`, `Arc<EmbedHost>`, `LoginPopupManager`, `Arc<SpellChecker>`. **Skips ChatManager and PlayerManager** because their `::new()` functions take concrete `AppHandle<Wry>`, not generic `AppHandle<R>` — making them generic is out of scope. Production's `manage_all_state()` (which constructs all six) cannot be reused here for the same reason. The chat / launch / list_playing commands appear in the side-effect denylist so this isn't observable to agents.
+4. **Skips** all side-effecting setup: tray (`tray::build`), window state plugin (`window_state::register`), async background tasks (the deferred raise-to-front, the launch-time browser cookie scrape), GTK overlay (`embed::install_overlay`).
+5. **Calls** `.build(mock_context(noop_assets()))` to produce the `App<MockRuntime>`.
+6. **Creates one mock `WebviewWindow`** named `"main"` (some commands take `tauri::WebviewWindow` as a parameter — they need *something* to receive).
 
 The `App<MockRuntime>` is held by the smoke binary for the process lifetime.
 
-### In-flight cleanup: extracting `build_app_state`
+### In-flight cleanup: extracting `manage_all_state`
 
-`lib.rs::run()`'s setup closure has grown to ~150 lines mixing pure `AppState` construction with side-effecting work (tray registration, async task spawns, plugin setup). Extracting `build_app_state()` is the kind of focused improvement the design naturally calls for — it's needed to avoid duplicating ~80 lines of construction logic in the smoke module, and it leaves the production setup closure smaller and more focused. Out-of-scope: any further restructuring of `lib.rs` beyond this extraction.
+`lib.rs::run()`'s setup closure has grown to ~150 lines mixing pure state construction with side-effecting work (tray registration, async task spawns, plugin setup). Extracting `manage_all_state()` is the kind of focused improvement the design naturally calls for — it leaves the production setup closure smaller and more focused. The smoke module **cannot reuse** `manage_all_state()` because two managers (`ChatManager`, `PlayerManager`) have non-generic constructors that pin the function to `App<Wry>`; the smoke module duplicates the runtime-agnostic subset (~25 lines) inline. Out-of-scope: making `ChatManager`/`PlayerManager` generic over runtime, which would unlock a single shared state-construction path but is a larger refactor than this work justifies.
 
 ## Isolation + safety
 

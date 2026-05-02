@@ -273,7 +273,7 @@ The setup closure becomes (illustrative — lines from the existing code preserv
         let main = app
             .get_webview_window("main")
             .expect("main window must exist by setup time");
-        let host_for_setup = app.state::<embed::EmbedHost>().inner().clone();
+        let host_for_setup = app.state::<Arc<embed::EmbedHost>>().inner().clone();
         let main_for_closure = main.clone();
         main.run_on_main_thread(move || {
             if let Ok(gtk_window) = main_for_closure.gtk_window() {
@@ -312,7 +312,7 @@ The setup closure becomes (illustrative — lines from the existing code preserv
 
 Note the two callsites that previously borrowed from outer-scope `http_for_chat`/`users_for_chat` — they now read `app.state::<AppState>()` inside the closure. The outer-scope clones can be removed.
 
-The `embed::EmbedHost`'s `host_for_setup` variable (currently `embed_mgr.clone()`) is fetched via `app.state::<embed::EmbedHost>().inner().clone()` instead of from the just-constructed local — embed_mgr was a local variable in the old code; now it's the managed state.
+The `embed::EmbedHost`'s `host_for_setup` variable (currently `embed_mgr.clone()`) is fetched via `app.state::<Arc<embed::EmbedHost>>().inner().clone()` instead of from the just-constructed local — embed_mgr was a local variable in the old code; now it's the managed state. Note the type parameter is `Arc<embed::EmbedHost>` because `EmbedHost::new()` returns `Arc<Self>`.
 
 - [ ] **Step 4: Verify the refactor compiles**
 
@@ -322,7 +322,7 @@ Run:
 cargo build --manifest-path src-tauri/Cargo.toml
 ```
 
-Expected: clean build. If `embed::EmbedHost::clone()` doesn't exist (it likely needs `Clone` derived, which it already has based on `embed_mgr.clone()` working at line 1457), we may need `app.state::<embed::EmbedHost>().inner().clone()` — `inner()` on `State<T>` returns `&T`, then `.clone()`. The `inner()` call is the standard Tauri pattern for borrowing managed state.
+Expected: clean build. If `embed::EmbedHost::clone()` doesn't exist (it likely needs `Clone` derived, which it already has based on `embed_mgr.clone()` working at line 1457), we may need `app.state::<Arc<embed::EmbedHost>>().inner().clone()` — `inner()` on `State<T>` returns `&T`, then `.clone()`. The `inner()` call is the standard Tauri pattern for borrowing managed state.
 
 - [ ] **Step 5: Run the existing test suite**
 
@@ -396,9 +396,15 @@ use tauri::App;
 /// effects beyond the temp config dir (network connections, subprocess
 /// spawns, real WebKit/GTK windows). The binary's dispatch layer
 /// short-circuits these unless `--allow-side-effects` is passed.
+///
+/// Also includes `list_playing` because `PlayerManager` is NOT
+/// constructed in the smoke harness (its `::new()` takes concrete
+/// `AppHandle<Wry>`, incompatible with `MockRuntime`); calling
+/// `list_playing` without the manager managed would return a
+/// "missing state" error from Tauri's serde layer.
 pub const DENYLIST: &[&str] = &[
     "chat_connect", "chat_disconnect", "chat_send",
-    "launch_stream", "stop_stream",
+    "launch_stream", "stop_stream", "list_playing",
     "embed_mount", "embed_bounds", "embed_unmount", "embed_set_visible",
     "twitch_login", "twitch_web_login", "kick_login", "youtube_login",
     "youtube_login_paste", "chaturbate_login",
@@ -409,6 +415,8 @@ pub const DENYLIST: &[&str] = &[
 ];
 
 pub fn build_smoke_app(temp_root: &Path) -> anyhow::Result<App<MockRuntime>> {
+    use std::sync::Arc;
+
     // Set XDG paths to subdirs of temp_root BEFORE constructing AppState.
     // The `dirs` crate (used by config::config_dir) reads these env vars
     // on each call, so the override is effective immediately.
@@ -431,7 +439,27 @@ pub fn build_smoke_app(temp_root: &Path) -> anyhow::Result<App<MockRuntime>> {
         .invoke_handler(crate::register_handlers!())
         .build(mock_context(noop_assets()))?;
 
-    crate::manage_all_state(&mut app)?;
+    // Cannot call crate::manage_all_state — its signature is concrete
+    // tauri::App (= App<Wry>) because ChatManager::new and
+    // PlayerManager::new take concrete AppHandle. Inline the
+    // runtime-agnostic subset here. Skipped: ChatManager + PlayerManager
+    // (their commands are denylisted; calling them returns a clean
+    // 'missing state' error which is acceptable signal for agents).
+    let state = crate::AppState::new()?;
+    app.manage(state);
+
+    let embed_mgr = crate::embed::EmbedHost::new();
+    app.manage(embed_mgr);
+
+    let login_popup_mgr = crate::login_popup::LoginPopupManager::new();
+    app.manage(login_popup_mgr);
+
+    let personal_dict_path = crate::config::config_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from("."))
+        .join("personal_dict.json");
+    let spellchecker = Arc::new(crate::spellcheck::SpellChecker::new(personal_dict_path));
+    app.manage(spellchecker);
+
     Ok(app)
 }
 
