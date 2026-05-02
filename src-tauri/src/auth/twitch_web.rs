@@ -350,6 +350,33 @@ pub async fn login_with_match_check(
     Ok(identity)
 }
 
+/// Try to scrape the Twitch web `auth-token` cookie from any installed
+/// browser cookie database (Firefox SQLite + Chromium-family encrypted
+/// SQLite + Safari + Edge + …). Returns the cookie value if found in
+/// any browser, None otherwise.
+///
+/// Mirrors the Qt app's `gui/youtube_login.py::extract_twitch_auth_token`
+/// flow — gives users the cookie automatically without any login UI
+/// when they're already signed into Twitch in their browser.
+///
+/// Returns None silently on any error (browser not detected, encrypted
+/// store unreadable, no `.twitch.tv` cookies, etc.) — the lazy WebView
+/// fallback in `login_via_webview` handles those cases.
+pub fn extract_from_browser() -> Option<String> {
+    let domains = vec!["twitch.tv".to_string()];
+    let cookies = match rookie::load(Some(domains)) {
+        Ok(c) => c,
+        Err(e) => {
+            log::debug!("rookie load failed: {e}");
+            return None;
+        }
+    };
+    cookies
+        .into_iter()
+        .find(|c| c.name == "auth-token" && !c.value.is_empty())
+        .map(|c| c.value)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
