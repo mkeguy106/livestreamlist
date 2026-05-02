@@ -35,6 +35,20 @@ const CACHE_TTL_NONE: Duration = Duration::from_secs(5 * 60);
 const SHARE_WINDOW_THRESHOLD_DAYS: f64 = 22.0;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CookieStatus {
+    Ok,
+    Missing,
+    Expired,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CheckResult {
+    pub info: Option<SubAnniversaryInfo>,
+    pub cookie_status: CookieStatus,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SubAnniversaryInfo {
     pub months: u32,
     pub days_remaining_in_window: u32,
@@ -48,7 +62,7 @@ pub struct SubAnniversaryInfo {
 
 /// In-memory TTL cache. Keyed by channel_login (lowercase recommended).
 pub struct Cache {
-    inner: Mutex<HashMap<String, (Instant, Option<SubAnniversaryInfo>)>>,
+    inner: Mutex<HashMap<String, (Instant, CookieStatus, Option<SubAnniversaryInfo>)>>,
     ttl_some: Duration,
     ttl_none: Duration,
 }
@@ -67,22 +81,20 @@ impl Cache {
         }
     }
 
-    /// Returns:
-    /// - `None` if no fresh entry (never stored OR expired)
-    /// - `Some(None)` if a "negative" entry is fresh
-    /// - `Some(Some(info))` if a positive entry is fresh
-    pub fn get(&self, channel_login: &str) -> Option<Option<SubAnniversaryInfo>> {
+    /// Returns `Some((status, value))` if there's a fresh entry,
+    /// `None` if the entry is missing or expired.
+    pub fn get(&self, channel_login: &str) -> Option<(CookieStatus, Option<SubAnniversaryInfo>)> {
         let inner = self.inner.lock();
-        let (stored_at, value) = inner.get(channel_login)?;
+        let (stored_at, status, value) = inner.get(channel_login)?;
         let ttl = if value.is_some() { self.ttl_some } else { self.ttl_none };
         if stored_at.elapsed() > ttl {
             return None;
         }
-        Some(value.clone())
+        Some((status.clone(), value.clone()))
     }
 
-    pub fn set(&self, channel_login: &str, value: Option<SubAnniversaryInfo>) {
-        self.inner.lock().insert(channel_login.to_string(), (Instant::now(), value));
+    pub fn set(&self, channel_login: &str, status: CookieStatus, value: Option<SubAnniversaryInfo>) {
+        self.inner.lock().insert(channel_login.to_string(), (Instant::now(), status, value));
     }
 
     pub fn clear(&self) {
@@ -195,18 +207,20 @@ query SubAnniversary($login: String!) {
 }"#;
 
 /// Run the full anniversary detection: cache → cookie → GQL → parse →
-/// window math → cache. Returns `Some(info)` only if the share window
-/// is open. Caller should additionally check the dismissal map.
-/// Emits `twitch:web_cookie_required` events on missing/expired cookie.
+/// window math → cache. Returns a `CheckResult` with `info` set only if the
+/// share window is open. Caller should additionally check the dismissal map.
+/// Emits `twitch:web_cookie_required` events on missing/expired cookie (for
+/// mid-session expiry handling); cookie_status in the return value eliminates
+/// the race where the event fires before the React listener attaches.
 pub async fn check(
     client: &reqwest::Client,
     channel_login: &str,
     cache: &Cache,
     app: &tauri::AppHandle,
-) -> Option<SubAnniversaryInfo> {
+) -> CheckResult {
     // Cache hit (positive or negative)
-    if let Some(cached) = cache.get(channel_login) {
-        return cached;
+    if let Some((status, value)) = cache.get(channel_login) {
+        return CheckResult { info: value, cookie_status: status };
     }
 
     // Cookie required
@@ -216,8 +230,8 @@ pub async fn check(
             use tauri::Emitter;
             let _ = app.emit("twitch:web_cookie_required",
                 serde_json::json!({ "reason": "missing" }));
-            cache.set(channel_login, None);
-            return None;
+            cache.set(channel_login, CookieStatus::Missing, None);
+            return CheckResult { info: None, cookie_status: CookieStatus::Missing };
         }
     };
 
@@ -238,43 +252,43 @@ pub async fn check(
         Ok(r) => r,
         Err(e) => {
             log::warn!("gql.twitch.tv (anniversary) network error: {e}");
-            cache.set(channel_login, None);
-            return None;
+            cache.set(channel_login, CookieStatus::Ok, None);
+            return CheckResult { info: None, cookie_status: CookieStatus::Ok };
         }
     };
 
-    let status = resp.status();
-    if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
-        log::warn!("anniversary GQL {status} — cookie expired, clearing");
+    let http_status = resp.status();
+    if http_status == reqwest::StatusCode::UNAUTHORIZED || http_status == reqwest::StatusCode::FORBIDDEN {
+        log::warn!("anniversary GQL {http_status} — cookie expired, clearing");
         let _ = crate::auth::twitch_web::clear();
         use tauri::Emitter;
         let _ = app.emit("twitch:web_cookie_required",
             serde_json::json!({ "reason": "expired" }));
         let payload: Option<crate::auth::twitch_web::TwitchWebIdentity> = None;
         let _ = app.emit("twitch:web_status_changed", payload);
-        cache.set(channel_login, None);
-        return None;
+        cache.set(channel_login, CookieStatus::Expired, None);
+        return CheckResult { info: None, cookie_status: CookieStatus::Expired };
     }
-    if !status.is_success() {
-        log::warn!("anniversary GQL {status}: {}", resp.text().await.unwrap_or_default());
-        cache.set(channel_login, None);
-        return None;
+    if !http_status.is_success() {
+        log::warn!("anniversary GQL {http_status}: {}", resp.text().await.unwrap_or_default());
+        cache.set(channel_login, CookieStatus::Ok, None);
+        return CheckResult { info: None, cookie_status: CookieStatus::Ok };
     }
 
     let json: serde_json::Value = match resp.json().await {
         Ok(j) => j,
         Err(e) => {
             log::warn!("anniversary GQL JSON parse: {e}");
-            cache.set(channel_login, None);
-            return None;
+            cache.set(channel_login, CookieStatus::Ok, None);
+            return CheckResult { info: None, cookie_status: CookieStatus::Ok };
         }
     };
 
     let mut info = match parse_response(&json, channel_login) {
         Some(i) => i,
         None => {
-            cache.set(channel_login, None);
-            return None;
+            cache.set(channel_login, CookieStatus::Ok, None);
+            return CheckResult { info: None, cookie_status: CookieStatus::Ok };
         }
     };
 
@@ -282,21 +296,21 @@ pub async fn check(
     let renews_at = match DateTime::parse_from_rfc3339(&info.renews_at) {
         Ok(dt) => dt.with_timezone(&Utc),
         Err(_) => {
-            cache.set(channel_login, None);
-            return None;
+            cache.set(channel_login, CookieStatus::Ok, None);
+            return CheckResult { info: None, cookie_status: CookieStatus::Ok };
         }
     };
     let days_remaining = match compute_window(renews_at, Utc::now()) {
         Some(d) => d,
         None => {
-            cache.set(channel_login, None);
-            return None;
+            cache.set(channel_login, CookieStatus::Ok, None);
+            return CheckResult { info: None, cookie_status: CookieStatus::Ok };
         }
     };
     info.days_remaining_in_window = days_remaining;
 
-    cache.set(channel_login, Some(info.clone()));
-    Some(info)
+    cache.set(channel_login, CookieStatus::Ok, Some(info.clone()));
+    CheckResult { info: Some(info), cookie_status: CookieStatus::Ok }
 }
 
 #[cfg(test)]
@@ -467,9 +481,9 @@ mod tests {
     #[test]
     fn cache_get_after_set_returns_value() {
         let c = Cache::new();
-        c.set("test", Some(make_info()));
-        let got = c.get("test").expect("entry present");
-        let info = got.expect("Some value");
+        c.set("test", CookieStatus::Ok, Some(make_info()));
+        let (_status, value) = c.get("test").expect("entry present");
+        let info = value.expect("Some value");
         assert_eq!(info.months, 14);
     }
 
@@ -477,23 +491,23 @@ mod tests {
     fn cache_get_unknown_key_returns_none_marker() {
         let c = Cache::new();
         // No entry: get() returns None.
-        // Entry that's None: get() returns Some(None).
+        // Entry with None value: get() returns Some((status, None)).
         assert!(c.get("nothing-stored").is_none());
     }
 
     #[test]
     fn cache_set_none_then_get_returns_some_none() {
         let c = Cache::new();
-        c.set("test", None);
+        c.set("test", CookieStatus::Ok, None);
         let got = c.get("test");
         assert!(got.is_some(), "entry exists");
-        assert!(got.unwrap().is_none(), "but value is None");
+        assert!(got.unwrap().1.is_none(), "but value is None");
     }
 
     #[test]
     fn cache_clear_removes_entry() {
         let c = Cache::new();
-        c.set("test", Some(make_info()));
+        c.set("test", CookieStatus::Ok, Some(make_info()));
         assert!(c.get("test").is_some());
         c.clear();
         assert!(c.get("test").is_none());
@@ -502,7 +516,7 @@ mod tests {
     #[test]
     fn cache_some_expires_after_ttl() {
         let c = Cache::with_ttls(Duration::from_millis(50), Duration::from_millis(50));
-        c.set("test", Some(make_info()));
+        c.set("test", CookieStatus::Ok, Some(make_info()));
         assert!(c.get("test").is_some());
         thread::sleep(Duration::from_millis(70));
         assert!(c.get("test").is_none(), "stale entry treated as missing");
@@ -511,7 +525,7 @@ mod tests {
     #[test]
     fn cache_none_expires_after_short_ttl() {
         let c = Cache::with_ttls(Duration::from_secs(60), Duration::from_millis(50));
-        c.set("test", None);
+        c.set("test", CookieStatus::Ok, None);
         assert!(c.get("test").is_some());
         thread::sleep(Duration::from_millis(70));
         assert!(c.get("test").is_none());

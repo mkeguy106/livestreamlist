@@ -37,8 +37,13 @@ export function useSubAnniversary(channelKey) {
     }
     try {
       const result = await twitchAnniversaryCheck(channelKey);
-      setInfo(result ?? null);
-      infoRef.current = result ?? null;
+      // result is now { info, cookie_status: 'ok' | 'missing' | 'expired' }
+      setInfo(result?.info ?? null);
+      infoRef.current = result?.info ?? null;
+      if ((result?.cookie_status === 'missing' || result?.cookie_status === 'expired')
+          && !promptDismissedRef.current) {
+        setConnectPromptVisible(true);
+      }
     } catch (e) {
       setInfo(null);
       infoRef.current = null;
