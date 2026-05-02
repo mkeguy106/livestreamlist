@@ -13,7 +13,7 @@ Visual identity is the Linear/Vercel mono aesthetic from the design bundle — z
 ## Tech Stack
 
 - **Frontend**: React 18, Vite 5, plain CSS variables in `src/tokens.css`
-- **Backend**: Rust (stable, ≥ 1.77), Tauri 2, `reqwest` (rustls), `tokio-tungstenite` (WebSocket), `parking_lot`, `chrono`
+- **Backend**: Rust (stable, ≥ 1.77), Tauri 2, `reqwest` (rustls), `tokio-tungstenite` (WebSocket), `parking_lot`, `chrono`, `hunspell-rs` (system libhunspell) with bundled en_US.aff/.dic fallback under src-tauri/dictionaries/
 - **Runtime**: Tauri's own async runtime wrapping Tokio — use `tauri::async_runtime::spawn`, never raw `tokio::spawn` from setup
 - **IPC**: `invoke` commands (request/response) and `emit` events (push, topic-addressed)
 - **Persistence**: JSON under XDG config
@@ -95,6 +95,11 @@ src-tauri/                   # Rust backend
     │   ├── mod.rs           # Platform enum + URL autodetect parser (unit-tested)
     │   └── twitch.rs        # GraphQL live-status client (batched ≤ 35 / request)
     ├── refresh.rs           # Orchestrates refresh_all across platforms
+    ├── spellcheck/
+    │   ├── mod.rs           # SpellChecker — per-language Hunspell cache, personal dict
+    │   ├── tokenize.rs      # Pure tokenizer: Word / Mention / Url / Emote / AllCaps
+    │   ├── personal.rs      # ~/.config/livestreamlist/personal_dict.json load/save
+    │   └── dict.rs          # Enumerate /usr/share/hunspell etc. + bundled en_US fallback
     ├── streamlink.rs        # Detached subprocess spawn + browser handoff
     └── chat/
         ├── mod.rs           # ChatManager — one task per channel
@@ -133,6 +138,10 @@ Declared in `src-tauri/src/lib.rs` via `#[tauri::command]`, registered in `tauri
 | `embed_set_visible` | `uniqueKey, visible: bool` | Hide/show one embed (used for modal occlusion) |
 | `embed_unmount` | `uniqueKey` | Drop the child webview; the underlying GtkWidget destroys via `wry::WebView::Drop` |
 | `chaturbate_login` / `chaturbate_logout` | — | Open the CB login popup / wipe profile dir + clear stamp |
+| `spellcheck_check` | `text, language, channelEmotes` | Tokenize input + return `[{ start, end, word }, ...]` for misspellings (skips `@mentions`, URLs, emote codes, all-caps shorthand, personal-dict words) |
+| `spellcheck_suggest` | `word, language` | Top 5 hunspell suggestions for a word |
+| `spellcheck_add_word` | `word` | Append to `personal_dict.json`; returns `true` if newly added |
+| `spellcheck_list_dicts` | — | Enumerate available dicts (`{ code, name }`) for the Preferences language dropdown |
 
 ### IPC — event topics
 
@@ -389,6 +398,7 @@ Data dir (XDG):
 Files:
 - `channels.json` — persistent channel list
 - `settings.json` — reserved for Phase 4 (preferences)
+- `personal_dict.json` — user-added words for spellcheck (lowercase-normalized; `{ "version": 1, "words": [...] }`)
 - Chat logs, emote disk cache, auth tokens — reserved for Phase 3+
 
 ## Known Pitfalls
