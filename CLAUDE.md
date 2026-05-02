@@ -158,6 +158,9 @@ The Rust side emits events that React subscribes to via `listenEvent(name, handl
 | `chat:message:{uniqueKey}` | `ChatMessage` | `chat/twitch.rs` per PRIVMSG |
 | `chat:status:{uniqueKey}` | `ChatStatusEvent` | `chat/twitch.rs` on connect/disconnect/error |
 | `chat:auth:chaturbate` | `{ signed_in, reason }` | `embed.rs::handle_chaturbate_auth_outcome` on every CB embed page-load — broadcasts auth-drift status |
+| `chat:resub_self:{uniqueKey}` | `{ months, login }` | `chat/twitch.rs::build_usernotice` when own login broadcasts a `msg-id=resub` or `sub` USERNOTICE; consumed by `useSubAnniversary` for auto-dismiss |
+| `twitch:web_cookie_required` | `{ reason: "missing" \| "expired" }` | `platforms/twitch_anniversary.rs::check` when the cookie is absent or rejected by GQL; consumed by `useSubAnniversary` to mount `<TwitchWebConnectPrompt>` |
+| `twitch:web_status_changed` | `Option<TwitchWebIdentity>` | After Twitch web login or clear (`auth/twitch_web.rs`); consumed by `useAuth` and `useSubAnniversary` |
 
 Events are strictly one-way (Rust → UI). UI never emits events; it calls invoke commands.
 
