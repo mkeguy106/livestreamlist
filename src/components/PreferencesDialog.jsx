@@ -8,6 +8,7 @@ import {
   importTwitchFollows,
   listBlockedUsers,
   setUserMetadata,
+  spellcheckListDicts,
   youtubeDetectBrowsers,
 } from '../ipc.js';
 
@@ -541,23 +542,25 @@ function Row({ label, hint, children }) {
   );
 }
 
-function Toggle({ checked, onChange }) {
+function Toggle({ checked, onChange, disabled }) {
   return (
     <button
       type="button"
-      onClick={() => onChange(!checked)}
+      onClick={() => !disabled && onChange(!checked)}
       aria-pressed={checked}
+      disabled={disabled}
       style={{
         width: 36, height: 20, borderRadius: 10, border: 'none',
-        background: checked ? 'var(--zinc-100)' : 'var(--zinc-800)',
-        position: 'relative', cursor: 'pointer',
+        background: checked && !disabled ? 'var(--zinc-100)' : 'var(--zinc-800)',
+        position: 'relative', cursor: disabled ? 'not-allowed' : 'pointer',
         transition: 'background 120ms',
+        opacity: disabled ? 0.4 : 1,
       }}
     >
       <span style={{
-        position: 'absolute', top: 2, left: checked ? 18 : 2,
+        position: 'absolute', top: 2, left: checked && !disabled ? 18 : 2,
         width: 16, height: 16, borderRadius: '50%',
-        background: checked ? 'var(--zinc-950)' : 'var(--zinc-400)',
+        background: checked && !disabled ? 'var(--zinc-950)' : 'var(--zinc-400)',
         transition: 'left 120ms',
       }} />
     </button>
@@ -685,10 +688,82 @@ function AppearanceTab({ settings, patch }) {
   );
 }
 
+function SpellcheckSection({ settings, patch }) {
+  const c = settings.chat || {};
+  const spellcheckEnabled = c.spellcheck_enabled !== false; // default on
+  const autocorrectEnabled = c.autocorrect_enabled !== false; // default on
+  const currentLang = c.spellcheck_language ?? 'en_US';
+
+  const [dicts, setDicts] = useState(null); // null = loading
+
+  useEffect(() => {
+    let cancelled = false;
+    spellcheckListDicts()
+      .then((list) => {
+        if (cancelled) return;
+        setDicts(Array.isArray(list) && list.length > 0
+          ? list
+          : [{ code: 'en_US', name: 'English (US)' }]);
+      })
+      .catch(() => {
+        if (!cancelled) setDicts([{ code: 'en_US', name: 'English (US)' }]);
+      });
+    return () => { cancelled = true; };
+  }, []);
+
+  return (
+    <>
+      <Row label="Enable spellcheck" hint="Red wavy underlines on misspelled words in the chat composer.">
+        <Toggle
+          checked={spellcheckEnabled}
+          onChange={(v) => patch((prev) => ({ ...prev, chat: { ...c, spellcheck_enabled: v } }))}
+        />
+      </Row>
+
+      <Row
+        label="Auto-correct misspelled words"
+        hint={spellcheckEnabled
+          ? 'Apostrophe expansions and high-confidence single suggestions are auto-applied.'
+          : 'Requires spellcheck to be enabled.'}
+      >
+        <Toggle
+          checked={autocorrectEnabled && spellcheckEnabled}
+          disabled={!spellcheckEnabled}
+          onChange={(v) => patch((prev) => ({ ...prev, chat: { ...c, autocorrect_enabled: v } }))}
+        />
+      </Row>
+
+      <Row label="Language" hint="Hunspell dictionary used for spellcheck.">
+        <select
+          className="rx-input"
+          value={currentLang}
+          disabled={!spellcheckEnabled || dicts === null}
+          onChange={(e) =>
+            patch((prev) => ({ ...prev, chat: { ...c, spellcheck_language: e.target.value } }))
+          }
+          style={{ width: 240 }}
+        >
+          {dicts === null ? (
+            <option>Loading…</option>
+          ) : (
+            dicts.map((d) => (
+              <option key={d.code} value={d.code}>
+                {d.name} ({d.code})
+              </option>
+            ))
+          )}
+        </select>
+      </Row>
+    </>
+  );
+}
+
 function ChatTab({ settings, patch }) {
   const c = settings.chat || {};
   return (
     <>
+      <SpellcheckSection settings={settings} patch={patch} />
+
       <Row label="24-hour timestamps">
         <Toggle
           checked={c.timestamp_24h !== false}
