@@ -142,6 +142,8 @@ Declared in `src-tauri/src/lib.rs` via `#[tauri::command]`, registered in `tauri
 | `twitch_web_clear` | — | Wipe keyring entries for twitch web cookie + identity |
 | `twitch_anniversary_check` | `uniqueKey` | GQL `subscriptionBenefit` query → `Option<SubAnniversaryInfo>` if share window open + not dismissed + setting on. Cached 6h (Some) / 5min (None). Cookie via `auth::twitch_web::stored_token`; emits `twitch:web_cookie_required` on missing/expired |
 | `twitch_anniversary_dismiss` | `uniqueKey, renewsAt` | Persist `{channel: renewsAt}` in `chat.dismissed_sub_anniversaries`; resets next billing cycle when `renewsAt` changes |
+| `twitch_share_resub_open` | `uniqueKey` | Open transient WebviewWindow at `twitch.tv/popout/{login}/chat` with shared web-cookie profile so user can click Twitch's native Share button. Idempotent (focus existing) |
+| `twitch_share_window_close` | `uniqueKey` | Close the popout window for that channel (idempotent) |
 | `spellcheck_check` | `text, language, channelEmotes` | Tokenize input + return `[{ start, end, word }, ...]` for misspellings (skips `@mentions`, URLs, emote codes, all-caps shorthand, personal-dict words) |
 | `spellcheck_suggest` | `word, language` | Top 5 hunspell suggestions for a word |
 | `spellcheck_add_word` | `word` | Append to `personal_dict.json`; returns `true` if newly added |
