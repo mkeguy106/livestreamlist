@@ -1,0 +1,13 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "twitch-web-login",
+  "description": "Allow the twitch-web-login window's injected titlebar JS (running in the twitch.tv origin) to call exactly two window-control commands: start a drag and close the window. Scoped to this one window + URL pattern; no data-access or app commands are exposed to twitch.tv.",
+  "windows": ["twitch-web-login"],
+  "remote": {
+    "urls": ["https://*.twitch.tv/*"]
+  },
+  "permissions": [
+    "core:window:allow-start-dragging",
+    "core:window:allow-close"
+  ]
+}
