@@ -33,6 +33,7 @@ url = "2"
 dirs = "5"
 chrono = { version = "0.4", features = ["serde"] }
 parking_lot = "0.12"
+tempfile = { version = "3", optional = true }
 tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
 futures-util = { version = "0.3", default-features = false, features = ["std", "sink"] }
 hunspell-rs = "0.4"
@@ -43,6 +44,14 @@ sha2 = "0.10"
 rand = "0.8"
 urlencoding = "2.1.3"
 rookie = "0.5"
+
+[features]
+smoke = ["tauri/test", "dep:tempfile"]
+
+[[bin]]
+name = "smoke"
+path = "src/bin/smoke.rs"
+required-features = ["smoke"]
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
@@ -55,7 +64,8 @@ webkit2gtk = "2.0"
 wry = "0.54"
 
 [dev-dependencies]
-tempfile = "3"
+assert_cmd = "2.0"
+predicates = "3.1"
 
 [profile.release]
 lto = true
