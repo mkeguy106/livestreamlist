@@ -12,6 +12,7 @@
 //! by `check`) lands in PR 4. The share popout window (consumes
 //! `info.channel_login`) lands in PR 3.
 
+use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -69,3 +70,69 @@ impl Default for Cache {
 }
 
 pub type SharedCache = Arc<Cache>;
+
+/// Returns `Some(days_remaining_in_window)` if the share window is
+/// currently open, `None` otherwise. Window is open when the next
+/// renewal is `>= SHARE_WINDOW_THRESHOLD_DAYS` away (i.e. the most
+/// recent renewal was within the last ~8 days for a 30-day cycle).
+///
+/// Assumes 30-day monthly cycles. Annual subs (~365-day cycles) return
+/// Some with a meaningless `days_remaining_in_window` — documented
+/// limitation. Future work could inspect a `renewalIntervalDays`
+/// field if Twitch ever exposes it via GQL.
+pub fn compute_window(renews_at: DateTime<Utc>, now: DateTime<Utc>) -> Option<u32> {
+    let days_until_renewal = (renews_at - now).num_seconds() as f64 / 86400.0;
+    if days_until_renewal < SHARE_WINDOW_THRESHOLD_DAYS {
+        return None;
+    }
+    let days_remaining = (days_until_renewal - SHARE_WINDOW_THRESHOLD_DAYS).max(0.0) as u32;
+    Some(days_remaining)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::TimeZone;
+
+    fn dt(year: i32, month: u32, day: u32, hour: u32) -> DateTime<Utc> {
+        Utc.with_ymd_and_hms(year, month, day, hour, 0, 0).unwrap()
+    }
+
+    #[test]
+    fn compute_window_30_days_out_returns_8() {
+        let now = dt(2026, 5, 1, 12);
+        let renews_at = now + chrono::Duration::days(30);
+        assert_eq!(compute_window(renews_at, now), Some(8));
+    }
+
+    #[test]
+    fn compute_window_22_days_out_returns_0() {
+        let now = dt(2026, 5, 1, 12);
+        let renews_at = now + chrono::Duration::days(22);
+        assert_eq!(compute_window(renews_at, now), Some(0));
+    }
+
+    #[test]
+    fn compute_window_21_days_23h_out_returns_none() {
+        let now = dt(2026, 5, 1, 12);
+        let renews_at = now + chrono::Duration::hours(21 * 24 + 23);
+        assert_eq!(compute_window(renews_at, now), None);
+    }
+
+    #[test]
+    fn compute_window_in_past_returns_none() {
+        let now = dt(2026, 5, 1, 12);
+        let renews_at = now - chrono::Duration::days(2);
+        assert_eq!(compute_window(renews_at, now), None);
+    }
+
+    #[test]
+    fn compute_window_annual_sub_returns_some_but_value_meaningless() {
+        // Annual sub edge — the 30-day-cycle assumption produces a
+        // meaningless value, but it doesn't crash. Documented limit.
+        let now = dt(2026, 5, 1, 12);
+        let renews_at = now + chrono::Duration::days(365);
+        let result = compute_window(renews_at, now);
+        assert!(result.is_some(), "annual sub triggers Some — known limitation");
+    }
+}
