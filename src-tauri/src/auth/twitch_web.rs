@@ -17,6 +17,7 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use tauri::webview::Cookie;
 
 use super::tokens;
 
@@ -29,8 +30,6 @@ pub struct TwitchWebIdentity {
     /// When we last successfully validated the cookie via GQL.
     pub last_verified_at: DateTime<Utc>,
 }
-
-use tauri::webview::Cookie;
 
 /// Find the `auth-token` cookie's value if it's both present and
 /// non-empty. The Twitch web app sets this cookie post-login and clears
