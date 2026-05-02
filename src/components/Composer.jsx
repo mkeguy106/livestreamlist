@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { chatOpenInBrowser, chatSend, listEmotes } from '../ipc.js';
+import { chatOpenInBrowser, chatSend, listEmotes, spellcheckSuggest } from '../ipc.js';
+import { shouldAutocorrect, isPastWord, rangeAtCaret } from '../utils/autocorrect.js';
 import Tooltip from './Tooltip.jsx';
 import SpellcheckOverlay from './SpellcheckOverlay.jsx';
 import { useSpellcheck } from '../hooks/useSpellcheck.js';
@@ -7,6 +8,56 @@ import { usePreferences } from '../hooks/usePreferences.jsx';
 
 const MAX_LEN = 500;
 const SUGGESTION_CAP = 75;
+
+async function runAutocorrectFor(
+  misspelled,
+  text,
+  caret,
+  alreadyCorrected,
+  personalDict,
+  setText,
+  setCaret,
+  recordCorrection,
+  language,
+  inputRef,
+) {
+  let suggestions;
+  try {
+    suggestions = await spellcheckSuggest(misspelled.word, language);
+  } catch {
+    return;
+  }
+  // Re-confirm against the LATEST input value — text state may be one
+  // render behind by the time the await resolves.
+  const latestText = inputRef.current?.value ?? text;
+  const wordAtPos = latestText.slice(misspelled.start, misspelled.end);
+  if (wordAtPos !== misspelled.word) return;
+  const replacement = shouldAutocorrect({
+    word: misspelled.word,
+    suggestions,
+    isPast: true,  // confirmed by caller before await
+    caretInside: caret > misspelled.start && caret < misspelled.end + 1,
+    alreadyCorrected,
+    personalDict,
+  });
+  if (!replacement) return;
+  const before = latestText.slice(0, misspelled.start);
+  const after = latestText.slice(misspelled.end);
+  const newText = `${before}${replacement}${after}`;
+  setText(newText);
+  const newCaret = misspelled.start + replacement.length;
+  setCaret(newCaret);
+  requestAnimationFrame(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    el.setSelectionRange(newCaret, newCaret);
+  });
+  recordCorrection({
+    originalWord: misspelled.word,
+    replacementWord: replacement,
+    position: misspelled.start,
+  });
+}
 
 /**
  * Chat composer with inline `:emote` and `@mention` autocomplete. Disabled
@@ -19,6 +70,7 @@ export default function Composer({ channelKey, platform, auth, mentionCandidates
   const [emotes, setEmotes] = useState([]);
   const [popup, setPopup] = useState(null); // { kind, query, start, items, index }
   const inputRef = useRef(null);
+  const [caret, setCaret] = useState(0);
 
   const { settings } = usePreferences();
   const spellcheckEnabled = settings?.chat?.spellcheck_enabled ?? true;
@@ -52,12 +104,58 @@ export default function Composer({ channelKey, platform, auth, mentionCandidates
     if (!authed) setError(null);
   }, [authed, channelKey]);
 
-  const { misspellings } = useSpellcheck({
+  const {
+    misspellings,
+    recentCorrections,
+    alreadyCorrected,
+    recordCorrection,
+    undoLast,
+    clearRecent,
+  } = useSpellcheck({
     text,
     enabled: spellcheckEnabled && authed,
     language: spellcheckLanguage,
     channelEmotes: emoteNames,
   });
+
+  // Per-channel reset of autocorrect memory.
+  useEffect(() => {
+    clearRecent();
+  }, [channelKey, clearRecent]);
+
+  // Autocorrect: on every text/misspellings change, look for a misspelled
+  // word that meets all the autocorrect conditions. Skip the word the
+  // caret is currently inside (cursor-position guard — fixes the Qt bug).
+  // Personal dict is empty in PR 3; PR 4 wires user-specific entries.
+  const personalDictRef = useRef(new Set());
+  useEffect(() => {
+    if (!misspellings || misspellings.length === 0) return;
+    const inside = rangeAtCaret(misspellings, caret);
+    for (const m of misspellings) {
+      if (m === inside) continue;
+      const isPast = isPastWord(text, m.end);
+      if (!isPast) continue;
+      runAutocorrectFor(
+        m,
+        text,
+        caret,
+        alreadyCorrected,
+        personalDictRef.current,
+        setText,
+        setCaret,
+        recordCorrection,
+        spellcheckLanguage,
+        inputRef,
+      );
+      // One correction per pass; the rewrite triggers a fresh render
+      // and the next pass picks up further corrections naturally.
+      break;
+    }
+  // We intentionally exclude `caret` from deps — autocorrect should
+  // re-evaluate when text or misspellings change, not on every cursor
+  // movement (cursor moves alone shouldn't trigger autocorrect).
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [text, misspellings, alreadyCorrected, recordCorrection]);
 
   const mentionsSorted = useMemo(
     () => Array.from(new Set(mentionCandidates ?? [])),
@@ -81,6 +179,7 @@ export default function Composer({ channelKey, platform, auth, mentionCandidates
   const onChange = (e) => {
     const value = e.target.value.slice(0, MAX_LEN);
     setText(value);
+    setCaret(e.target.selectionStart ?? value.length);
     recomputePopup(value, e.target.selectionStart);
   };
 
@@ -146,6 +245,24 @@ export default function Composer({ channelKey, platform, auth, mentionCandidates
         return;
       }
     }
+    if (e.key === 'Escape') {
+      const restored = undoLast();
+      if (restored) {
+        e.preventDefault();
+        const before = text.slice(0, restored.position);
+        const after = text.slice(restored.position + restored.replacementWord.length);
+        const newText = `${before}${restored.originalWord}${after}`;
+        setText(newText);
+        const newCaret = restored.position + restored.originalWord.length;
+        setCaret(newCaret);
+        requestAnimationFrame(() => {
+          const el = inputRef.current;
+          if (!el) return;
+          el.setSelectionRange(newCaret, newCaret);
+        });
+        return;
+      }
+    }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       submit();
@@ -188,6 +305,7 @@ export default function Composer({ channelKey, platform, auth, mentionCandidates
             onChange={onChange}
             onKeyDown={onKey}
             onKeyUp={(e) => {
+              setCaret(e.currentTarget.selectionStart ?? 0);
               // Popup-navigation keys (↑↓ Tab Enter Esc) are handled by
               // onKeyDown — recomputing here would clobber the index
               // increment with a fresh `index: 0`.
@@ -203,7 +321,10 @@ export default function Composer({ channelKey, platform, auth, mentionCandidates
               }
               recomputePopup(e.currentTarget.value, e.currentTarget.selectionStart);
             }}
-            onClick={(e) => recomputePopup(e.currentTarget.value, e.currentTarget.selectionStart)}
+            onClick={(e) => {
+              setCaret(e.currentTarget.selectionStart ?? 0);
+              recomputePopup(e.currentTarget.value, e.currentTarget.selectionStart);
+            }}
             disabled={!authed || busy}
             maxLength={MAX_LEN}
           />
@@ -212,6 +333,7 @@ export default function Composer({ channelKey, platform, auth, mentionCandidates
               inputRef={inputRef}
               text={text}
               misspellings={misspellings}
+              recentCorrections={recentCorrections}
             />
           )}
         </div>
