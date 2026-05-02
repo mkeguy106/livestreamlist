@@ -55,11 +55,38 @@ pub struct Cache {
 
 impl Cache {
     pub fn new() -> Self {
+        Self::with_ttls(CACHE_TTL_SOME, CACHE_TTL_NONE)
+    }
+
+    /// Test-only constructor for shorter TTLs.
+    pub(crate) fn with_ttls(ttl_some: Duration, ttl_none: Duration) -> Self {
         Self {
             inner: Mutex::new(HashMap::new()),
-            ttl_some: CACHE_TTL_SOME,
-            ttl_none: CACHE_TTL_NONE,
+            ttl_some,
+            ttl_none,
         }
+    }
+
+    /// Returns:
+    /// - `None` if no fresh entry (never stored OR expired)
+    /// - `Some(None)` if a "negative" entry is fresh
+    /// - `Some(Some(info))` if a positive entry is fresh
+    pub fn get(&self, channel_login: &str) -> Option<Option<SubAnniversaryInfo>> {
+        let inner = self.inner.lock();
+        let (stored_at, value) = inner.get(channel_login)?;
+        let ttl = if value.is_some() { self.ttl_some } else { self.ttl_none };
+        if stored_at.elapsed() > ttl {
+            return None;
+        }
+        Some(value.clone())
+    }
+
+    pub fn set(&self, channel_login: &str, value: Option<SubAnniversaryInfo>) {
+        self.inner.lock().insert(channel_login.to_string(), (Instant::now(), value));
+    }
+
+    pub fn clear(&self) {
+        self.inner.lock().clear();
     }
 }
 
@@ -294,5 +321,73 @@ mod tests {
         let renews_at = now + chrono::Duration::days(365);
         let result = compute_window(renews_at, now);
         assert!(result.is_some(), "annual sub triggers Some — known limitation");
+    }
+
+    use std::thread;
+
+    fn make_info() -> SubAnniversaryInfo {
+        SubAnniversaryInfo {
+            months: 14,
+            days_remaining_in_window: 6,
+            tier: "1000".to_string(),
+            is_prime: false,
+            is_gift: false,
+            channel_login: "test".to_string(),
+            channel_display_name: "Test".to_string(),
+            renews_at: "2026-05-23T15:00:00Z".to_string(),
+        }
+    }
+
+    #[test]
+    fn cache_get_after_set_returns_value() {
+        let c = Cache::new();
+        c.set("test", Some(make_info()));
+        let got = c.get("test").expect("entry present");
+        let info = got.expect("Some value");
+        assert_eq!(info.months, 14);
+    }
+
+    #[test]
+    fn cache_get_unknown_key_returns_none_marker() {
+        let c = Cache::new();
+        // No entry: get() returns None.
+        // Entry that's None: get() returns Some(None).
+        assert!(c.get("nothing-stored").is_none());
+    }
+
+    #[test]
+    fn cache_set_none_then_get_returns_some_none() {
+        let c = Cache::new();
+        c.set("test", None);
+        let got = c.get("test");
+        assert!(got.is_some(), "entry exists");
+        assert!(got.unwrap().is_none(), "but value is None");
+    }
+
+    #[test]
+    fn cache_clear_removes_entry() {
+        let c = Cache::new();
+        c.set("test", Some(make_info()));
+        assert!(c.get("test").is_some());
+        c.clear();
+        assert!(c.get("test").is_none());
+    }
+
+    #[test]
+    fn cache_some_expires_after_ttl() {
+        let c = Cache::with_ttls(Duration::from_millis(50), Duration::from_millis(50));
+        c.set("test", Some(make_info()));
+        assert!(c.get("test").is_some());
+        thread::sleep(Duration::from_millis(70));
+        assert!(c.get("test").is_none(), "stale entry treated as missing");
+    }
+
+    #[test]
+    fn cache_none_expires_after_short_ttl() {
+        let c = Cache::with_ttls(Duration::from_secs(60), Duration::from_millis(50));
+        c.set("test", None);
+        assert!(c.get("test").is_some());
+        thread::sleep(Duration::from_millis(70));
+        assert!(c.get("test").is_none());
     }
 }
