@@ -409,6 +409,36 @@ The chat Composer's red squiggles use a transparent-text overlay layered on top 
 
 **Composer wiring**: `Composer.jsx` wraps the `<input>` in `<div style={{ position: 'relative', flex: 1, minWidth: 0 }}>`. The `minWidth: 0` is critical so the flex child can shrink below content size — without it the @me chiclet and Browser button get pushed out of the row at narrow widths. The overlay only renders when `spellcheckEnabled && authed`, so the disabled (logged-out) state shows no squiggles.
 
+### Spellcheck autocorrect (PR 3 — `src/utils/autocorrect.js`, hook extension)
+
+Autocorrect logic is a **pure decision function** in `src/utils/autocorrect.js`. The function `shouldAutocorrect({ word, suggestions, isPast, caretInside, alreadyCorrected, personalDict })` returns the replacement string (e.g. `"the"` for `"teh"`) or `null` if the conditions aren't all met. Conditions are ported verbatim from the Qt app's `chat/spellcheck/checker.py::_run_check`:
+
+1. **Caret not inside the word** — the cursor-position guard, NEW in this port, fixes the Qt bug where editing a previously-corrected word would re-fire autocorrect on every keystroke. `caretInside === true` → `null`.
+2. **`isPast === true`** — the next char after the word is space + alpha (user moved on).
+3. **`!alreadyCorrected.has(lowercased word)`** — per-Composer-session memory of words we've already auto-corrected.
+4. **`!personalDict.has(lowercased word)`** — same for the persistent personal dict.
+5. **Confidence**: apostrophe expansion (`dont→don't`), single hunspell suggestion, OR top suggestion within Damerau-Levenshtein ≤ 1.
+
+Module-scope DEV asserts (matching the `commandTabs.js` pattern) cover every condition + the bug regression: `te` with caret inside should NOT fire even when `te` looks like a confident misspelling. These run on import in `npm run dev` / `npm run tauri:dev`.
+
+**Hook extension** (`useSpellcheck.js`):
+- `recentCorrections: Map<positionKey, { start, end, word, originalWord }>` — for the green pill overlay. Auto-pruned 3.1 s after each correction.
+- `alreadyCorrected: Set<string>` — lowercased session memory.
+- `recordCorrection({ originalWord, replacementWord, position })` — Composer calls this when it applies a rewrite.
+- `undoLast(): { originalWord, replacementWord, position } | null` — Esc handler. Only returns non-null if (a) there's a recorded correction, (b) within 5 s, (c) no keystrokes since the correction (`keystrokesSinceCorrectionRef === 0`).
+- `clearRecent()` — Composer calls on `channelKey` change.
+
+**Green pill** (`.spellcheck-corrected` in `tokens.css`):
+- `rgba(60, 200, 60, 0.12)` translucent fill + `rgba(60, 200, 60, 0.6)` 1 px border + 3 px border-radius (mockup D from the brainstorm).
+- `@keyframes spellcheck-corrected-fade` holds at full opacity for 80% of the 3 s animation, then fades to transparent over the last 20%. CSS-only; no JS timer needed for the visual. The hook's 3.1 s setTimeout removes the span entirely after the animation completes (3 s + 100 ms safety).
+
+**Composer wiring** (`Composer.jsx`):
+- New `caret` useState, updated in `onChange` / `onKeyUp` / `onClick`.
+- `useEffect` on `[text, misspellings, alreadyCorrected, recordCorrection]` looks for a misspelled word that meets `shouldAutocorrect`'s conditions. The cursor-position guard is `rangeAtCaret(misspellings, caret)` — that range is skipped.
+- When a correction fires, `runAutocorrectFor` (top-level helper) awaits `spellcheckSuggest` IPC, re-confirms conditions against `inputRef.current.value` (text may have changed during the await), applies the rewrite via `setText` + `setCaret` + `requestAnimationFrame(() => el.setSelectionRange(...))`, and calls `recordCorrection`.
+- One correction per pass — break out of the loop after the first. The next render's misspellings naturally re-evaluate.
+- Esc keydown (when popup is closed) calls `undoLast()`; if it returns a restoration, Composer rewrites text to put `originalWord` back at `position`.
+
 ## Configuration
 
 Data dir (XDG):
