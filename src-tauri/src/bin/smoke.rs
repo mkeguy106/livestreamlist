@@ -222,6 +222,7 @@ fn run_jsonl_loop(
             Ok(l) => l,
             Err(e) => {
                 let env = json!({
+                    "command": Value::Null,
                     "ok": false,
                     "error": format!("stdin read error: {e}"),
                     "kind": "input",
@@ -241,7 +242,10 @@ fn run_jsonl_loop(
                 })
             }
             Ok(JsonlInput { id, cmd, args }) => {
-                let raw_args = serde_json::to_string(&args).unwrap_or_else(|_| "{}".to_string());
+                let raw_args = match &args {
+                    Value::Null => "{}".to_string(),
+                    other => serde_json::to_string(other).unwrap_or_else(|_| "{}".to_string()),
+                };
                 let mut env = dispatch_one(webview, &cmd, &raw_args, allow_side_effects);
                 if let Some(id) = id {
                     env["id"] = Value::String(id);

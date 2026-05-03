@@ -226,3 +226,18 @@ fn jsonl_optional_id_omitted_in_response_when_absent_in_input() {
     let json: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
     assert!(json.get("id").is_none(), "id should be omitted when absent in input; got: {json}");
 }
+
+#[test]
+fn jsonl_omitted_args_dispatches_with_empty_object() {
+    // Bug-regression test: when the JSONL input omits the 'args' key,
+    // serde defaults args to Value::Null. Without the Null→{} fallback,
+    // dispatch_one receives raw_args="null" and Tauri rejects it.
+    // Confirms list_channels (which takes no args) returns ok=true.
+    let input = "{\"cmd\":\"list_channels\"}\n";
+    let output = smoke().write_stdin(input).output().expect("run no-args jsonl");
+    assert!(output.status.success(), "exit: {:?}", output.status);
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let json: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(json["ok"], true, "omitted args should dispatch as empty object; got: {json}");
+    assert_eq!(json["value"], serde_json::json!([]));
+}
