@@ -411,6 +411,7 @@ export default function Command({ ctx }) {
             activeKey={activeTabKey}
             livestreams={livestreams}
             mentions={mentions}
+            isRight={settings?.appearance?.command_sidebar_position === 'right'}
             onActivate={setActiveTabKey}
             onClose={closeTab}
             onReorder={reorderTabs}

@@ -28,6 +28,7 @@ export default function TabStrip({
   tabs,                  // string[]
   activeKey,             // string | null
   livestreams,           // Livestream[]
+  isRight = false,       // bool — mirrors sidebar position; reverses tab flow
   onActivate,            // (channelKey) => void
   onClose,               // (channelKey) => void
   onDetach,              // (channelKey) => void   — placeholder until detach lands
@@ -117,7 +118,11 @@ export default function TabStrip({
       let dropPosition = 'before';
       if (targetEl) {
         const rect = targetEl.getBoundingClientRect();
-        dropPosition = e.clientX >= rect.left + rect.width / 2 ? 'after' : 'before';
+        const onRightHalf = e.clientX >= rect.left + rect.width / 2;
+        // In row-reverse, the visual right is the logical "before" position.
+        dropPosition = isRight
+          ? (onRightHalf ? 'before' : 'after')
+          : (onRightHalf ? 'after' : 'before');
       }
       setDrag((prev) =>
         prev
@@ -162,7 +167,7 @@ export default function TabStrip({
       document.removeEventListener('mouseup', onUp);
       document.removeEventListener('keydown', onKey);
     };
-  }, [drag, onReorder]);
+  }, [drag, onReorder, isRight]);
 
   // While a drag is active, lock the document cursor to "grabbing" and
   // disable text selection globally. Without this, the cursor flickers
@@ -187,6 +192,7 @@ export default function TabStrip({
       ref={stripRef}
       style={{
         display: 'flex',
+        flexDirection: isRight ? 'row-reverse' : 'row',
         flexWrap: 'wrap',
         alignItems: 'stretch',
         minHeight: 32,
