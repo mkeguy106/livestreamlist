@@ -220,8 +220,11 @@ export default function TabStrip({
   // Only attached while at least one row is frozen (avoids a document-level
   // listener during normal idle state). Returns the same prev reference
   // when nothing changed so React skips the re-render.
+  // Keyed on `hasHolds` (not `frozenRows`) so the listener mounts/unmounts only
+  // when transitioning between any-holds and no-holds, not on every release.
+  const hasHolds = frozenRows.size > 0;
   useEffect(() => {
-    if (frozenRows.size === 0) return;
+    if (!hasHolds) return;
 
     const onMove = (e) => {
       const y = e.clientY;
@@ -241,7 +244,7 @@ export default function TabStrip({
 
     document.addEventListener('mousemove', onMove);
     return () => document.removeEventListener('mousemove', onMove);
-  }, [frozenRows]);
+  }, [hasHolds]);
 
   const handleClose = (channelKey) => {
     const entry = layout.find(e => e.tab === channelKey);
