@@ -364,6 +364,7 @@ Gap analysis against the Qt app (`~/livestream.list.qt/`) — docs (`README.md`,
 - [ ] **Custom highlight keywords** — user list of words that trigger the mention highlight style + optional notification. → Ph 3
 - [ ] **Local echo for sent Twitch messages** — Twitch does not echo own PRIVMSGs; synthesise a local echo using `USERSTATE` tags so the user sees their own send immediately. → Ph 2b (sending)
 - [ ] **Prediction badge tooltips** — parse the `predictions` badge version (`blue-1` etc.) and render a descriptive tooltip ("Predicted: Blue"). → Ph 3
+- [x] **Subscriber/founder badge tooltip — actual tenure** (PR #115) — hover on a subscriber or founder badge shows the user's real tenure ("15-Month Subscriber", "2-Year Subscriber") parsed from the IRC `badge-info=` tag, instead of the lowercase set name or the badge-tier label. Matches Twitch's tier-title convention.
 
 ### Chat — emotes
 
@@ -372,7 +373,7 @@ Gap analysis against the Qt app (`~/livestream.list.qt/`) — docs (`README.md`,
 - [ ] **Emote disk cache budget** — the current memory LRU + 500 MB disk cap from CLAUDE.md is shipped; expose the disk cap as a user-configurable setting (50–5000 MB). → Ph 4 General tab
 - [ ] **Prefetch-on-picker-open** — when the emote picker opens, auto-download any missing channel emotes (prioritised over globals). → Ph 3
 - [ ] **Channel vs Global separation in picker** — subsection header within each provider tab so users can tell sub-emotes from globals. → Ph 3 (fold into emote-picker item)
-- [ ] **Twitch sub emotes via Helix** — `GET /chat/emotes/user?user_id=…` (paginated) lists every emote the logged-in user can use across their subscriptions. → Ph 2b (fold into "Twitch channel sub emotes" bullet)
+- [x] **Twitch sub emotes via Helix** (PR #115) — `GET /chat/emotes/user?user_id=…` paginated list of every emote the logged-in user can use across their subscriptions (subs + follower + bits + Turbo + Prime). The Helix call existed earlier but ran per chat-connect as a detached task; the Composer queried `list_emotes` immediately on mount, so for users with many subs (50+ paginated pages) the picker held a snapshot taken before the fetch finished. Refactored to a separate `user_emotes` cache layer pre-warmed at app start (if logged in) + force-refreshed on Twitch login + stale-gated on chat-connect (30 min TTL matching Qt's `USER_EMOTE_TTL`). Backend emits `chat:emotes_loaded` so the Composer re-queries when the layer changes mid-session.
 - [ ] **7TV EventAPI live emote updates** — subscribe to add/remove events for the connected channel so the picker reflects upstream changes without a manual refresh. → Ph 3
 
 ### Chat — UX
