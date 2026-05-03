@@ -1,9 +1,10 @@
 use anyhow::{Context, Result};
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use super::models::EmoteRange;
 
@@ -31,11 +32,21 @@ impl Emote {
     }
 }
 
-/// Global + per-channel emote name → Emote lookup. Layered: channel emotes
-/// shadow global ones when a name collides.
+/// Three-layer emote name → Emote lookup. Precedence: channel > user > globals.
+///
+/// - **globals**: Twitch globals + 7TV/BTTV/FFZ globals (channel-agnostic
+///   public sets).
+/// - **user_emotes**: emotes the *logged-in* Twitch user has access to via
+///   subs, follower grants, bits, Turbo, Prime — fetched once at app start
+///   via `/helix/chat/emotes/user`, refreshed on a 30 min TTL. Available
+///   in every channel because they belong to the user, not the room.
+/// - **channels**: per-channel broadcaster emote set + per-channel
+///   3rd-party (7TV/BTTV/FFZ).
 #[derive(Default)]
 pub struct EmoteCache {
     globals: RwLock<HashMap<String, Emote>>,
+    user_emotes: RwLock<HashMap<String, Emote>>,
+    user_emotes_loaded_at: Mutex<Option<Instant>>,
     channels: RwLock<HashMap<String, HashMap<String, Emote>>>,
 }
 
@@ -66,19 +77,50 @@ impl EmoteCache {
         self.channels.write().remove(channel_key);
     }
 
+    /// Replace the user-emote layer wholesale. Stamps the load time so
+    /// `user_emotes_stale` can decide when to refresh.
+    pub fn set_user_emotes(&self, map: HashMap<String, Emote>) {
+        *self.user_emotes.write() = map;
+        *self.user_emotes_loaded_at.lock() = Some(Instant::now());
+    }
+
+    /// Drop the user-emote layer. Call on logout so the picker stops
+    /// suggesting emotes the user can no longer send.
+    pub fn clear_user_emotes(&self) {
+        self.user_emotes.write().clear();
+        *self.user_emotes_loaded_at.lock() = None;
+    }
+
+    /// True if the user-emote layer was never loaded, or was loaded more
+    /// than `ttl` ago. Used by chat-connect to opportunistically refresh
+    /// long-running sessions without forcing a fetch every connect.
+    pub fn user_emotes_stale(&self, ttl: Duration) -> bool {
+        match *self.user_emotes_loaded_at.lock() {
+            None => true,
+            Some(t) => t.elapsed() >= ttl,
+        }
+    }
+
     pub fn lookup(&self, channel_key: &str, name: &str) -> Option<Emote> {
         if let Some(ch) = self.channels.read().get(channel_key) {
             if let Some(e) = ch.get(name) {
                 return Some(e.clone());
             }
         }
+        if let Some(e) = self.user_emotes.read().get(name) {
+            return Some(e.clone());
+        }
         self.globals.read().get(name).cloned()
     }
 
-    /// Flatten globals + this channel's overrides into a single sorted list.
-    /// Channel emotes shadow globals of the same name.
+    /// Flatten globals + user emotes + this channel's overrides into a
+    /// single sorted list. Higher-precedence layers shadow lower ones on
+    /// name collision (channel > user > global).
     pub fn list_for_channel(&self, channel_key: &str) -> Vec<Emote> {
         let mut out: HashMap<String, Emote> = self.globals.read().clone();
+        for (name, emote) in self.user_emotes.read().iter() {
+            out.insert(name.clone(), emote.clone());
+        }
         if let Some(ch) = self.channels.read().get(channel_key) {
             for (name, emote) in ch.iter() {
                 out.insert(name.clone(), emote.clone());
@@ -369,5 +411,119 @@ mod tests {
         assert_eq!(hits[0].name, "Kappa");
         assert_eq!(hits[0].start, 3);
         assert_eq!(hits[0].end, 8);
+    }
+
+    fn emote(name: &str) -> Emote {
+        Emote {
+            name: name.to_string(),
+            url_1x: format!("https://x/{name}"),
+            url_2x: None,
+            url_4x: None,
+            animated: false,
+        }
+    }
+
+    #[test]
+    fn user_emotes_layer_appears_in_every_channel() {
+        // The whole point of the user-emote layer: emotes attached to the
+        // logged-in user, not the room. They should show up in `list_for_channel`
+        // for ANY channel key, including unknown ones.
+        let cache = EmoteCache::default();
+        let mut user = HashMap::new();
+        user.insert("millyy3Lurk".to_string(), emote("millyy3Lurk"));
+        user.insert("callsi4Rock".to_string(), emote("callsi4Rock"));
+        cache.set_user_emotes(user);
+
+        let in_channel_a = cache.list_for_channel("twitch:millyy314");
+        let in_channel_b = cache.list_for_channel("twitch:i4rock");
+        let in_unknown = cache.list_for_channel("twitch:nonexistent");
+
+        for list in [&in_channel_a, &in_channel_b, &in_unknown] {
+            let names: Vec<&str> = list.iter().map(|e| e.name.as_str()).collect();
+            assert!(names.contains(&"millyy3Lurk"));
+            assert!(names.contains(&"callsi4Rock"));
+        }
+    }
+
+    #[test]
+    fn channel_emotes_shadow_user_emotes_on_collision() {
+        // If a channel's 7TV set defines the same name as a personal sub
+        // emote, the channel set wins (matches what other viewers see).
+        let cache = EmoteCache::default();
+        let mut user = HashMap::new();
+        user.insert("Foo".to_string(), Emote { url_1x: "user".into(), ..emote("Foo") });
+        cache.set_user_emotes(user);
+
+        let mut ch = HashMap::new();
+        ch.insert("Foo".to_string(), Emote { url_1x: "channel".into(), ..emote("Foo") });
+        cache.set_channel("twitch:bar", ch);
+
+        let resolved = cache.lookup("twitch:bar", "Foo").unwrap();
+        assert_eq!(resolved.url_1x, "channel");
+
+        // In a different channel without the override, the user-emote wins.
+        let elsewhere = cache.lookup("twitch:other", "Foo").unwrap();
+        assert_eq!(elsewhere.url_1x, "user");
+    }
+
+    #[test]
+    fn user_emotes_shadow_globals_on_collision() {
+        let cache = EmoteCache::default();
+        let mut g = HashMap::new();
+        g.insert("Bar".to_string(), Emote { url_1x: "global".into(), ..emote("Bar") });
+        cache.set_globals(g);
+        let mut u = HashMap::new();
+        u.insert("Bar".to_string(), Emote { url_1x: "user".into(), ..emote("Bar") });
+        cache.set_user_emotes(u);
+
+        assert_eq!(cache.lookup("any", "Bar").unwrap().url_1x, "user");
+    }
+
+    #[test]
+    fn user_emotes_stale_when_never_loaded() {
+        let cache = EmoteCache::default();
+        assert!(cache.user_emotes_stale(Duration::from_secs(60)));
+    }
+
+    #[test]
+    fn user_emotes_stale_false_immediately_after_load() {
+        let cache = EmoteCache::default();
+        cache.set_user_emotes(HashMap::new());
+        assert!(!cache.user_emotes_stale(Duration::from_secs(60)));
+    }
+
+    #[test]
+    fn user_emotes_stale_after_clear() {
+        let cache = EmoteCache::default();
+        cache.set_user_emotes(HashMap::new());
+        cache.clear_user_emotes();
+        assert!(cache.user_emotes_stale(Duration::from_secs(60)));
+    }
+
+    #[test]
+    fn clear_user_emotes_drops_them_from_lookup() {
+        let cache = EmoteCache::default();
+        let mut u = HashMap::new();
+        u.insert("Sub".to_string(), emote("Sub"));
+        cache.set_user_emotes(u);
+        assert!(cache.lookup("any", "Sub").is_some());
+        cache.clear_user_emotes();
+        assert!(cache.lookup("any", "Sub").is_none());
+    }
+
+    #[test]
+    fn set_user_emotes_replaces_wholesale() {
+        // Second call wins — old entries don't linger.
+        let cache = EmoteCache::default();
+        let mut first = HashMap::new();
+        first.insert("Old".to_string(), emote("Old"));
+        cache.set_user_emotes(first);
+
+        let mut second = HashMap::new();
+        second.insert("New".to_string(), emote("New"));
+        cache.set_user_emotes(second);
+
+        assert!(cache.lookup("any", "Old").is_none());
+        assert!(cache.lookup("any", "New").is_some());
     }
 }

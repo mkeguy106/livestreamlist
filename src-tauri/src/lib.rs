@@ -1069,6 +1069,9 @@ async fn twitch_login<R: tauri::Runtime>(
     // Auth state changed — reconnect any live Twitch chat tasks so they
     // pick up the new credentials.
     chat.reconnect_platform(Platform::Twitch, &state.store);
+    // Fresh login may bring a different account; force-refresh the
+    // user-emote set so the Composer picker has the new user's subs.
+    chat.force_refresh_twitch_user_emotes();
     broadcast_auth_changed(&app);
     Ok(identity)
 }
@@ -1081,6 +1084,9 @@ fn twitch_logout<R: tauri::Runtime>(
 ) -> Result<(), String> {
     auth::twitch::logout().map_err(err_string)?;
     chat.reconnect_platform(Platform::Twitch, &state.store);
+    // Drop the previous user's sub/follower/bits emotes so the picker
+    // doesn't keep suggesting them after logout.
+    chat.clear_twitch_user_emotes();
     broadcast_auth_changed(&app);
     Ok(())
 }
@@ -1666,6 +1672,17 @@ pub fn run() {
             if auth::youtube::load().ok().flatten().is_some() {
                 let http = app.state::<AppState>().http.clone();
                 spawn_youtube_user_info_refresh(&app.handle(), http);
+            }
+            // Pre-warm the Twitch user-emote layer (subs, follower, bits,
+            // Turbo, Prime) so the Composer picker has the user's full
+            // set the moment any chat opens. Without this, the picker
+            // queries `list_emotes` on first chat-mount before the
+            // 50+ page paginated fetch finishes, and the user's sub
+            // emotes silently never appear. Mirrors Qt's login-time
+            // fetch (chat/manager.py:182).
+            if auth::twitch::stored_identity().is_some() {
+                let chat_state = app.state::<Arc<chat::ChatManager>>();
+                chat_state.refresh_twitch_user_emotes_if_stale();
             }
             // Twitch web cookie auto-scrape (Qt parity, mirrors
             // gui/app.py:306-312::extract_twitch_auth_token). If OAuth
