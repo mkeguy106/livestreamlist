@@ -2953,6 +2953,7 @@ dependencies = [
  "parking_lot",
  "predicates",
  "rand 0.8.6",
+ "regex",
  "reqwest 0.12.28",
  "rookie",
  "serde",
