@@ -636,7 +636,7 @@ function IrcRow({
               fontStyle: m.is_action ? 'italic' : 'normal',
             }}
           >
-            <EmoteText text={m.text} ranges={m.emote_ranges} size={20} />
+            <EmoteText text={m.text} ranges={m.emote_ranges} links={m.link_ranges} size={20} />
           </span>
         </span>
       </div>
@@ -709,7 +709,7 @@ function CompactRow({
           {m.user.display_name || m.user.login}
         </span>
         <span style={{ color: 'var(--zinc-300)', minWidth: 0 }}>
-          <EmoteText text={m.text} ranges={m.emote_ranges} size={18} />
+          <EmoteText text={m.text} ranges={m.emote_ranges} links={m.link_ranges} size={18} />
         </span>
       </div>
     </div>
@@ -960,7 +960,7 @@ function SystemRow({ m, variant }) {
             fontSize: compact ? 10 : 'var(--t-12)',
           }}
         >
-          <EmoteText text={m.text} ranges={m.emote_ranges} size={compact ? 18 : 20} />
+          <EmoteText text={m.text} ranges={m.emote_ranges} links={m.link_ranges} size={compact ? 18 : 20} />
         </div>
       )}
     </div>

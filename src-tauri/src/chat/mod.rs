@@ -3,6 +3,7 @@ mod emote_loader;
 pub mod emotes;
 mod irc;
 mod kick;
+pub mod links;
 pub mod log_store;
 pub mod models;
 mod twitch;

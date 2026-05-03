@@ -257,6 +257,7 @@ mod tests {
             },
             text: text.into(),
             emote_ranges: vec![],
+            link_ranges: vec![],
             badges: vec![],
             is_action: false,
             is_first_message: false,
