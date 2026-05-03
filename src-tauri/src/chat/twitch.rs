@@ -435,7 +435,10 @@ fn build_privmsg(cfg: &TwitchChatConfig, msg: &IrcMessage<'_>) -> Option<ChatMes
 
     let color = msg.tags.get("color").filter(|s| !s.is_empty()).cloned();
 
-    let mut badges = parse_badges(msg.tags.get("badges").map(String::as_str).unwrap_or(""));
+    let mut badges = parse_badges(
+        msg.tags.get("badges").map(String::as_str).unwrap_or(""),
+        msg.tags.get("badge-info").map(String::as_str).unwrap_or(""),
+    );
     let room_snapshot = cfg.room_id.lock().clone();
     cfg.badges
         .resolve(Platform::Twitch, room_snapshot.as_deref(), &mut badges);
@@ -628,7 +631,10 @@ fn build_usernotice(cfg: &TwitchChatConfig, msg: &IrcMessage<'_>) -> Option<Chat
         .and_then(chrono::DateTime::from_timestamp_millis)
         .unwrap_or_else(Utc::now);
 
-    let mut badges = parse_badges(msg.tags.get("badges").map(String::as_str).unwrap_or(""));
+    let mut badges = parse_badges(
+        msg.tags.get("badges").map(String::as_str).unwrap_or(""),
+        msg.tags.get("badge-info").map(String::as_str).unwrap_or(""),
+    );
     let room_snapshot = cfg.room_id.lock().clone();
     cfg.badges
         .resolve(Platform::Twitch, room_snapshot.as_deref(), &mut badges);
@@ -760,7 +766,10 @@ pub fn apply_roomstate_tags(
 }
 
 fn extract_own_badges(msg: &crate::chat::irc::IrcMessage<'_>) -> Vec<ChatBadge> {
-    parse_badges(msg.tags.get("badges").map(String::as_str).unwrap_or(""))
+    parse_badges(
+        msg.tags.get("badges").map(String::as_str).unwrap_or(""),
+        msg.tags.get("badge-info").map(String::as_str).unwrap_or(""),
+    )
 }
 
 fn extract_own_display_name(msg: &crate::chat::irc::IrcMessage<'_>) -> Option<String> {
@@ -770,21 +779,58 @@ fn extract_own_display_name(msg: &crate::chat::irc::IrcMessage<'_>) -> Option<St
         .cloned()
 }
 
-fn parse_badges(tag: &str) -> Vec<ChatBadge> {
-    if tag.is_empty() {
+fn parse_badges(badges_tag: &str, badge_info_tag: &str) -> Vec<ChatBadge> {
+    if badges_tag.is_empty() {
         return Vec::new();
     }
-    tag.split(',')
+    let info = parse_badge_info(badge_info_tag);
+    badges_tag
+        .split(',')
         .filter_map(|pair| {
             let (set_name, version) = pair.split_once('/')?;
+            let title = match set_name {
+                "subscriber" | "founder" => info
+                    .get("subscriber")
+                    .or_else(|| info.get("founder"))
+                    .copied()
+                    .map(format_subscriber_title)
+                    .unwrap_or_else(|| "Subscriber".to_string()),
+                _ => set_name.to_string(),
+            };
             Some(ChatBadge {
                 id: format!("{set_name}/{version}"),
                 url: String::new(),
-                title: set_name.to_string(),
+                title,
                 is_mod: classify_mod_twitch(set_name),
             })
         })
         .collect()
+}
+
+fn parse_badge_info(tag: &str) -> std::collections::HashMap<String, u32> {
+    if tag.is_empty() {
+        return std::collections::HashMap::new();
+    }
+    tag.split(',')
+        .filter_map(|pair| {
+            let (set_name, value) = pair.split_once('/')?;
+            let months = value.parse::<u32>().ok()?;
+            Some((set_name.to_string(), months))
+        })
+        .collect()
+}
+
+/// Format a subscriber tooltip in Twitch's tier-title style:
+/// "{N}-Month Subscriber" for under-a-year and non-whole-year tenures,
+/// "{N}-Year Subscriber" for whole years (12, 24, 36…).
+fn format_subscriber_title(months: u32) -> String {
+    if months == 0 {
+        "Subscriber".to_string()
+    } else if months >= 12 && months % 12 == 0 {
+        format!("{}-Year Subscriber", months / 12)
+    } else {
+        format!("{months}-Month Subscriber")
+    }
 }
 
 fn build_clearchat(cfg: &TwitchChatConfig, msg: &IrcMessage<'_>) -> ChatModerationEvent {
@@ -839,7 +885,7 @@ mod tests {
 
     #[test]
     fn parse_badges_classifies_mod_vs_cosmetic() {
-        let badges = parse_badges("broadcaster/1,subscriber/6,vip/1,turbo/1");
+        let badges = parse_badges("broadcaster/1,subscriber/6,vip/1,turbo/1", "");
         let map: std::collections::HashMap<&str, bool> =
             badges.iter().map(|b| (b.id.as_str(), b.is_mod)).collect();
         assert_eq!(map.get("broadcaster/1").copied(), Some(true));
@@ -850,7 +896,54 @@ mod tests {
 
     #[test]
     fn parse_badges_empty_returns_empty() {
-        assert!(parse_badges("").is_empty());
+        assert!(parse_badges("", "").is_empty());
+    }
+
+    #[test]
+    fn parse_badges_subscriber_tenure_uses_badge_info_months() {
+        // User holds the 12-month tier badge but has actually been subscribed
+        // 15 months — Twitch sends both. We want the actual tenure on hover.
+        let badges = parse_badges("subscriber/12", "subscriber/15");
+        let sub = badges.iter().find(|b| b.id == "subscriber/12").unwrap();
+        assert_eq!(sub.title, "15-Month Subscriber");
+    }
+
+    #[test]
+    fn parse_badges_subscriber_tenure_clean_year_uses_year_label() {
+        let badges = parse_badges("subscriber/24", "subscriber/24");
+        let sub = badges.iter().find(|b| b.id == "subscriber/24").unwrap();
+        assert_eq!(sub.title, "2-Year Subscriber");
+    }
+
+    #[test]
+    fn parse_badges_subscriber_without_badge_info_falls_back() {
+        // No badge-info means we don't know actual months; fall back to a
+        // generic "Subscriber" label rather than the lowercase set name or
+        // an empty string that would resolve to the badge id.
+        let badges = parse_badges("subscriber/3", "");
+        let sub = badges.iter().find(|b| b.id == "subscriber/3").unwrap();
+        assert_eq!(sub.title, "Subscriber");
+    }
+
+    #[test]
+    fn parse_badges_founder_uses_founder_badge_info_months() {
+        // Founders have badges=founder/0 with badge-info=founder/N (or
+        // sometimes subscriber/N). Both cases should produce a tenure label.
+        let badges = parse_badges("founder/0", "founder/8");
+        let f = badges.iter().find(|b| b.id == "founder/0").unwrap();
+        assert_eq!(f.title, "8-Month Subscriber");
+    }
+
+    #[test]
+    fn format_subscriber_title_handles_edge_cases() {
+        assert_eq!(format_subscriber_title(0), "Subscriber");
+        assert_eq!(format_subscriber_title(1), "1-Month Subscriber");
+        assert_eq!(format_subscriber_title(11), "11-Month Subscriber");
+        assert_eq!(format_subscriber_title(12), "1-Year Subscriber");
+        assert_eq!(format_subscriber_title(15), "15-Month Subscriber");
+        assert_eq!(format_subscriber_title(24), "2-Year Subscriber");
+        assert_eq!(format_subscriber_title(36), "3-Year Subscriber");
+        assert_eq!(format_subscriber_title(37), "37-Month Subscriber");
     }
 
     #[test]
