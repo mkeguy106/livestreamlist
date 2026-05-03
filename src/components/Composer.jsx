@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { chatOpenInBrowser, chatSend, listEmotes, spellcheckAddWord, spellcheckSuggest } from '../ipc.js';
+import { chatOpenInBrowser, chatSend, listEmotes, listenEvent, spellcheckAddWord, spellcheckSuggest } from '../ipc.js';
 import { shouldAutocorrect, isPastWord, rangeAtCaret } from '../utils/autocorrect.js';
 import Tooltip from './Tooltip.jsx';
 import SpellcheckOverlay from './SpellcheckOverlay.jsx';
@@ -116,14 +116,29 @@ export default function Composer({ channelKey, platform, auth, mentionCandidates
       : 'This platform chats on its own site — click Browser ↗ to open it'
     : 'Send a message…  —  `:` for emotes, `@` for mentions';
 
-  // Cache emotes per-channel
+  // Cache emotes per-channel. Re-runs on channelKey change AND whenever the
+  // backend signals the user-emote layer changed (login, logout, app-start
+  // pre-warm completion, 30 min stale-refresh) — without this listener the
+  // picker would hold a stale snapshot taken before the paginated user-emote
+  // fetch finished and the user's sub emotes would silently be missing.
   useEffect(() => {
     if (!channelKey) return;
     let cancelled = false;
-    listEmotes(channelKey)
-      .then((data) => !cancelled && setEmotes(Array.isArray(data) ? data : []))
-      .catch(() => !cancelled && setEmotes([]));
-    return () => { cancelled = true; };
+    let unlisten = null;
+    const fetch = () => {
+      listEmotes(channelKey)
+        .then((data) => !cancelled && setEmotes(Array.isArray(data) ? data : []))
+        .catch(() => !cancelled && setEmotes([]));
+    };
+    fetch();
+    listenEvent('chat:emotes_loaded', fetch).then((u) => {
+      if (cancelled) u();
+      else unlisten = u;
+    });
+    return () => {
+      cancelled = true;
+      if (unlisten) unlisten();
+    };
   }, [channelKey]);
 
   // Memoize the names array so useSpellcheck's dep array sees a stable

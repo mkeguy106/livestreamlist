@@ -1,27 +1,43 @@
-//! Fan-out emote loader invoked when a chat connects.
+//! Fan-out emote loaders.
 //!
-//! Pulls, in parallel:
-//!   - Twitch globals (once per session — cheap, token-bound)
-//!   - Twitch user emotes (subs + follower + bits + turbo; paginated)
-//!   - Twitch channel emotes (all sub tiers for the joined channel)
-//!   - 7TV channel emote set
-//!   - BTTV channel + shared emotes
-//!   - FFZ room emote set
+//! Two entry points:
 //!
-//! Results are merged into the shared `EmoteCache` layered per `channel_key`
-//! so the autocomplete and message renderer see the full set for the channel
-//! the user is actively viewing.
+//! - [`load_twitch_for_channel`] — channel-specific work invoked on chat
+//!   connect: Twitch globals + Twitch broadcaster emotes + per-channel
+//!   3rd-party (7TV/BTTV/FFZ).
+//! - [`load_twitch_user_emotes`] — fetches the *logged-in user's* personal
+//!   emote set (subs, followers, bits, Turbo, Prime) via paginated
+//!   `/helix/chat/emotes/user`. Called once at app startup, on Twitch
+//!   login completion, and opportunistically by chat-connect when the
+//!   cache is stale (>`USER_EMOTE_TTL`). Results live in their own cache
+//!   layer so they apply to every channel without re-fetching per connect.
+//!
+//! Why split? The user-emote set can run to hundreds of pages for users
+//! subbed across many channels. Fetching it on every chat connect was the
+//! root cause of "subscriber emotes don't appear in the picker" — the
+//! Composer queries `list_emotes` immediately on mount, before the slow
+//! pagination completes.
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
+
+use tauri::{AppHandle, Emitter};
 
 use super::emotes::{self, Emote, EmoteCache};
 use crate::auth;
 use crate::platforms::twitch;
 
+/// Refresh the user-emote layer at most this often when triggered from
+/// chat-connect. Matches Qt's `USER_EMOTE_TTL` (`livestream-list.qt`,
+/// chat/manager.py:39) so a long-running session picks up newly-purchased
+/// subs without restart.
+pub const USER_EMOTE_TTL: Duration = Duration::from_secs(30 * 60);
+
 pub async fn load_twitch_for_channel(
     http: reqwest::Client,
     cache: Arc<EmoteCache>,
+    app: AppHandle,
     channel_key: String,
     channel_login: String,
 ) {
@@ -41,27 +57,16 @@ pub async fn load_twitch_for_channel(
             log::debug!("twitch global emotes fetch failed");
         }
 
-        // User emotes — subscriber set. We also layer these into globals so
-        // they're available on every channel (Twitch actually grants them
-        // globally on the user's session).
-        if let Some(identity) = auth::twitch::stored_identity() {
-            match twitch::fetch_user_emotes(&http, &token, &identity.user_id).await {
-                Ok(list) => {
-                    let map: HashMap<String, Emote> = list
-                        .into_iter()
-                        .map(|e| (e.name.clone(), twitch_to_emote(&e)))
-                        .collect();
-                    log::info!("twitch user emotes loaded: {} entries", map.len());
-                    cache.merge_globals(map);
-                }
-                Err(e) => {
-                    // Usually "insufficient scope" when the existing keyring
-                    // token was issued before we started asking for
-                    // `user:read:emotes` — guide the user to re-auth.
-                    log::warn!("twitch user emotes fetch failed (re-login may help): {e:#}");
-                }
-            }
-        }
+        // User-emote set is loaded out-of-band (app start + login + stale
+        // refresh). Fire a stale check here so 30+ min sessions catch
+        // newly-purchased subs without restart. Detached so the channel-
+        // specific load doesn't block on the (slow, paginated) user fetch.
+        let cache_for_user = Arc::clone(&cache);
+        let http_for_user = http.clone();
+        let app_for_user = app.clone();
+        tauri::async_runtime::spawn(async move {
+            refresh_twitch_user_emotes_if_stale(http_for_user, cache_for_user, app_for_user).await;
+        });
 
         // Channel emotes need the broadcaster id, not the login.
         if let Ok(Some(user_id)) = twitch::resolve_user_id(&http, &token, &channel_login).await {
@@ -105,6 +110,55 @@ pub async fn load_twitch_for_channel(
         per_channel.len()
     );
     cache.set_channel(&channel_key, per_channel);
+    let _ = app.emit("chat:emotes_loaded", ());
+}
+
+/// Unconditionally fetch the logged-in user's personal Twitch emote set
+/// (subs, followers, bits, Turbo, Prime) and replace the cache's
+/// user-emote layer. Silent no-op if no Twitch token / identity is
+/// stored. Emits `chat:emotes_loaded` on success so any open Composer
+/// can re-query its picker list.
+pub async fn load_twitch_user_emotes(
+    http: reqwest::Client,
+    cache: Arc<EmoteCache>,
+    app: AppHandle,
+) {
+    let Some(token) = auth::twitch::stored_token().ok().flatten() else {
+        return;
+    };
+    let Some(identity) = auth::twitch::stored_identity() else {
+        return;
+    };
+    match twitch::fetch_user_emotes(&http, &token, &identity.user_id).await {
+        Ok(list) => {
+            let map: HashMap<String, Emote> = list
+                .into_iter()
+                .map(|e| (e.name.clone(), twitch_to_emote(&e)))
+                .collect();
+            log::info!("twitch user emotes loaded: {} entries", map.len());
+            cache.set_user_emotes(map);
+            let _ = app.emit("chat:emotes_loaded", ());
+        }
+        Err(e) => {
+            // Usually "insufficient scope" when the existing keyring
+            // token was issued before we started asking for
+            // `user:read:emotes` — guide the user to re-auth.
+            log::warn!("twitch user emotes fetch failed (re-login may help): {e:#}");
+        }
+    }
+}
+
+/// Refresh the user-emote layer only if it was never loaded or is older
+/// than `USER_EMOTE_TTL`.
+pub async fn refresh_twitch_user_emotes_if_stale(
+    http: reqwest::Client,
+    cache: Arc<EmoteCache>,
+    app: AppHandle,
+) {
+    if !cache.user_emotes_stale(USER_EMOTE_TTL) {
+        return;
+    }
+    load_twitch_user_emotes(http, cache, app).await;
 }
 
 fn twitch_to_emote(e: &twitch::TwitchEmote) -> Emote {

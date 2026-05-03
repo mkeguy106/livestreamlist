@@ -125,12 +125,14 @@ impl ChatManager {
                 // fine; matched 3rd-party tokens swap in as the cache fills.
                 let emote_cache = Arc::clone(&self.emotes);
                 let http_clone = self.http.clone();
+                let app_clone = self.app.clone();
                 let key_clone = unique_key.clone();
                 let login_clone = channel_id.clone();
                 async_runtime::spawn(async move {
                     emote_loader::load_twitch_for_channel(
                         http_clone,
                         emote_cache,
+                        app_clone,
                         key_clone,
                         login_clone,
                     )
@@ -223,6 +225,36 @@ impl ChatManager {
     /// `set_user_metadata` to fan out a `user_blocked` moderation event.
     pub fn connected_keys(&self) -> Vec<String> {
         self.connections.lock().keys().cloned().collect()
+    }
+
+    /// Force-refresh the user-emote layer (Twitch sub/follower/bits/Turbo/
+    /// Prime). Called after a fresh Twitch login.
+    pub fn force_refresh_twitch_user_emotes(&self) {
+        let http = self.http.clone();
+        let cache = Arc::clone(&self.emotes);
+        let app = self.app.clone();
+        async_runtime::spawn(async move {
+            emote_loader::load_twitch_user_emotes(http, cache, app).await;
+        });
+    }
+
+    /// Pre-warm the user-emote layer at app start if a Twitch token is
+    /// stored. Skipped (cheap no-op inside the loader) if not.
+    pub fn refresh_twitch_user_emotes_if_stale(&self) {
+        let http = self.http.clone();
+        let cache = Arc::clone(&self.emotes);
+        let app = self.app.clone();
+        async_runtime::spawn(async move {
+            emote_loader::refresh_twitch_user_emotes_if_stale(http, cache, app).await;
+        });
+    }
+
+    /// Drop the user-emote layer on logout so the picker stops suggesting
+    /// emotes the user can no longer send.
+    pub fn clear_twitch_user_emotes(&self) {
+        self.emotes.clear_user_emotes();
+        use tauri::Emitter;
+        let _ = self.app.emit("chat:emotes_loaded", ());
     }
 
     /// Disconnect and reconnect every live chat connection on `platform`.
