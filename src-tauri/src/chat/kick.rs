@@ -24,6 +24,7 @@ use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
 
 use super::badges::classify_mod_kick;
 use super::emotes::EmoteCache;
+use super::links::scan_links;
 use super::log_store::ChatLogWriter;
 use super::models::{ChatBadge, ChatMessage, ChatRoomState, ChatRoomStateEvent, ChatStatus, ChatStatusEvent, ChatUser, EmoteRange};
 use super::OutboundMsg;
@@ -271,6 +272,8 @@ fn build_chat_message(cfg: &KickChatConfig, parsed: &Value) -> Option<ChatMessag
 
     let (stripped, emote_ranges) = extract_kick_emotes(&content);
 
+    let link_ranges = scan_links(&stripped, &emote_ranges);
+
     let timestamp = data
         .get("created_at")
         .and_then(|v| v.as_str())
@@ -342,7 +345,7 @@ fn build_chat_message(cfg: &KickChatConfig, parsed: &Value) -> Option<ChatMessag
         },
         text: stripped,
         emote_ranges,
-        link_ranges: Vec::new(),
+        link_ranges,
         badges,
         is_action: false,
         is_first_message: false,
