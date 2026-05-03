@@ -87,7 +87,7 @@ pub struct EmoteRange {
 /// URL appears, plus the normalized click target. The click target may differ
 /// from `text[start..end]` — bare-domain matches get `https://` prepended, and
 /// zero-width chars are stripped.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LinkRange {
     pub start: usize,
     pub end: usize,
