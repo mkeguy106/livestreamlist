@@ -14,28 +14,90 @@
 // later — the rx-tab-flashing class is applied conditionally but the
 // @keyframes lands with that work.
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import Tooltip from './Tooltip.jsx';
+import {
+  computeLayout,
+  TAB_MIN_WIDTH,
+  TAB_MAX_WIDTH,
+  RELEASE_HYSTERESIS_PX,
+  RESIZE_RELEASE_DELTA_PX,
+} from '../utils/tabLayout.js';
 
-// Pixels of mouse movement after mousedown before we treat the gesture as
-// a drag (vs. a click). Below this, the click-to-activate path wins.
 const DRAG_THRESHOLD_PX = 5;
-
-// Fixed tab width. Consistent width keeps each tab's × close button at the
-// same horizontal position across closes, so the user can click through a
-// run of tabs to close them in a row without re-aiming.
-const TAB_WIDTH_PX = 200;
 
 export default function TabStrip({
   tabs,                  // string[]
   activeKey,             // string | null
   livestreams,           // Livestream[]
+  isRight = false,       // bool — mirrors sidebar position; reverses tab flow
   onActivate,            // (channelKey) => void
   onClose,               // (channelKey) => void
   onDetach,              // (channelKey) => void   — placeholder until detach lands
   onReorder,             // (fromKey, toKey) => void
   mentions,              // Map<channelKey, MentionState> — undefined until mention flash lands
 }) {
+  const stripRef = useRef(null);
+  const [stripWidth, setStripWidth] = useState(0);
+  const [frozenRows, setFrozenRows] = useState(() => new Map());
+
+  useLayoutEffect(() => {
+    if (!stripRef.current) return;
+    setStripWidth(stripRef.current.clientWidth);
+    const ro = new ResizeObserver(entries => {
+      for (const entry of entries) {
+        setStripWidth(entry.contentRect.width);
+      }
+    });
+    ro.observe(stripRef.current);
+    return () => ro.disconnect();
+  }, []);
+
+  const layout = useMemo(
+    () => computeLayout({
+      tabs,
+      stripWidth,
+      minWidth: TAB_MIN_WIDTH,
+      maxWidth: TAB_MAX_WIDTH,
+      frozenRows,
+    }),
+    [tabs, stripWidth, frozenRows],
+  );
+
+  const widthByKey = useMemo(() => {
+    const m = new Map();
+    for (const e of layout) m.set(e.tab, e.width);
+    return m;
+  }, [layout]);
+
+  const rowBandsRef = useRef([]); // Array<{ rowIndex, top, bottom }>
+  const frozenWidthBaseRef = useRef(null); // stripWidth at the time the first hold was set
+
+  useLayoutEffect(() => {
+    if (!stripRef.current) {
+      rowBandsRef.current = [];
+      return;
+    }
+    const tabEls = stripRef.current.querySelectorAll('[data-tab-key]');
+    const byRow = new Map();
+    for (const el of tabEls) {
+      const r = el.getBoundingClientRect();
+      const key = el.getAttribute('data-tab-key');
+      const entry = layout.find(e => e.tab === key);
+      if (!entry) continue;
+      const existing = byRow.get(entry.rowIndex);
+      if (!existing) {
+        byRow.set(entry.rowIndex, { top: r.top, bottom: r.bottom });
+      } else {
+        existing.top = Math.min(existing.top, r.top);
+        existing.bottom = Math.max(existing.bottom, r.bottom);
+      }
+    }
+    rowBandsRef.current = [...byRow.entries()]
+      .map(([rowIndex, b]) => ({ rowIndex, top: b.top, bottom: b.bottom }))
+      .sort((a, b) => a.rowIndex - b.rowIndex);
+  }, [layout]);
+
   // Drag state: null = idle. Once a tab's mousedown is captured, we store
   // the source key and the start coordinates. The drag transitions from
   // "armed" to "active" only after DRAG_THRESHOLD_PX of movement, which
@@ -77,6 +139,10 @@ export default function TabStrip({
       const dx = Math.abs(e.clientX - drag.startX);
       const dy = Math.abs(e.clientY - drag.startY);
       const moved = dx + dy >= DRAG_THRESHOLD_PX;
+      if (moved && !drag.active) {
+        // Drag has armed: any held rows are now stale.
+        setFrozenRows(prev => prev.size === 0 ? prev : new Map());
+      }
       // Find the tab under the cursor (if any) so we can highlight it.
       const el = document.elementFromPoint(e.clientX, e.clientY);
       const targetEl = el && el.closest && el.closest('[data-tab-key]');
@@ -87,7 +153,11 @@ export default function TabStrip({
       let dropPosition = 'before';
       if (targetEl) {
         const rect = targetEl.getBoundingClientRect();
-        dropPosition = e.clientX >= rect.left + rect.width / 2 ? 'after' : 'before';
+        const onRightHalf = e.clientX >= rect.left + rect.width / 2;
+        // In row-reverse, the visual right is the logical "before" position.
+        dropPosition = isRight
+          ? (onRightHalf ? 'before' : 'after')
+          : (onRightHalf ? 'after' : 'before');
       }
       setDrag((prev) =>
         prev
@@ -132,7 +202,7 @@ export default function TabStrip({
       document.removeEventListener('mouseup', onUp);
       document.removeEventListener('keydown', onKey);
     };
-  }, [drag, onReorder]);
+  }, [drag, onReorder, isRight]);
 
   // While a drag is active, lock the document cursor to "grabbing" and
   // disable text selection globally. Without this, the cursor flickers
@@ -152,10 +222,95 @@ export default function TabStrip({
     };
   }, [drag?.active]);
 
+  // Release held rows when the cursor leaves their vertical band.
+  // Only attached while at least one row is frozen (avoids a document-level
+  // listener during normal idle state). Returns the same prev reference
+  // when nothing changed so React skips the re-render.
+  // Keyed on `hasHolds` (not `frozenRows`) so the listener mounts/unmounts only
+  // when transitioning between any-holds and no-holds, not on every release.
+  const hasHolds = frozenRows.size > 0;
+  useEffect(() => {
+    if (!hasHolds) return;
+
+    const onMove = (e) => {
+      const y = e.clientY;
+      setFrozenRows(prev => {
+        let next = prev;
+        for (const [rowIndex] of prev) {
+          const band = rowBandsRef.current.find(b => b.rowIndex === rowIndex);
+          if (!band) continue;
+          if (y < band.top - RELEASE_HYSTERESIS_PX || y > band.bottom + RELEASE_HYSTERESIS_PX) {
+            if (next === prev) next = new Map(prev);
+            next.delete(rowIndex);
+          }
+        }
+        return next;
+      });
+    };
+
+    document.addEventListener('mousemove', onMove);
+    return () => document.removeEventListener('mousemove', onMove);
+  }, [hasHolds]);
+
+  // Release all holds when the strip width drifts more than RESIZE_RELEASE_DELTA_PX
+  // from the width at the time the first hold was set.
+  useEffect(() => {
+    if (frozenRows.size === 0) {
+      frozenWidthBaseRef.current = null;
+      return;
+    }
+    const base = frozenWidthBaseRef.current;
+    if (base == null) return;
+    if (Math.abs(stripWidth - base) > RESIZE_RELEASE_DELTA_PX) {
+      setFrozenRows(prev => prev.size === 0 ? prev : new Map());
+    }
+  }, [stripWidth, frozenRows]);
+
+  // Drop frozen entries whose row index no longer exists in the rendered layout.
+  useEffect(() => {
+    if (frozenRows.size === 0) return;
+    const occupied = new Set(layout.map(e => e.rowIndex));
+    let stale = false;
+    for (const [rowIndex] of frozenRows) {
+      if (!occupied.has(rowIndex)) { stale = true; break; }
+    }
+    if (!stale) return;
+    setFrozenRows(prev => {
+      const next = new Map(prev);
+      for (const [rowIndex] of prev) {
+        if (!occupied.has(rowIndex)) next.delete(rowIndex);
+      }
+      return next;
+    });
+  }, [layout, frozenRows]);
+
+  const handleClose = (channelKey) => {
+    const entry = layout.find(e => e.tab === channelKey);
+    if (entry) {
+      const rowIndex = entry.rowIndex;
+      const existing = frozenRows.get(rowIndex);
+      const count = existing
+        ? existing.count
+        : layout.filter(e => e.rowIndex === rowIndex).length;
+      const width = existing ? existing.width : entry.width;
+      setFrozenRows(prev => {
+        const next = new Map(prev);
+        next.set(rowIndex, { count, width });
+        return next;
+      });
+      if (frozenRows.size === 0) {
+        frozenWidthBaseRef.current = stripWidth;
+      }
+    }
+    onClose(channelKey);
+  };
+
   return (
     <div
+      ref={stripRef}
       style={{
         display: 'flex',
+        flexDirection: isRight ? 'row-reverse' : 'row',
         flexWrap: 'wrap',
         alignItems: 'stretch',
         minHeight: 32,
@@ -172,11 +327,15 @@ export default function TabStrip({
         const active = key === activeKey;
         const mention = mentions ? mentions.get(key) : null;
         // Drag visual state for this specific tab.
+        const isDragging = drag?.active === true;
         const isDragSource = drag?.active && drag.sourceKey === key;
         const isDragTarget =
           drag?.active && drag.targetKey === key && drag.sourceKey !== key;
-        const dropEdge =
-          isDragTarget ? (drag.dropPosition === 'after' ? 'right' : 'left') : null;
+        const dropEdge = isDragTarget
+          ? (drag.dropPosition === 'after'
+              ? (isRight ? 'left' : 'right')
+              : (isRight ? 'right' : 'left'))
+          : null;
         return (
           <Tab
             key={key}
@@ -188,6 +347,8 @@ export default function TabStrip({
             mention={mention}
             isDragSource={isDragSource}
             dropEdge={dropEdge}
+            width={widthByKey.get(key) ?? TAB_MAX_WIDTH}
+            isDragging={isDragging}
             onMouseDown={(e) => onTabMouseDown(e, key, display, platform)}
             onActivate={() => {
               if (suppressClickRef.current) {
@@ -196,7 +357,7 @@ export default function TabStrip({
               }
               onActivate(key);
             }}
-            onClose={() => onClose(key)}
+            onClose={() => handleClose(key)}
             onDetach={() => onDetach && onDetach(key)}
           />
         );
@@ -246,6 +407,8 @@ function Tab({
   mention,
   isDragSource,
   dropEdge,            // 'left' | 'right' | null — drop indicator side
+  width,
+  isDragging,
   onMouseDown,
   onActivate,
   onClose,
@@ -262,8 +425,10 @@ function Tab({
       data-tab-key={channelKey}
       className={isBlinking ? 'rx-tab rx-tab-flashing' : 'rx-tab'}
       style={{
-        flex: `0 0 ${TAB_WIDTH_PX}px`,
-        width: TAB_WIDTH_PX,
+        flex: `0 0 ${width}px`,
+        width,
+        boxSizing: 'border-box',
+        transition: isDragging ? 'none' : 'width 150ms ease-out',
         padding: '0 8px 0 12px',
         display: 'flex',
         alignItems: 'center',
