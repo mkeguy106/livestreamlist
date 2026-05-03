@@ -37,6 +37,7 @@ export default function TabStrip({
 }) {
   const stripRef = useRef(null);
   const [stripWidth, setStripWidth] = useState(0);
+  const [frozenRows, setFrozenRows] = useState(() => new Map());
 
   useLayoutEffect(() => {
     if (!stripRef.current) return;
@@ -56,9 +57,9 @@ export default function TabStrip({
       stripWidth,
       minWidth: TAB_MIN_WIDTH,
       maxWidth: TAB_MAX_WIDTH,
-      frozenRows: new Map(), // hold logic comes in a later task
+      frozenRows,
     }),
-    [tabs, stripWidth],
+    [tabs, stripWidth, frozenRows],
   );
 
   const widthByKey = useMemo(() => {
@@ -187,6 +188,24 @@ export default function TabStrip({
     };
   }, [drag?.active]);
 
+  const handleClose = (channelKey) => {
+    const entry = layout.find(e => e.tab === channelKey);
+    if (entry) {
+      const rowIndex = entry.rowIndex;
+      const existing = frozenRows.get(rowIndex);
+      const count = existing
+        ? existing.count
+        : layout.filter(e => e.rowIndex === rowIndex).length;
+      const width = existing ? existing.width : entry.width;
+      setFrozenRows(prev => {
+        const next = new Map(prev);
+        next.set(rowIndex, { count, width });
+        return next;
+      });
+    }
+    onClose(channelKey);
+  };
+
   return (
     <div
       ref={stripRef}
@@ -237,7 +256,7 @@ export default function TabStrip({
               }
               onActivate(key);
             }}
-            onClose={() => onClose(key)}
+            onClose={() => handleClose(key)}
             onDetach={() => onDetach && onDetach(key)}
           />
         );
