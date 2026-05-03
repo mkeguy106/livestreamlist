@@ -15,6 +15,8 @@ mod player;
 mod refresh;
 mod settings;
 mod share_window;
+#[cfg(any(feature = "smoke", test))]
+pub mod smoke;
 mod spellcheck;
 mod streamlink;
 mod tray;
@@ -29,19 +31,19 @@ use player::PlayerManager;
 use settings::{Settings, SharedSettings};
 use users::{UserMetadata, UserMetadataPatch, UserStore};
 
-struct AppState {
-    store: SharedStore,
-    http: reqwest::Client,
-    notifier: Arc<NotifyTracker>,
-    settings: SharedSettings,
-    users: Arc<UserStore>,
-    pronouns: Arc<PronounsCache>,
-    twitch_anniversary_cache: platforms::twitch_anniversary::SharedCache,
-    share_windows: share_window::SharedShareWindowState,
+pub(crate) struct AppState {
+    pub(crate) store: SharedStore,
+    pub(crate) http: reqwest::Client,
+    pub(crate) notifier: Arc<NotifyTracker>,
+    pub(crate) settings: SharedSettings,
+    pub(crate) users: Arc<UserStore>,
+    pub(crate) pronouns: Arc<PronounsCache>,
+    pub(crate) twitch_anniversary_cache: platforms::twitch_anniversary::SharedCache,
+    pub(crate) share_windows: share_window::SharedShareWindowState,
 }
 
 impl AppState {
-    fn new() -> anyhow::Result<Self> {
+    pub(crate) fn new() -> anyhow::Result<Self> {
         let store = ChannelStore::load()?;
         let http = reqwest::Client::builder()
             .user_agent(concat!(
@@ -97,7 +99,7 @@ fn list_channels(state: State<'_, AppState>) -> Vec<Channel> {
 /// bare handle like "shroud" doesn't auto-fill), oversized payloads,
 /// and URLs that the existing parser doesn't recognise.
 #[tauri::command]
-fn clipboard_channel_url(app: tauri::AppHandle) -> Option<String> {
+fn clipboard_channel_url<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> Option<String> {
     use tauri_plugin_clipboard_manager::ClipboardExt;
     let raw = app.clipboard().read_text().ok()?;
     let trimmed = raw.trim();
@@ -152,8 +154,8 @@ fn set_favorite(
 }
 
 #[tauri::command]
-async fn refresh_all(
-    app: tauri::AppHandle,
+async fn refresh_all<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
     state: State<'_, AppState>,
 ) -> Result<Vec<Livestream>, String> {
     let store = Arc::clone(&state.store);
@@ -317,9 +319,9 @@ async fn list_socials(
 }
 
 #[tauri::command]
-fn chat_open_in_browser(
+fn chat_open_in_browser<R: tauri::Runtime>(
     unique_key: String,
-    app: tauri::AppHandle,
+    app: tauri::AppHandle<R>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let channel = state
@@ -403,7 +405,7 @@ fn chat_open_in_browser(
 }
 
 #[tauri::command]
-async fn chat_detach(app: tauri::AppHandle, unique_key: String) -> Result<(), String> {
+async fn chat_detach<R: tauri::Runtime>(app: tauri::AppHandle<R>, unique_key: String) -> Result<(), String> {
     use tauri::WebviewUrl;
 
     let label = format!("chat-detach-{}", slugify(&unique_key));
@@ -456,7 +458,7 @@ async fn chat_detach(app: tauri::AppHandle, unique_key: String) -> Result<(), St
 }
 
 #[tauri::command]
-async fn chat_reattach(app: tauri::AppHandle, unique_key: String) -> Result<(), String> {
+async fn chat_reattach<R: tauri::Runtime>(app: tauri::AppHandle<R>, unique_key: String) -> Result<(), String> {
     // Emit redock first so main has the channel back in tabKeys before the
     // window's :closed event fires (the :closed handler is idempotent and
     // tolerates either ordering).
@@ -470,7 +472,7 @@ async fn chat_reattach(app: tauri::AppHandle, unique_key: String) -> Result<(), 
 }
 
 #[tauri::command]
-async fn chat_focus_detached(app: tauri::AppHandle, unique_key: String) -> Result<(), String> {
+async fn chat_focus_detached<R: tauri::Runtime>(app: tauri::AppHandle<R>, unique_key: String) -> Result<(), String> {
     let label = format!("chat-detach-{}", slugify(&unique_key));
     if let Some(window) = app.get_webview_window(&label) {
         let _ = window.show();
@@ -567,7 +569,9 @@ mod chat_detach_tests {
 // Real handlers delegate to EmbedHost. EmbedHost::mount / set_bounds / set_visible
 // are themselves cfg(not(test))-gated (they touch ChildEmbed::inner which only
 // exists in real builds), so each handler exists in two cfg-gated variants.
-#[cfg(not(test))]
+// The smoke feature also uses the stub variants because EmbedHost::mount/set_bounds
+// take concrete AppHandle and embed_mount/embed_bounds are in the smoke DENYLIST.
+#[cfg(not(any(feature = "smoke", test)))]
 #[tauri::command]
 fn embed_mount(
     app: tauri::AppHandle,
@@ -589,10 +593,10 @@ fn embed_mount(
         .map_err(err_string)
 }
 
-#[cfg(test)]
+#[cfg(any(feature = "smoke", test))]
 #[tauri::command]
-fn embed_mount(
-    _app: tauri::AppHandle,
+fn embed_mount<R: tauri::Runtime>(
+    _app: tauri::AppHandle<R>,
     _state: State<'_, AppState>,
     _embeds: State<'_, Arc<embed::EmbedHost>>,
     _unique_key: String,
@@ -604,7 +608,7 @@ fn embed_mount(
     Ok(false)
 }
 
-#[cfg(not(test))]
+#[cfg(not(any(feature = "smoke", test)))]
 #[tauri::command]
 fn embed_bounds(
     app: tauri::AppHandle,
@@ -620,10 +624,10 @@ fn embed_bounds(
         .map_err(err_string)
 }
 
-#[cfg(test)]
+#[cfg(any(feature = "smoke", test))]
 #[tauri::command]
-fn embed_bounds(
-    _app: tauri::AppHandle,
+fn embed_bounds<R: tauri::Runtime>(
+    _app: tauri::AppHandle<R>,
     _embeds: State<'_, Arc<embed::EmbedHost>>,
     _unique_key: String,
     _x: f64,
@@ -634,7 +638,7 @@ fn embed_bounds(
     Ok(())
 }
 
-#[cfg(not(test))]
+#[cfg(not(any(feature = "smoke", test)))]
 #[tauri::command]
 fn embed_set_visible(
     embeds: State<'_, Arc<embed::EmbedHost>>,
@@ -644,7 +648,17 @@ fn embed_set_visible(
     embeds.set_visible(&unique_key, visible).map_err(err_string)
 }
 
-#[cfg(test)]
+#[cfg(feature = "smoke")]
+#[tauri::command]
+fn embed_set_visible(
+    _embeds: State<'_, Arc<embed::EmbedHost>>,
+    _unique_key: String,
+    _visible: bool,
+) -> Result<(), String> {
+    Err("smoke mode: command in DENYLIST".into())
+}
+
+#[cfg(all(test, not(feature = "smoke")))]
 #[tauri::command]
 fn embed_set_visible(
     _embeds: State<'_, Arc<embed::EmbedHost>>,
@@ -654,18 +668,25 @@ fn embed_set_visible(
     Ok(())
 }
 
-#[cfg(not(test))]
+#[cfg(not(any(feature = "smoke", test)))]
 #[tauri::command]
 fn embed_unmount(embeds: State<'_, Arc<embed::EmbedHost>>, unique_key: String) {
     embeds.unmount(&unique_key);
 }
 
-#[cfg(test)]
+#[cfg(feature = "smoke")]
+#[tauri::command]
+fn embed_unmount(_embeds: State<'_, Arc<embed::EmbedHost>>, _unique_key: String) {
+    // noop in smoke build (command is in DENYLIST)
+}
+
+#[cfg(all(test, not(feature = "smoke")))]
 #[tauri::command]
 fn embed_unmount(_embeds: State<'_, Arc<embed::EmbedHost>>, _unique_key: String) {
     // noop in test build
 }
 
+#[cfg(not(feature = "smoke"))]
 #[tauri::command]
 fn login_popup_open(
     app: tauri::AppHandle,
@@ -676,6 +697,19 @@ fn login_popup_open(
     height: f64,
 ) -> Result<(), String> {
     popup.open(&app, x, y, width, height).map_err(err_string)
+}
+
+#[cfg(feature = "smoke")]
+#[tauri::command]
+fn login_popup_open<R: tauri::Runtime>(
+    _app: tauri::AppHandle<R>,
+    _popup: State<'_, Arc<login_popup::LoginPopupManager>>,
+    _x: f64,
+    _y: f64,
+    _width: f64,
+    _height: f64,
+) -> Result<(), String> {
+    Err("smoke mode: command in DENYLIST".into())
 }
 
 #[tauri::command]
@@ -694,7 +728,7 @@ fn login_popup_resize(
 
 /// Broadcast a no-payload "auth state changed" event so every webview
 /// (main + login popup) can re-pull `auth_status`. Logged but not fatal.
-fn broadcast_auth_changed(app: &tauri::AppHandle) {
+fn broadcast_auth_changed<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     if let Err(e) = app.emit("auth:changed", ()) {
         log::warn!("emit auth:changed: {e:#}");
     }
@@ -705,7 +739,7 @@ fn broadcast_auth_changed(app: &tauri::AppHandle) {
 /// keyring on success, and emits `auth:changed` so the login chiclet
 /// dropdown updates without the user re-opening it. Fire-and-forget;
 /// every failure path logs and swallows.
-fn spawn_youtube_user_info_refresh(app: &tauri::AppHandle, http: reqwest::Client) {
+fn spawn_youtube_user_info_refresh<R: tauri::Runtime>(app: &tauri::AppHandle<R>, http: reqwest::Client) {
     let app_for_task = app.clone();
     tauri::async_runtime::spawn(async move {
         match auth::youtube::fetch_user_info(&http).await {
@@ -796,8 +830,8 @@ fn get_user_metadata(user_key: String, state: State<'_, AppState>) -> Result<Use
 }
 
 #[tauri::command]
-fn set_user_metadata(
-    app: tauri::AppHandle,
+fn set_user_metadata<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
     chat: State<'_, Arc<ChatManager>>,
     state: State<'_, AppState>,
     user_key: String,
@@ -1026,8 +1060,8 @@ async fn auth_status(state: State<'_, AppState>) -> Result<AuthStatus, String> {
 }
 
 #[tauri::command]
-async fn twitch_login(
-    app: tauri::AppHandle,
+async fn twitch_login<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
     state: State<'_, AppState>,
     chat: State<'_, Arc<ChatManager>>,
 ) -> Result<auth::twitch::TwitchIdentity, String> {
@@ -1040,8 +1074,8 @@ async fn twitch_login(
 }
 
 #[tauri::command]
-fn twitch_logout(
-    app: tauri::AppHandle,
+fn twitch_logout<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
     chat: State<'_, Arc<ChatManager>>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
@@ -1051,6 +1085,7 @@ fn twitch_logout(
     Ok(())
 }
 
+#[cfg(not(feature = "smoke"))]
 #[tauri::command]
 async fn twitch_web_login(
     app: tauri::AppHandle,
@@ -1063,16 +1098,25 @@ async fn twitch_web_login(
     Ok(identity)
 }
 
+#[cfg(feature = "smoke")]
 #[tauri::command]
-fn twitch_web_clear(app: tauri::AppHandle) -> Result<(), String> {
+async fn twitch_web_login<R: tauri::Runtime>(
+    _app: tauri::AppHandle<R>,
+    _state: State<'_, AppState>,
+) -> Result<auth::twitch_web::TwitchWebIdentity, String> {
+    Err("smoke mode: command in DENYLIST".into())
+}
+
+#[tauri::command]
+fn twitch_web_clear<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> Result<(), String> {
     auth::twitch_web::clear().map_err(err_string)?;
     broadcast_auth_changed(&app);
     Ok(())
 }
 
 #[tauri::command]
-async fn twitch_anniversary_check(
-    app: tauri::AppHandle,
+async fn twitch_anniversary_check<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
     state: State<'_, AppState>,
     unique_key: String,
 ) -> Result<platforms::twitch_anniversary::CheckResult, String> {
@@ -1141,6 +1185,7 @@ fn twitch_anniversary_dismiss(
     Ok(())
 }
 
+#[cfg(not(feature = "smoke"))]
 #[tauri::command]
 fn twitch_share_resub_open(
     app: tauri::AppHandle,
@@ -1178,6 +1223,17 @@ fn twitch_share_resub_open(
     .map_err(err_string)
 }
 
+#[cfg(feature = "smoke")]
+#[tauri::command]
+fn twitch_share_resub_open<R: tauri::Runtime>(
+    _app: tauri::AppHandle<R>,
+    _state: State<'_, AppState>,
+    _unique_key: String,
+) -> Result<(), String> {
+    Err("smoke mode: command in DENYLIST".into())
+}
+
+#[cfg(not(feature = "smoke"))]
 #[tauri::command]
 fn twitch_share_window_close(
     app: tauri::AppHandle,
@@ -1198,9 +1254,19 @@ fn twitch_share_window_close(
     Ok(())
 }
 
+#[cfg(feature = "smoke")]
 #[tauri::command]
-async fn kick_login(
-    app: tauri::AppHandle,
+fn twitch_share_window_close<R: tauri::Runtime>(
+    _app: tauri::AppHandle<R>,
+    _state: State<'_, AppState>,
+    _unique_key: String,
+) -> Result<(), String> {
+    Err("smoke mode: command in DENYLIST".into())
+}
+
+#[tauri::command]
+async fn kick_login<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
     state: State<'_, AppState>,
     chat: State<'_, Arc<ChatManager>>,
 ) -> Result<auth::kick::KickIdentity, String> {
@@ -1211,8 +1277,8 @@ async fn kick_login(
 }
 
 #[tauri::command]
-fn kick_logout(
-    app: tauri::AppHandle,
+fn kick_logout<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
     chat: State<'_, Arc<ChatManager>>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
@@ -1222,6 +1288,7 @@ fn kick_logout(
     Ok(())
 }
 
+#[cfg(not(feature = "smoke"))]
 #[tauri::command]
 async fn youtube_login(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<bool, String> {
     auth::youtube::login_via_webview(app.clone())
@@ -1236,10 +1303,19 @@ async fn youtube_login(app: tauri::AppHandle, state: State<'_, AppState>) -> Res
     Ok(true)
 }
 
+#[cfg(feature = "smoke")]
 #[tauri::command]
-fn youtube_login_paste(
+async fn youtube_login<R: tauri::Runtime>(
+    _app: tauri::AppHandle<R>,
+    _state: State<'_, AppState>,
+) -> Result<bool, String> {
+    Err("smoke mode: command in DENYLIST".into())
+}
+
+#[tauri::command]
+fn youtube_login_paste<R: tauri::Runtime>(
     text: String,
-    app: tauri::AppHandle,
+    app: tauri::AppHandle<R>,
     state: State<'_, AppState>,
 ) -> Result<bool, String> {
     let cookies = auth::youtube::parse_pasted(&text).map_err(err_string)?;
@@ -1254,13 +1330,14 @@ fn youtube_login_paste(
 }
 
 #[tauri::command]
-fn youtube_logout(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+fn youtube_logout<R: tauri::Runtime>(app: tauri::AppHandle<R>, state: State<'_, AppState>) -> Result<(), String> {
     auth::youtube::clear().map_err(err_string)?;
     clear_youtube_browser_pref(&state);
     broadcast_auth_changed(&app);
     Ok(())
 }
 
+#[cfg(not(feature = "smoke"))]
 #[tauri::command]
 async fn chaturbate_login(app: tauri::AppHandle) -> Result<bool, String> {
     auth::chaturbate::login_via_webview(app.clone())
@@ -1270,9 +1347,17 @@ async fn chaturbate_login(app: tauri::AppHandle) -> Result<bool, String> {
     Ok(true)
 }
 
+#[cfg(feature = "smoke")]
 #[tauri::command]
-fn chaturbate_logout(
-    app: tauri::AppHandle,
+async fn chaturbate_login<R: tauri::Runtime>(
+    _app: tauri::AppHandle<R>,
+) -> Result<bool, String> {
+    Err("smoke mode: command in DENYLIST".into())
+}
+
+#[tauri::command]
+fn chaturbate_logout<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
     embeds: State<'_, Arc<embed::EmbedHost>>,
 ) -> Result<(), String> {
     embeds.unmount_platform(Platform::Chaturbate);
@@ -1412,13 +1497,117 @@ fn apply_linux_webkit_workarounds() {
 #[cfg(not(target_os = "linux"))]
 fn apply_linux_webkit_workarounds() {}
 
+/// The full IPC handler list, shared between production `run()` and the
+/// smoke binary. Adding a new `#[tauri::command]` requires editing exactly
+/// one place: this macro's body.
+#[macro_export]
+macro_rules! register_handlers {
+    () => {
+        tauri::generate_handler![
+            $crate::list_livestreams,
+            $crate::list_channels,
+            $crate::add_channel_from_input,
+            $crate::clipboard_channel_url,
+            $crate::remove_channel,
+            $crate::set_favorite,
+            $crate::refresh_all,
+            $crate::launch_stream,
+            $crate::stop_stream,
+            $crate::list_playing,
+            $crate::open_in_browser,
+            $crate::open_url,
+            $crate::list_socials,
+            $crate::chat_connect,
+            $crate::chat_disconnect,
+            $crate::chat_send,
+            $crate::chat_open_in_browser,
+            $crate::chat_detach,
+            $crate::chat_reattach,
+            $crate::chat_focus_detached,
+            $crate::embed_mount,
+            $crate::embed_bounds,
+            $crate::embed_unmount,
+            $crate::embed_set_visible,
+            $crate::login_popup_open,
+            $crate::login_popup_close,
+            $crate::login_popup_resize,
+            $crate::list_emotes,
+            $crate::replay_chat_history,
+            $crate::get_settings,
+            $crate::update_settings,
+            $crate::get_user_metadata,
+            $crate::set_user_metadata,
+            $crate::get_user_profile,
+            $crate::get_user_messages,
+            $crate::list_blocked_users,
+            $crate::auth_status,
+            $crate::twitch_login,
+            $crate::twitch_logout,
+            $crate::twitch_web_login,
+            $crate::twitch_web_clear,
+            $crate::twitch_anniversary_check,
+            $crate::twitch_anniversary_dismiss,
+            $crate::twitch_share_resub_open,
+            $crate::twitch_share_window_close,
+            $crate::kick_login,
+            $crate::kick_logout,
+            $crate::youtube_login,
+            $crate::youtube_login_paste,
+            $crate::youtube_logout,
+            $crate::youtube_detect_browsers,
+            $crate::chaturbate_login,
+            $crate::chaturbate_logout,
+            $crate::import_twitch_follows,
+            $crate::spellcheck_check,
+            $crate::spellcheck_suggest,
+            $crate::spellcheck_add_word,
+            $crate::spellcheck_list_dicts,
+        ]
+    };
+}
+
+/// Construct AppState + per-handle managers and `manage()` them on the App.
+///
+/// Shared between production `run()` and the smoke harness binary so both
+/// paths get the same state shape. Side-effecting setup (tray, window state
+/// plugin, GTK overlay, background async tasks) stays in production `run()`
+/// where it belongs.
+///
+/// **Non-generic constraint:** the signature uses concrete `tauri::App`
+/// (= `App<Wry>`) because `ChatManager::new` and `PlayerManager::new`
+/// take concrete `AppHandle`. The smoke harness uses `MockRuntime` and
+/// constructs state directly (see `crate::smoke::build_smoke_app`).
+pub(crate) fn manage_all_state(app: &mut tauri::App) -> anyhow::Result<()> {
+    let state = AppState::new()?;
+    let http = state.http.clone();
+    let users = Arc::clone(&state.users);
+    app.manage(state);
+
+    let handle = app.handle().clone();
+    let chat_mgr = ChatManager::new(handle.clone(), http.clone(), users.clone());
+    app.manage(chat_mgr);
+
+    let player_mgr = Arc::new(PlayerManager::new(handle.clone()));
+    app.manage(player_mgr);
+
+    let embed_mgr = embed::EmbedHost::new();
+    app.manage(embed_mgr);
+
+    let login_popup_mgr = login_popup::LoginPopupManager::new();
+    app.manage(login_popup_mgr);
+
+    let personal_dict_path = crate::config::config_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from("."))
+        .join("personal_dict.json");
+    let spellchecker = Arc::new(crate::spellcheck::SpellChecker::new(personal_dict_path));
+    app.manage(spellchecker);
+
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     apply_linux_webkit_workarounds();
-    let state = AppState::new().expect("failed to initialize app state");
-
-    let http_for_chat = state.http.clone();
-    let users_for_chat = Arc::clone(&state.users);
     tauri::Builder::default()
         .plugin(
             tauri_plugin_window_state::Builder::new()
@@ -1436,8 +1625,7 @@ pub fn run() {
                 }
             },
         ))
-        .manage(state)
-        .setup(move |app| {
+        .setup(|app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(
                     tauri_plugin_log::Builder::default()
@@ -1445,22 +1633,13 @@ pub fn run() {
                         .build(),
                 )?;
             }
-            let chat_mgr = ChatManager::new(
-                app.handle().clone(),
-                http_for_chat.clone(),
-                users_for_chat.clone(),
-            );
-            app.manage(chat_mgr);
-            let player_mgr = Arc::new(PlayerManager::new(app.handle().clone()));
-            app.manage(player_mgr);
-            let embed_mgr = embed::EmbedHost::new();
-            app.manage(embed_mgr.clone());
+            crate::manage_all_state(app)?;
             #[cfg(target_os = "linux")]
             {
                 let main = app
                     .get_webview_window("main")
                     .expect("main window must exist by setup time");
-                let host_for_setup = embed_mgr.clone();
+                let host_for_setup = app.state::<Arc<embed::EmbedHost>>().inner().clone();
                 let main_for_closure = main.clone();
                 main.run_on_main_thread(move || {
                     if let Ok(gtk_window) = main_for_closure.gtk_window() {
@@ -1471,8 +1650,6 @@ pub fn run() {
                     }
                 })?;
             }
-            let login_popup_mgr = login_popup::LoginPopupManager::new();
-            app.manage(login_popup_mgr);
             // No focus-tracking hide: `transient_for(main)` makes the WM
             // stack the embed above the main window, so when the user
             // switches to another app it naturally goes behind. Manual
@@ -1487,7 +1664,8 @@ pub fn run() {
             // single GET; populates `auth_status.youtube.handle` so the
             // login chiclet shows it without waiting for a re-login.
             if auth::youtube::load().ok().flatten().is_some() {
-                spawn_youtube_user_info_refresh(&app.handle(), http_for_chat.clone());
+                let http = app.state::<AppState>().http.clone();
+                spawn_youtube_user_info_refresh(&app.handle(), http);
             }
             // Twitch web cookie auto-scrape (Qt parity, mirrors
             // gui/app.py:306-312::extract_twitch_auth_token). If OAuth
@@ -1500,7 +1678,7 @@ pub fn run() {
                 && auth::twitch_web::stored_token().ok().flatten().is_none()
             {
                 let app_handle = app.handle().clone();
-                let http_for_scrape = http_for_chat.clone();
+                let http_for_scrape = app.state::<AppState>().http.clone();
                 tauri::async_runtime::spawn(async move {
                     let Some(token) = auth::twitch_web::extract_from_browser() else {
                         log::debug!(
@@ -1536,77 +1714,11 @@ pub fn run() {
             if let Ok(res_dir) = app.path().resource_dir() {
                 std::env::set_var("LIVESTREAMLIST_RESOURCE_DIR", &res_dir);
             }
-            let personal_dict_path = crate::config::config_dir()
-                .unwrap_or_else(|_| std::path::PathBuf::from("."))
-                .join("personal_dict.json");
-            let spellchecker = std::sync::Arc::new(
-                crate::spellcheck::SpellChecker::new(personal_dict_path),
-            );
-            app.manage(spellchecker);
             tray::build(&app.handle())?;
             window_state::register(app)?;
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![
-            list_livestreams,
-            list_channels,
-            add_channel_from_input,
-            clipboard_channel_url,
-            remove_channel,
-            set_favorite,
-            refresh_all,
-            launch_stream,
-            stop_stream,
-            list_playing,
-            open_in_browser,
-            open_url,
-            list_socials,
-            chat_connect,
-            chat_disconnect,
-            chat_send,
-            chat_open_in_browser,
-            chat_detach,
-            chat_reattach,
-            chat_focus_detached,
-            embed_mount,
-            embed_bounds,
-            embed_unmount,
-            embed_set_visible,
-            login_popup_open,
-            login_popup_close,
-            login_popup_resize,
-            list_emotes,
-            replay_chat_history,
-            get_settings,
-            update_settings,
-            get_user_metadata,
-            set_user_metadata,
-            get_user_profile,
-            get_user_messages,
-            list_blocked_users,
-            auth_status,
-            twitch_login,
-            twitch_logout,
-            twitch_web_login,
-            twitch_web_clear,
-            twitch_anniversary_check,
-            twitch_anniversary_dismiss,
-            twitch_share_resub_open,
-            twitch_share_window_close,
-            kick_login,
-            kick_logout,
-            youtube_login,
-            youtube_login_paste,
-            youtube_logout,
-            youtube_detect_browsers,
-            chaturbate_login,
-            chaturbate_logout,
-            import_twitch_follows,
-            spellcheck_check,
-            spellcheck_suggest,
-            spellcheck_add_word,
-            spellcheck_list_dicts,
-        ])
+        .invoke_handler(register_handlers!())
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

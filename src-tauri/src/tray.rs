@@ -53,7 +53,7 @@ pub fn build(app: &AppHandle) -> Result<()> {
     Ok(())
 }
 
-pub fn update_tooltip(app: &AppHandle, live: usize, total: usize) {
+pub fn update_tooltip<R: tauri::Runtime>(app: &tauri::AppHandle<R>, live: usize, total: usize) {
     if let Some(tray) = app.tray_by_id("main") {
         let text = format!("livestreamlist — {live} live / {total} channels");
         let _ = tray.set_tooltip(Some(text));
