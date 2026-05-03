@@ -638,7 +638,7 @@ fn embed_bounds<R: tauri::Runtime>(
     Ok(())
 }
 
-#[cfg(not(test))]
+#[cfg(not(any(feature = "smoke", test)))]
 #[tauri::command]
 fn embed_set_visible(
     embeds: State<'_, Arc<embed::EmbedHost>>,
@@ -648,26 +648,26 @@ fn embed_set_visible(
     embeds.set_visible(&unique_key, visible).map_err(err_string)
 }
 
-#[cfg(test)]
+#[cfg(any(feature = "smoke", test))]
 #[tauri::command]
 fn embed_set_visible(
     _embeds: State<'_, Arc<embed::EmbedHost>>,
     _unique_key: String,
     _visible: bool,
 ) -> Result<(), String> {
-    Ok(())
+    Err("smoke mode: command in DENYLIST".into())
 }
 
-#[cfg(not(test))]
+#[cfg(not(any(feature = "smoke", test)))]
 #[tauri::command]
 fn embed_unmount(embeds: State<'_, Arc<embed::EmbedHost>>, unique_key: String) {
     embeds.unmount(&unique_key);
 }
 
-#[cfg(test)]
+#[cfg(any(feature = "smoke", test))]
 #[tauri::command]
 fn embed_unmount(_embeds: State<'_, Arc<embed::EmbedHost>>, _unique_key: String) {
-    // noop in test build
+    // noop in smoke / test build
 }
 
 #[cfg(not(feature = "smoke"))]
@@ -1245,7 +1245,7 @@ fn twitch_share_window_close<R: tauri::Runtime>(
     _state: State<'_, AppState>,
     _unique_key: String,
 ) -> Result<(), String> {
-    Ok(())
+    Err("smoke mode: command in DENYLIST".into())
 }
 
 #[tauri::command]
