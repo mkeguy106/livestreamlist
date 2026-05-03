@@ -45,6 +45,13 @@ cargo test --manifest-path src-tauri/Cargo.toml
 cargo check --manifest-path src-tauri/Cargo.toml
 cargo clippy --manifest-path src-tauri/Cargo.toml
 cargo fmt --manifest-path src-tauri/Cargo.toml
+
+# IPC smoke-test harness — call any #[tauri::command] without launching the app
+cargo run --manifest-path src-tauri/Cargo.toml --features smoke --bin smoke -- --list
+cargo run --manifest-path src-tauri/Cargo.toml --features smoke --bin smoke -- spellcheck_check '{"text":"helo","language":"en_US","channelEmotes":[]}'
+# Single-shot: positional cmd + JSON args. JSONL streaming: no positionals, read stdin.
+# Isolated config by default (--use-real-config to opt out); side-effects denied (--allow-side-effects to opt in).
+# See src-tauri/src/bin/README.md for the full protocol.
 ```
 
 Relaunch during Rust-side dev (Tauri watches `src-tauri/`; no explicit kill usually needed):
