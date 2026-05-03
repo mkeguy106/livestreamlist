@@ -21,6 +21,7 @@ import {
   TAB_MIN_WIDTH,
   TAB_MAX_WIDTH,
   RELEASE_HYSTERESIS_PX,
+  RESIZE_RELEASE_DELTA_PX,
 } from '../utils/tabLayout.js';
 
 const DRAG_THRESHOLD_PX = 5;
@@ -70,6 +71,7 @@ export default function TabStrip({
   }, [layout]);
 
   const rowBandsRef = useRef([]); // Array<{ rowIndex, top, bottom }>
+  const frozenWidthBaseRef = useRef(null); // stripWidth at the time the first hold was set
 
   useLayoutEffect(() => {
     if (!stripRef.current) {
@@ -137,6 +139,10 @@ export default function TabStrip({
       const dx = Math.abs(e.clientX - drag.startX);
       const dy = Math.abs(e.clientY - drag.startY);
       const moved = dx + dy >= DRAG_THRESHOLD_PX;
+      if (moved && !drag.active) {
+        // Drag has armed: any held rows are now stale.
+        setFrozenRows(prev => prev.size === 0 ? prev : new Map());
+      }
       // Find the tab under the cursor (if any) so we can highlight it.
       const el = document.elementFromPoint(e.clientX, e.clientY);
       const targetEl = el && el.closest && el.closest('[data-tab-key]');
@@ -246,6 +252,38 @@ export default function TabStrip({
     return () => document.removeEventListener('mousemove', onMove);
   }, [hasHolds]);
 
+  // Release all holds when the strip width drifts more than RESIZE_RELEASE_DELTA_PX
+  // from the width at the time the first hold was set.
+  useEffect(() => {
+    if (frozenRows.size === 0) {
+      frozenWidthBaseRef.current = null;
+      return;
+    }
+    const base = frozenWidthBaseRef.current;
+    if (base == null) return;
+    if (Math.abs(stripWidth - base) > RESIZE_RELEASE_DELTA_PX) {
+      setFrozenRows(prev => prev.size === 0 ? prev : new Map());
+    }
+  }, [stripWidth, frozenRows]);
+
+  // Drop frozen entries whose row index no longer exists in the rendered layout.
+  useEffect(() => {
+    if (frozenRows.size === 0) return;
+    const occupied = new Set(layout.map(e => e.rowIndex));
+    let stale = false;
+    for (const [rowIndex] of frozenRows) {
+      if (!occupied.has(rowIndex)) { stale = true; break; }
+    }
+    if (!stale) return;
+    setFrozenRows(prev => {
+      const next = new Map(prev);
+      for (const [rowIndex] of prev) {
+        if (!occupied.has(rowIndex)) next.delete(rowIndex);
+      }
+      return next;
+    });
+  }, [layout, frozenRows]);
+
   const handleClose = (channelKey) => {
     const entry = layout.find(e => e.tab === channelKey);
     if (entry) {
@@ -260,6 +298,9 @@ export default function TabStrip({
         next.set(rowIndex, { count, width });
         return next;
       });
+      if (frozenRows.size === 0) {
+        frozenWidthBaseRef.current = stripWidth;
+      }
     }
     onClose(channelKey);
   };
