@@ -648,7 +648,7 @@ fn embed_set_visible(
     embeds.set_visible(&unique_key, visible).map_err(err_string)
 }
 
-#[cfg(any(feature = "smoke", test))]
+#[cfg(feature = "smoke")]
 #[tauri::command]
 fn embed_set_visible(
     _embeds: State<'_, Arc<embed::EmbedHost>>,
@@ -658,16 +658,32 @@ fn embed_set_visible(
     Err("smoke mode: command in DENYLIST".into())
 }
 
+#[cfg(all(test, not(feature = "smoke")))]
+#[tauri::command]
+fn embed_set_visible(
+    _embeds: State<'_, Arc<embed::EmbedHost>>,
+    _unique_key: String,
+    _visible: bool,
+) -> Result<(), String> {
+    Ok(())
+}
+
 #[cfg(not(any(feature = "smoke", test)))]
 #[tauri::command]
 fn embed_unmount(embeds: State<'_, Arc<embed::EmbedHost>>, unique_key: String) {
     embeds.unmount(&unique_key);
 }
 
-#[cfg(any(feature = "smoke", test))]
+#[cfg(feature = "smoke")]
 #[tauri::command]
 fn embed_unmount(_embeds: State<'_, Arc<embed::EmbedHost>>, _unique_key: String) {
-    // noop in smoke / test build
+    // noop in smoke build (command is in DENYLIST)
+}
+
+#[cfg(all(test, not(feature = "smoke")))]
+#[tauri::command]
+fn embed_unmount(_embeds: State<'_, Arc<embed::EmbedHost>>, _unique_key: String) {
+    // noop in test build
 }
 
 #[cfg(not(feature = "smoke"))]

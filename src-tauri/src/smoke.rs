@@ -9,11 +9,10 @@
 /// spawns, real WebKit/GTK windows). The binary's dispatch layer
 /// short-circuits these unless `--allow-side-effects` is passed.
 ///
-/// Also includes `list_playing` because `PlayerManager` is NOT
-/// constructed in the smoke harness (its `::new()` takes concrete
-/// `AppHandle<Wry>`, incompatible with `MockRuntime`); calling
-/// `list_playing` without the manager managed would return a
-/// "missing state" error from Tauri.
+/// Also includes commands that require ChatManager or PlayerManager state,
+/// neither of which is constructed in the smoke harness — calling them
+/// under `--allow-side-effects` would panic with `kind:"panic"` instead of
+/// returning a clean `kind:"blocked"` envelope.
 pub const DENYLIST: &[&str] = &[
     "chat_connect",
     "chat_disconnect",
@@ -21,6 +20,10 @@ pub const DENYLIST: &[&str] = &[
     "launch_stream",
     "stop_stream",
     "list_playing",
+    // Requires ChatManager or PlayerManager state not managed in smoke harness
+    "kick_logout",
+    "twitch_logout",
+    "list_emotes",
     "embed_mount",
     "embed_bounds",
     "embed_unmount",

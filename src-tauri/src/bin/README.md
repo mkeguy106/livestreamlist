@@ -83,4 +83,4 @@ Adding a new `#[tauri::command]`:
 3. Add the function name to `list_handlers()` in `src/bin/smoke.rs`.
 4. If the command has real-world side effects, add it to `DENYLIST` in `smoke.rs`.
 
-The drift test in `tests/smoke_binary.rs` will fail loudly if you forget step 3.
+The drift test in `tests/smoke_binary.rs` will fail if `list_handlers()` and `register_handlers!()` have different counts (catches added/removed commands; does not catch typos or renamed commands).
