@@ -427,6 +427,7 @@ function Tab({
       style={{
         flex: `0 0 ${width}px`,
         width,
+        boxSizing: 'border-box',
         transition: isDragging ? 'none' : 'width 150ms ease-out',
         padding: '0 8px 0 12px',
         display: 'flex',
