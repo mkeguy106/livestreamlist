@@ -117,4 +117,45 @@ if (typeof import.meta !== 'undefined' && import.meta.env?.DEV) {
     computeLayout({ tabs: ['a'], stripWidth: 0 }).length === 0,
     'zero width → empty',
   );
+
+  // frozen row consumes its tabs at frozen width
+  {
+    const frozen = new Map([[0, { count: 5, width: 100 }]]);
+    const out = computeLayout({ tabs: 'abcdefgh'.split(''), stripWidth: 1000, frozenRows: frozen });
+    const r0 = out.filter(e => e.rowIndex === 0);
+    const r1 = out.filter(e => e.rowIndex === 1);
+    console.assert(r0.length === 5, 'frozen row 0 takes 5 tabs');
+    console.assert(r0.every(e => e.width === 100), 'frozen row 0 at width 100');
+    console.assert(r1.length === 3, 'remaining 3 tabs on row 1');
+    console.assert(r1.every(e => e.width === 200), 'row 1 natural at MAX');
+  }
+  // frozen row with insufficient tabs: capacity 8, only 5 available — places 5, no row 1
+  {
+    const frozen = new Map([[0, { count: 8, width: 100 }]]);
+    const out = computeLayout({ tabs: 'abcde'.split(''), stripWidth: 1000, frozenRows: frozen });
+    console.assert(out.length === 5, 'all 5 tabs placed');
+    console.assert(out.every(e => e.rowIndex === 0), 'all in frozen row 0');
+    console.assert(out.every(e => e.width === 100), 'all at frozen width');
+  }
+  // multiple frozen rows + natural in between
+  {
+    const frozen = new Map([
+      [0, { count: 3, width: 150 }],
+      [2, { count: 2, width: 120 }],
+    ]);
+    const out = computeLayout({ tabs: 'abcdefghij'.split(''), stripWidth: 1000, frozenRows: frozen });
+    const r0 = out.filter(e => e.rowIndex === 0);
+    const r1 = out.filter(e => e.rowIndex === 1);
+    const r2 = out.filter(e => e.rowIndex === 2);
+    console.assert(r0.length === 3 && r0.every(e => e.width === 150), 'row 0 frozen 3@150');
+    console.assert(r1.length === 7 && r1.every(e => e.width === Math.floor(1000 / 7)), 'row 1 natural 7-pack');
+    console.assert(r2.length === 0, 'row 2 frozen but tabs exhausted by row 1 natural');
+  }
+  // stale frozen entry whose row is past total tab count (no entries reach it)
+  {
+    const frozen = new Map([[5, { count: 3, width: 100 }]]);
+    const out = computeLayout({ tabs: ['a', 'b'], stripWidth: 1000, frozenRows: frozen });
+    console.assert(out.length === 2, 'stale frozen entry ignored');
+    console.assert(out.every(e => e.rowIndex === 0), 'tabs placed naturally');
+  }
 }
