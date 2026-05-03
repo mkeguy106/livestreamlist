@@ -16,6 +16,8 @@ pub struct ChatMessage {
     pub text: String,
     pub emote_ranges: Vec<EmoteRange>,
     #[serde(default)]
+    pub link_ranges: Vec<LinkRange>,
+    #[serde(default)]
     pub badges: Vec<ChatBadge>,
     #[serde(default)]
     pub is_action: bool,
@@ -79,6 +81,17 @@ pub struct EmoteRange {
     pub url_4x: Option<String>,
     #[serde(default)]
     pub animated: bool,
+}
+
+/// Byte-range (inclusive-exclusive end) in ChatMessage.text where a clickable
+/// URL appears, plus the normalized click target. The click target may differ
+/// from `text[start..end]` — bare-domain matches get `https://` prepended, and
+/// zero-width chars are stripped.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LinkRange {
+    pub start: usize,
+    pub end: usize,
+    pub url: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -342,6 +342,7 @@ fn build_chat_message(cfg: &KickChatConfig, parsed: &Value) -> Option<ChatMessag
         },
         text: stripped,
         emote_ranges,
+        link_ranges: Vec::new(),
         badges,
         is_action: false,
         is_first_message: false,
