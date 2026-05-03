@@ -100,7 +100,8 @@ fn main() {
         }
     };
 
-    let envelope = dispatch_one(&webview, cmd, raw_args);
+    let allow_side_effects = args.iter().any(|a| a == "--allow-side-effects");
+    let envelope = dispatch_one(&webview, cmd, raw_args, allow_side_effects);
     println!("{}", serde_json::to_string(&envelope).unwrap());
     // Keep temp alive until after the print to ensure XDG paths are valid for the dispatch.
     drop(temp);
@@ -108,7 +109,12 @@ fn main() {
 }
 
 /// Run one command and return its envelope as a serde_json::Value.
-fn dispatch_one(webview: &tauri::WebviewWindow<tauri::test::MockRuntime>, cmd: &str, raw_args: &str) -> Value {
+fn dispatch_one(
+    webview: &tauri::WebviewWindow<tauri::test::MockRuntime>,
+    cmd: &str,
+    raw_args: &str,
+    allow_side_effects: bool,
+) -> Value {
     let started = Instant::now();
 
     // Step 1: parse the args. A JSON parse failure here is a CLI input
@@ -125,6 +131,22 @@ fn dispatch_one(webview: &tauri::WebviewWindow<tauri::test::MockRuntime>, cmd: &
             });
         }
     };
+
+    // Step 1.5: denylist check.
+    if !allow_side_effects && DENYLIST.contains(&cmd) {
+        return json!({
+            "command": cmd,
+            "ok": false,
+            "error": format!(
+                "command '{cmd}' is blocked in smoke harness; use --allow-side-effects to dispatch"
+            ),
+            "kind": "blocked",
+            "duration_ms": started.elapsed().as_millis() as u64,
+        });
+    }
+    if allow_side_effects && DENYLIST.contains(&cmd) {
+        eprintln!("WARN: dispatching side-effecting command '{cmd}' under --allow-side-effects");
+    }
 
     // Step 2: dispatch via Tauri's mock IPC.
     let request = InvokeRequest {

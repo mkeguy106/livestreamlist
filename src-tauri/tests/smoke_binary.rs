@@ -84,3 +84,60 @@ fn single_shot_unknown_command_returns_command_error() {
     // kind is "command" for any post-dispatch error that isn't deserialize
     assert_eq!(json["kind"], "command", "unknown command should classify as 'command'; got: {}", json["kind"]);
 }
+
+#[test]
+fn denylist_blocks_chat_send_by_default() {
+    let output = smoke()
+        .args(["chat_send", r#"{"uniqueKey":"twitch:shroud","text":"hi"}"#])
+        .output()
+        .expect("run chat_send");
+    assert!(!output.status.success(), "expected non-zero exit");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let json: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(json["ok"], false);
+    assert_eq!(json["kind"], "blocked");
+    assert!(
+        json["error"].as_str().unwrap_or("").contains("--allow-side-effects"),
+        "error should mention the opt-out flag; got: {}", json["error"]
+    );
+}
+
+#[test]
+fn allow_side_effects_bypasses_denylist() {
+    let output = smoke()
+        .args(["--allow-side-effects", "chat_send", r#"{"uniqueKey":"twitch:shroud","text":"hi"}"#])
+        .output()
+        .expect("run chat_send with allow-side-effects");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    let json: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+    // We don't assert the call succeeds — chat_send under MockRuntime with no
+    // ChatManager state will fail (Task 2 deliberately doesn't construct it).
+    // We just assert it's NOT blocked.
+    assert_ne!(json["kind"], "blocked", "kind=blocked means flag wasn't honored");
+    // The warning should appear on stderr.
+    assert!(
+        stderr.contains("dispatching side-effecting command 'chat_send'"),
+        "stderr missing side-effects warning; got: {stderr}"
+    );
+}
+
+#[test]
+fn denylist_intercepts_before_tauri_arg_deserialization() {
+    // Sending bad args to a denylisted command returns kind='blocked',
+    // NOT kind='deserialize'. This documents the dispatch order:
+    //   1. parse the input JSON syntactically (kind='input' on failure)
+    //   2. check denylist (kind='blocked' if hit)
+    //   3. dispatch via Tauri (kind='deserialize' or 'command' on failure)
+    //
+    // Agents who want marshalling verification on a denied command pass
+    // --allow-side-effects.
+    let output = smoke()
+        .args(["chat_send", r#"{"wrong_field":"x"}"#])
+        .output()
+        .expect("run chat_send with bad args");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let json: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(json["ok"], false);
+    assert_eq!(json["kind"], "blocked");
+}
