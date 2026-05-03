@@ -16,6 +16,7 @@ use super::models::{
     ChatBadge, ChatMessage, ChatModerationEvent, ChatRoomState, ChatRoomStateEvent, ChatStatus,
     ChatStatusEvent, ChatUser, EmoteRange, ReplyInfo, SystemEvent,
 };
+use super::links::scan_links;
 use super::OutboundMsg;
 use crate::platforms::Platform;
 
@@ -425,6 +426,8 @@ fn build_privmsg(cfg: &TwitchChatConfig, msg: &IrcMessage<'_>) -> Option<ChatMes
     emote_ranges.append(&mut third_party);
     emote_ranges.sort_by_key(|r| r.start);
 
+    let link_ranges = scan_links(&text, &emote_ranges);
+
     let id = msg.tags.get("id").cloned().unwrap_or_default();
     let timestamp = msg
         .tags
@@ -472,7 +475,7 @@ fn build_privmsg(cfg: &TwitchChatConfig, msg: &IrcMessage<'_>) -> Option<ChatMes
         },
         text,
         emote_ranges,
-        link_ranges: Vec::new(),
+        link_ranges,
         badges,
         is_action,
         is_first_message: msg.tags.get("first-msg").map(|v| v == "1").unwrap_or(false),
@@ -545,6 +548,8 @@ fn build_self_echo(cfg: &TwitchChatConfig, text: &str) -> Option<ChatMessage> {
         .scan_message(&cfg.channel_key, &clean_text, &initial);
     emote_ranges.sort_by_key(|r| r.start);
 
+    let link_ranges = scan_links(&clean_text, &emote_ranges);
+
     Some(ChatMessage {
         id: format!(
             "self-{}-{}",
@@ -566,7 +571,7 @@ fn build_self_echo(cfg: &TwitchChatConfig, text: &str) -> Option<ChatMessage> {
         },
         text: clean_text,
         emote_ranges,
-        link_ranges: Vec::new(),
+        link_ranges,
         badges,
         is_action,
         is_first_message: false,
@@ -624,6 +629,8 @@ fn build_usernotice(cfg: &TwitchChatConfig, msg: &IrcMessage<'_>) -> Option<Chat
         .scan_message(&cfg.channel_key, &text, &emote_ranges);
     emote_ranges.append(&mut third);
     emote_ranges.sort_by_key(|r| r.start);
+
+    let link_ranges = scan_links(&text, &emote_ranges);
 
     let id = msg.tags.get("id").cloned().unwrap_or_default();
     let timestamp = msg
@@ -693,7 +700,7 @@ fn build_usernotice(cfg: &TwitchChatConfig, msg: &IrcMessage<'_>) -> Option<Chat
         },
         text,
         emote_ranges,
-        link_ranges: Vec::new(),
+        link_ranges,
         badges,
         is_action: false,
         is_first_message: false,
