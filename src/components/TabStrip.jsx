@@ -14,17 +14,15 @@
 // later — the rx-tab-flashing class is applied conditionally but the
 // @keyframes lands with that work.
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import Tooltip from './Tooltip.jsx';
+import {
+  computeLayout,
+  TAB_MIN_WIDTH,
+  TAB_MAX_WIDTH,
+} from '../utils/tabLayout.js';
 
-// Pixels of mouse movement after mousedown before we treat the gesture as
-// a drag (vs. a click). Below this, the click-to-activate path wins.
 const DRAG_THRESHOLD_PX = 5;
-
-// Fixed tab width. Consistent width keeps each tab's × close button at the
-// same horizontal position across closes, so the user can click through a
-// run of tabs to close them in a row without re-aiming.
-const TAB_WIDTH_PX = 200;
 
 export default function TabStrip({
   tabs,                  // string[]
@@ -36,6 +34,38 @@ export default function TabStrip({
   onReorder,             // (fromKey, toKey) => void
   mentions,              // Map<channelKey, MentionState> — undefined until mention flash lands
 }) {
+  const stripRef = useRef(null);
+  const [stripWidth, setStripWidth] = useState(0);
+
+  useLayoutEffect(() => {
+    if (!stripRef.current) return;
+    setStripWidth(stripRef.current.clientWidth);
+    const ro = new ResizeObserver(entries => {
+      for (const entry of entries) {
+        setStripWidth(entry.contentRect.width);
+      }
+    });
+    ro.observe(stripRef.current);
+    return () => ro.disconnect();
+  }, []);
+
+  const layout = useMemo(
+    () => computeLayout({
+      tabs,
+      stripWidth,
+      minWidth: TAB_MIN_WIDTH,
+      maxWidth: TAB_MAX_WIDTH,
+      frozenRows: new Map(), // hold logic comes in a later task
+    }),
+    [tabs, stripWidth],
+  );
+
+  const widthByKey = useMemo(() => {
+    const m = new Map();
+    for (const e of layout) m.set(e.tab, e.width);
+    return m;
+  }, [layout]);
+
   // Drag state: null = idle. Once a tab's mousedown is captured, we store
   // the source key and the start coordinates. The drag transitions from
   // "armed" to "active" only after DRAG_THRESHOLD_PX of movement, which
@@ -154,6 +184,7 @@ export default function TabStrip({
 
   return (
     <div
+      ref={stripRef}
       style={{
         display: 'flex',
         flexWrap: 'wrap',
@@ -188,6 +219,7 @@ export default function TabStrip({
             mention={mention}
             isDragSource={isDragSource}
             dropEdge={dropEdge}
+            width={widthByKey.get(key) ?? TAB_MAX_WIDTH}
             onMouseDown={(e) => onTabMouseDown(e, key, display, platform)}
             onActivate={() => {
               if (suppressClickRef.current) {
@@ -246,6 +278,7 @@ function Tab({
   mention,
   isDragSource,
   dropEdge,            // 'left' | 'right' | null — drop indicator side
+  width,
   onMouseDown,
   onActivate,
   onClose,
@@ -262,8 +295,8 @@ function Tab({
       data-tab-key={channelKey}
       className={isBlinking ? 'rx-tab rx-tab-flashing' : 'rx-tab'}
       style={{
-        flex: `0 0 ${TAB_WIDTH_PX}px`,
-        width: TAB_WIDTH_PX,
+        flex: `0 0 ${width}px`,
+        width,
         padding: '0 8px 0 12px',
         display: 'flex',
         alignItems: 'center',
