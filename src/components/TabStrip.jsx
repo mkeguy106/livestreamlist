@@ -327,6 +327,7 @@ export default function TabStrip({
         const active = key === activeKey;
         const mention = mentions ? mentions.get(key) : null;
         // Drag visual state for this specific tab.
+        const isDragging = drag?.active === true;
         const isDragSource = drag?.active && drag.sourceKey === key;
         const isDragTarget =
           drag?.active && drag.targetKey === key && drag.sourceKey !== key;
@@ -347,6 +348,7 @@ export default function TabStrip({
             isDragSource={isDragSource}
             dropEdge={dropEdge}
             width={widthByKey.get(key) ?? TAB_MAX_WIDTH}
+            isDragging={isDragging}
             onMouseDown={(e) => onTabMouseDown(e, key, display, platform)}
             onActivate={() => {
               if (suppressClickRef.current) {
@@ -406,6 +408,7 @@ function Tab({
   isDragSource,
   dropEdge,            // 'left' | 'right' | null — drop indicator side
   width,
+  isDragging,
   onMouseDown,
   onActivate,
   onClose,
@@ -424,6 +427,7 @@ function Tab({
       style={{
         flex: `0 0 ${width}px`,
         width,
+        transition: isDragging ? 'none' : 'width 150ms ease-out',
         padding: '0 8px 0 12px',
         display: 'flex',
         alignItems: 'center',
