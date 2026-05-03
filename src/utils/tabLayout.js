@@ -65,7 +65,7 @@ export function computeLayout({
 }
 
 if (typeof import.meta !== 'undefined' && import.meta.env?.DEV) {
-  // empty
+  // empty input
   console.assert(
     JSON.stringify(computeLayout({ tabs: [], stripWidth: 1000 })) === '[]',
     'empty tabs → empty layout',
