@@ -59,11 +59,21 @@ pub fn scan_links(text: &str, existing: &[EmoteRange]) -> Vec<LinkRange> {
         } else {
             format!("https://{raw}")
         };
-        if let Ok(parsed) = url::Url::parse(&candidate) {
+        let candidate_clean = strip_zero_width(&candidate);
+        if let Ok(parsed) = url::Url::parse(&candidate_clean) {
             out.push(LinkRange { start, end, url: parsed.to_string() });
         }
     }
     out
+}
+
+/// Strip zero-width Unicode characters that Twitch's link-mod inserts into
+/// URLs. The display range in `scan_links` is kept intact; only the `url`
+/// field (the click target) has these removed.
+fn strip_zero_width(s: &str) -> String {
+    s.chars()
+        .filter(|c| !matches!(*c, '\u{200B}' | '\u{200C}' | '\u{200D}' | '\u{FEFF}'))
+        .collect()
 }
 
 /// Returns the new candidate length (in bytes, relative to the start of `s`)
@@ -201,5 +211,38 @@ mod tests {
             got,
             vec![r(6, 27, "https://live.twitch.tv/shroud")]
         );
+    }
+
+    #[test]
+    fn zero_width_chars_in_url() {
+        // Twitch link-mod sometimes inserts ZW-space (U+200B) inside a URL.
+        // The display range should keep them (so byte offsets match the raw
+        // text); the click target should have them stripped.
+        let text = "go to https://twitch.tv/\u{200B}shroud now";
+        let got = scan_links(text, &[]);
+        assert_eq!(got.len(), 1, "expected 1 link, got {got:?}");
+        let link = &got[0];
+        // Display range still spans the ZW char.
+        assert_eq!(&text[link.start..link.end], "https://twitch.tv/\u{200B}shroud");
+        // Click target has ZW stripped.
+        assert_eq!(link.url, "https://twitch.tv/shroud");
+    }
+
+    #[test]
+    fn skips_overlap_with_existing_emote() {
+        // Existing emote covers byte range 0..11 (e.g., a fake emote name
+        // overlapping the bare-domain match below). The bare-domain match
+        // should be dropped.
+        let existing = vec![EmoteRange {
+            start: 0,
+            end: 11, // covers "twitch.tv/x"
+            name: "FakeEmote".to_string(),
+            url_1x: String::new(),
+            url_2x: None,
+            url_4x: None,
+            animated: false,
+        }];
+        let got = scan_links("twitch.tv/x rest", &existing);
+        assert!(got.is_empty(), "expected emote-overlap to drop link, got {got:?}");
     }
 }
