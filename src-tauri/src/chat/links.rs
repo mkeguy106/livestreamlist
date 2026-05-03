@@ -8,15 +8,44 @@ static SCHEMED_URL_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"(?i)\bhttps?://[^\s<>"]+"#).expect("schemed URL regex compiles")
 });
 
+const TLD_ALLOWLIST: &[&str] = &[
+    "com", "net", "org", "io", "gg", "tv", "edu", "gov",
+    "co", "uk", "us", "me", "ly", "app", "dev", "fm",
+    "live", "stream", "video", "art", "news", "to", "cc",
+    "so", "ai", "xyz", "info", "sh",
+];
+
+static BARE_DOMAIN_RE: LazyLock<Regex> = LazyLock::new(|| {
+    let tlds = TLD_ALLOWLIST.join("|");
+    let pat = format!(
+        r#"(?i)\b(?:[a-z0-9-]+\.)+(?:{tlds})\b(?:/[^\s<>"]*)?"#
+    );
+    Regex::new(&pat).expect("bare domain regex compiles")
+});
+
 /// Scan `text` for clickable URLs. Skip ranges that overlap any of `existing`
 /// (so emote codes that happen to look URL-shaped don't double-tokenize).
 ///
 /// Returns ranges sorted by `start`.
 pub fn scan_links(text: &str, existing: &[EmoteRange]) -> Vec<LinkRange> {
-    let mut out = Vec::new();
+    // Collect all candidate (start, end, has_scheme) spans.
+    let mut spans: Vec<(usize, usize, bool)> = Vec::new();
     for m in SCHEMED_URL_RE.find_iter(text) {
-        let start = m.start();
-        let raw_end = m.end();
+        spans.push((m.start(), m.end(), true));
+    }
+    for m in BARE_DOMAIN_RE.find_iter(text) {
+        let s = m.start();
+        let e = m.end();
+        // Skip if overlaps a schemed match (schemed already covers it).
+        if spans.iter().any(|(ss, ee, _)| s < *ee && e > *ss) {
+            continue;
+        }
+        spans.push((s, e, false));
+    }
+    spans.sort_by_key(|(s, _, _)| *s);
+
+    let mut out = Vec::new();
+    for (start, raw_end, has_scheme) in spans {
         let end = start + trim_url_end(&text[start..raw_end]);
         if end <= start {
             continue;
@@ -25,11 +54,15 @@ pub fn scan_links(text: &str, existing: &[EmoteRange]) -> Vec<LinkRange> {
             continue;
         }
         let raw = &text[start..end];
-        if let Ok(parsed) = url::Url::parse(raw) {
+        let candidate = if has_scheme {
+            raw.to_string()
+        } else {
+            format!("https://{raw}")
+        };
+        if let Ok(parsed) = url::Url::parse(&candidate) {
             out.push(LinkRange { start, end, url: parsed.to_string() });
         }
     }
-    out.sort_by_key(|r| r.start);
     out
 }
 
@@ -136,6 +169,37 @@ mod tests {
         assert_eq!(
             got,
             vec![r(4, 43, "https://en.wikipedia.org/wiki/Foo_(bar)")]
+        );
+    }
+
+    #[test]
+    fn bare_domain_allowlisted() {
+        let got = scan_links("yo youtube.com/watch?v=abc end", &[]);
+        assert_eq!(
+            got,
+            vec![r(3, 26, "https://youtube.com/watch?v=abc")]
+        );
+    }
+
+    #[test]
+    fn bare_domain_no_path() {
+        let got = scan_links("visit example.com later", &[]);
+        assert_eq!(got, vec![r(6, 17, "https://example.com/")]);
+    }
+
+    #[test]
+    fn bare_domain_tld_not_in_allowlist() {
+        // `.story` is not on the allowlist; treat as plain text.
+        let got = scan_links("hey cool.story bro", &[]);
+        assert!(got.is_empty(), "expected no link, got {:?}", got);
+    }
+
+    #[test]
+    fn bare_domain_subdomain() {
+        let got = scan_links("watch live.twitch.tv/shroud now", &[]);
+        assert_eq!(
+            got,
+            vec![r(6, 27, "https://live.twitch.tv/shroud")]
         );
     }
 }
