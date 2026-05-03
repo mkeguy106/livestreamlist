@@ -128,6 +128,10 @@ export default function ChatView({
 
   // Recent authors for @mention autocomplete. Last 50 messages is plenty;
   // keeping it tight avoids re-filtering a large list on every keystroke.
+  // Prefer display_name so capitalization is preserved on insert (Twitch IRC
+  // logins are always lowercase; the cased form lives in the display-name tag).
+  // Dedupe by lowercased login so a single user with mixed casing across
+  // messages only appears once.
   const mentionCandidates = useMemo(() => {
     const seen = new Set();
     const out = [];
@@ -136,12 +140,12 @@ export default function ChatView({
       const login = m.user?.login;
       if (login && !seen.has(login)) {
         seen.add(login);
-        out.push(login);
+        out.push(m.user?.display_name || login);
       }
       const parent = m.reply_to?.parent_login;
       if (parent && !seen.has(parent)) {
         seen.add(parent);
-        out.push(parent);
+        out.push(m.reply_to?.parent_display_name || parent);
       }
     }
     return out;
