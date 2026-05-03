@@ -181,6 +181,16 @@ body { background: var(--zinc-950); }
 .rx-plat.k { color: var(--kick); }
 .rx-plat.c { color: var(--cb); }
 
+.rx-chat-link {
+  color: var(--zinc-300);
+  text-decoration: none;
+  cursor: pointer;
+}
+.rx-chat-link:hover {
+  color: var(--zinc-100);
+  text-decoration: underline;
+}
+
 @keyframes usercard-pulse {
   0%, 100% { opacity: 0.35; }
   50%      { opacity: 0.55; }
