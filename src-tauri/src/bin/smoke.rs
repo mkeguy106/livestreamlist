@@ -163,7 +163,29 @@ fn dispatch_one(
         headers: Default::default(),
         invoke_key: INVOKE_KEY.to_string(),
     };
-    let result = get_ipc_response(webview, request);
+    // Wrap in catch_unwind so a synchronous panic in the command body
+    // does not kill the JSONL streaming session — the panic is caught and
+    // converted to a kind="panic" envelope instead.
+    //
+    // NOTE: async panics inside Tauri-spawned futures may slip through
+    // because Tokio absorbs them into JoinError before they can propagate
+    // back to this call site. That is a known limitation; only synchronous
+    // panics during get_ipc_response itself are caught here.
+    let result = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        get_ipc_response(webview, request)
+    })) {
+        Ok(r) => r,
+        Err(panic) => {
+            let msg = panic_message(&panic);
+            return json!({
+                "command": cmd,
+                "ok": false,
+                "error": format!("command panicked: {msg}"),
+                "kind": "panic",
+                "duration_ms": started.elapsed().as_millis() as u64,
+            });
+        }
+    };
     let duration_ms = started.elapsed().as_millis() as u64;
 
     match result {
@@ -263,6 +285,19 @@ struct JsonlInput {
     cmd: String,
     #[serde(default)]
     args: Value,
+}
+
+/// Extract a human-readable message from a panic payload.
+/// Handles the two common payload types (`String` and `&str`); falls back
+/// to a generic label for anything else (e.g. a boxed custom panic type).
+fn panic_message(panic: &Box<dyn std::any::Any + Send>) -> String {
+    if let Some(s) = panic.downcast_ref::<String>() {
+        s.clone()
+    } else if let Some(s) = panic.downcast_ref::<&str>() {
+        (*s).to_string()
+    } else {
+        "<non-string panic payload>".to_string()
+    }
 }
 
 /// Source the handler-name list from the `register_handlers!` macro.

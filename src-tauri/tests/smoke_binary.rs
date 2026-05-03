@@ -218,6 +218,52 @@ this is not json
 }
 
 #[test]
+fn jsonl_panicking_command_does_not_kill_session() {
+    // Send a sequence: known-good, possibly-panicking, known-good.
+    // The middle call uses chat_send with --allow-side-effects to bypass
+    // the denylist check. chat_send under MockRuntime fails because the
+    // ChatManager state is not managed (kind="command"). This tests that
+    // NON-panicking errors don't kill the JSONL session.
+    //
+    // To verify catch_unwind specifically: if no command in the codebase
+    // panics under MockRuntime, this test still validates that the session
+    // survives any kind of failure (which is the actual user-facing
+    // contract). If a panic IS observed (kind="panic"), even better.
+    let input = "\
+{\"id\":\"a\",\"cmd\":\"list_channels\",\"args\":{}}
+{\"id\":\"b\",\"cmd\":\"chat_send\",\"args\":{\"uniqueKey\":\"twitch:nonexistent\",\"text\":\"hi\"}}
+{\"id\":\"c\",\"cmd\":\"list_channels\",\"args\":{}}
+";
+    let output = smoke()
+        .args(["--allow-side-effects"])
+        .write_stdin(input)
+        .output()
+        .expect("run panic-test jsonl");
+    assert!(output.status.success(), "session must survive failing call; exit: {:?} stderr: {}", output.status, String::from_utf8_lossy(&output.stderr));
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let lines: Vec<_> = stdout.trim().split('\n').collect();
+    assert_eq!(lines.len(), 3, "expected 3 lines (good, fail, good); got: {stdout}");
+
+    let r0: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+    assert_eq!(r0["id"], "a");
+    assert_eq!(r0["ok"], true, "first call must succeed");
+
+    let r1: serde_json::Value = serde_json::from_str(lines[1]).unwrap();
+    assert_eq!(r1["id"], "b");
+    assert_eq!(r1["ok"], false, "middle call must fail");
+    // Acceptable kinds: 'panic' (catch_unwind caught it) or 'command'
+    // (the called function returned an error instead of panicking).
+    assert!(
+        ["panic", "command", "deserialize"].contains(&r1["kind"].as_str().unwrap_or("")),
+        "kind should be panic, command, or deserialize for failing call; got: {}", r1["kind"]
+    );
+
+    let r2: serde_json::Value = serde_json::from_str(lines[2]).unwrap();
+    assert_eq!(r2["id"], "c");
+    assert_eq!(r2["ok"], true, "third call must succeed (session survived)");
+}
+
+#[test]
 fn jsonl_optional_id_omitted_in_response_when_absent_in_input() {
     let input = "{\"cmd\":\"list_channels\",\"args\":{}}\n";
     let output = smoke().write_stdin(input).output().expect("run no-id jsonl");
