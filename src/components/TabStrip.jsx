@@ -20,6 +20,7 @@ import {
   computeLayout,
   TAB_MIN_WIDTH,
   TAB_MAX_WIDTH,
+  RELEASE_HYSTERESIS_PX,
 } from '../utils/tabLayout.js';
 
 const DRAG_THRESHOLD_PX = 5;
@@ -66,6 +67,33 @@ export default function TabStrip({
     const m = new Map();
     for (const e of layout) m.set(e.tab, e.width);
     return m;
+  }, [layout]);
+
+  const rowBandsRef = useRef([]); // Array<{ rowIndex, top, bottom }>
+
+  useLayoutEffect(() => {
+    if (!stripRef.current) {
+      rowBandsRef.current = [];
+      return;
+    }
+    const tabEls = stripRef.current.querySelectorAll('[data-tab-key]');
+    const byRow = new Map();
+    for (const el of tabEls) {
+      const r = el.getBoundingClientRect();
+      const key = el.getAttribute('data-tab-key');
+      const entry = layout.find(e => e.tab === key);
+      if (!entry) continue;
+      const existing = byRow.get(entry.rowIndex);
+      if (!existing) {
+        byRow.set(entry.rowIndex, { top: r.top, bottom: r.bottom });
+      } else {
+        existing.top = Math.min(existing.top, r.top);
+        existing.bottom = Math.max(existing.bottom, r.bottom);
+      }
+    }
+    rowBandsRef.current = [...byRow.entries()]
+      .map(([rowIndex, b]) => ({ rowIndex, top: b.top, bottom: b.bottom }))
+      .sort((a, b) => a.rowIndex - b.rowIndex);
   }, [layout]);
 
   // Drag state: null = idle. Once a tab's mousedown is captured, we store
@@ -187,6 +215,33 @@ export default function TabStrip({
       document.body.style.userSelect = prevUserSelect;
     };
   }, [drag?.active]);
+
+  // Release held rows when the cursor leaves their vertical band.
+  // Only attached while at least one row is frozen (avoids a document-level
+  // listener during normal idle state). Returns the same prev reference
+  // when nothing changed so React skips the re-render.
+  useEffect(() => {
+    if (frozenRows.size === 0) return;
+
+    const onMove = (e) => {
+      const y = e.clientY;
+      setFrozenRows(prev => {
+        let next = prev;
+        for (const [rowIndex] of prev) {
+          const band = rowBandsRef.current.find(b => b.rowIndex === rowIndex);
+          if (!band) continue;
+          if (y < band.top - RELEASE_HYSTERESIS_PX || y > band.bottom + RELEASE_HYSTERESIS_PX) {
+            if (next === prev) next = new Map(prev);
+            next.delete(rowIndex);
+          }
+        }
+        return next;
+      });
+    };
+
+    document.addEventListener('mousemove', onMove);
+    return () => document.removeEventListener('mousemove', onMove);
+  }, [frozenRows]);
 
   const handleClose = (channelKey) => {
     const entry = layout.find(e => e.tab === channelKey);
