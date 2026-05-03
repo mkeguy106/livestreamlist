@@ -36,7 +36,8 @@ Output: one JSON object per command, line-delimited.
 JSONL input shape: {\"id\":\"...\",\"cmd\":\"...\",\"args\":{...}}
 JSONL output shape: same as Output above + \"id\" field if input had one.
 
-Logs (tracing) go to stderr; stdout is parseable JSONL.
+Stdout is parseable JSONL. Tracing/log output is unrouted in this build;
+Task 10 will install a stderr subscriber. RUST_LOG has no effect yet.
 Exit code is 0 in JSONL mode (on EOF) and matches the 'ok' field in single-shot mode.
 ";
 

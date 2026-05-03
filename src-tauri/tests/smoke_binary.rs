@@ -82,5 +82,5 @@ fn single_shot_unknown_command_returns_command_error() {
     let json: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
     assert_eq!(json["ok"], false);
     // kind is "command" for any post-dispatch error that isn't deserialize
-    assert!(json["kind"].as_str().unwrap_or("").len() > 0);
+    assert_eq!(json["kind"], "command", "unknown command should classify as 'command'; got: {}", json["kind"]);
 }
