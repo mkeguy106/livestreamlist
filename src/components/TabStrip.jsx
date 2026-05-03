@@ -212,8 +212,11 @@ export default function TabStrip({
         const isDragSource = drag?.active && drag.sourceKey === key;
         const isDragTarget =
           drag?.active && drag.targetKey === key && drag.sourceKey !== key;
-        const dropEdge =
-          isDragTarget ? (drag.dropPosition === 'after' ? 'right' : 'left') : null;
+        const dropEdge = isDragTarget
+          ? (drag.dropPosition === 'after'
+              ? (isRight ? 'left' : 'right')
+              : (isRight ? 'right' : 'left'))
+          : null;
         return (
           <Tab
             key={key}
