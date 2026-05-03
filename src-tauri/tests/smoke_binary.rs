@@ -34,3 +34,53 @@ fn help_prints_usage_and_exits_zero() {
     assert!(stdout.contains("--use-real-config"), "--help should mention --use-real-config");
     assert!(stdout.contains("--allow-side-effects"), "--help should mention --allow-side-effects");
 }
+
+#[test]
+fn single_shot_list_channels_returns_empty_array() {
+    let output = smoke()
+        .args(["list_channels", "{}"])
+        .output()
+        .expect("run list_channels");
+    assert!(output.status.success(), "exit: {:?} stderr: {}", output.status, String::from_utf8_lossy(&output.stderr));
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let json: serde_json::Value = serde_json::from_str(stdout.trim())
+        .unwrap_or_else(|e| panic!("stdout not JSON ({e}): {stdout}"));
+    assert_eq!(json["command"], "list_channels");
+    assert_eq!(json["ok"], true);
+    assert_eq!(json["value"], serde_json::json!([]));
+    assert!(json["duration_ms"].is_number(), "duration_ms missing");
+}
+
+#[test]
+fn single_shot_marshalling_error_classifies_as_deserialize() {
+    let output = smoke()
+        .args(["add_channel_from_input", r#"{"wrong_field":"x"}"#])
+        .output()
+        .expect("run add_channel_from_input with bad args");
+    assert!(!output.status.success(), "expected non-zero exit for bad args");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let json: serde_json::Value = serde_json::from_str(stdout.trim())
+        .unwrap_or_else(|e| panic!("stdout not JSON ({e}): {stdout}"));
+    assert_eq!(json["command"], "add_channel_from_input");
+    assert_eq!(json["ok"], false);
+    assert_eq!(json["kind"], "deserialize");
+    assert!(
+        json["error"].as_str().unwrap_or("").contains("invalid args"),
+        "error message should contain Tauri's stable 'invalid args' prefix; got: {}",
+        json["error"]
+    );
+}
+
+#[test]
+fn single_shot_unknown_command_returns_command_error() {
+    let output = smoke()
+        .args(["this_command_does_not_exist", "{}"])
+        .output()
+        .expect("run unknown command");
+    assert!(!output.status.success(), "expected non-zero exit for unknown command");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let json: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(json["ok"], false);
+    // kind is "command" for any post-dispatch error that isn't deserialize
+    assert!(json["kind"].as_str().unwrap_or("").len() > 0);
+}

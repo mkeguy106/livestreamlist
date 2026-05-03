@@ -7,7 +7,14 @@
 //!
 //! See README.md in this directory for the full protocol.
 
-use livestreamlist_lib::smoke::DENYLIST;
+use std::time::Instant;
+
+use livestreamlist_lib::smoke::{build_smoke_app, DENYLIST};
+use serde_json::{json, Value};
+use tauri::ipc::{CallbackFn, InvokeBody, InvokeResponseBody};
+use tauri::test::{get_ipc_response, INVOKE_KEY};
+use tauri::webview::InvokeRequest;
+use tauri::WebviewWindowBuilder;
 
 const HELP: &str = "\
 Usage:
@@ -54,8 +61,121 @@ fn main() {
         return;
     }
 
-    eprintln!("dispatch loop not yet implemented (Task 4)");
-    std::process::exit(2);
+    // Strip flag-style args; keep positional (cmd + json).
+    let positional: Vec<&str> = args
+        .iter()
+        .filter(|a| !a.starts_with("--"))
+        .map(|s| s.as_str())
+        .collect();
+
+    if positional.len() != 2 {
+        eprintln!("expected exactly 2 positional args (cmd + json args); got {}", positional.len());
+        eprintln!("for JSONL streaming mode (Task 6), pass no positionals.");
+        eprintln!("run with --help for usage.");
+        std::process::exit(2);
+    }
+    let cmd = positional[0];
+    let raw_args = positional[1];
+
+    let temp = match tempfile::tempdir() {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("failed to create temp dir: {e}");
+            std::process::exit(2);
+        }
+    };
+    let app = match build_smoke_app(temp.path()) {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("build_smoke_app failed: {e:#}");
+            std::process::exit(2);
+        }
+    };
+    let webview = match WebviewWindowBuilder::new(&app, "main", Default::default()).build() {
+        Ok(w) => w,
+        Err(e) => {
+            eprintln!("webview build failed: {e}");
+            std::process::exit(2);
+        }
+    };
+
+    let envelope = dispatch_one(&webview, cmd, raw_args);
+    println!("{}", serde_json::to_string(&envelope).unwrap());
+    // Keep temp alive until after the print to ensure XDG paths are valid for the dispatch.
+    drop(temp);
+    std::process::exit(if envelope["ok"].as_bool().unwrap_or(false) { 0 } else { 1 });
+}
+
+/// Run one command and return its envelope as a serde_json::Value.
+fn dispatch_one(webview: &tauri::WebviewWindow<tauri::test::MockRuntime>, cmd: &str, raw_args: &str) -> Value {
+    let started = Instant::now();
+
+    // Step 1: parse the args. A JSON parse failure here is a CLI input
+    // error, not a Tauri marshalling error — distinguish them via 'kind'.
+    let args: Value = match serde_json::from_str(raw_args) {
+        Ok(v) => v,
+        Err(e) => {
+            return json!({
+                "command": cmd,
+                "ok": false,
+                "error": format!("input json parse error: {e}"),
+                "kind": "input",
+                "duration_ms": started.elapsed().as_millis() as u64,
+            });
+        }
+    };
+
+    // Step 2: dispatch via Tauri's mock IPC.
+    let request = InvokeRequest {
+        cmd: cmd.into(),
+        callback: CallbackFn(0),
+        error: CallbackFn(1),
+        url: "http://tauri.localhost".parse().unwrap(),
+        body: InvokeBody::Json(args),
+        headers: Default::default(),
+        invoke_key: INVOKE_KEY.to_string(),
+    };
+    let result = get_ipc_response(webview, request);
+    let duration_ms = started.elapsed().as_millis() as u64;
+
+    match result {
+        Ok(InvokeResponseBody::Json(s)) => {
+            let value: Value = serde_json::from_str(&s).unwrap_or(Value::Null);
+            json!({
+                "command": cmd,
+                "ok": true,
+                "value": value,
+                "duration_ms": duration_ms,
+            })
+        }
+        Ok(InvokeResponseBody::Raw(_)) => json!({
+            "command": cmd,
+            "ok": false,
+            "error": "command returned binary response, not supported in smoke harness",
+            "kind": "binary",
+            "duration_ms": duration_ms,
+        }),
+        Err(err_value) => {
+            let msg = err_value.as_str()
+                .map(String::from)
+                .unwrap_or_else(|| err_value.to_string());
+            // Tauri's argument-deserialization errors are stably formatted as
+            // "invalid args `<arg>` for command `<cmd>`: <serde_err>". See
+            // tauri::Error::InvalidArgs in Tauri 2.10.3 src/error.rs.
+            let kind = if msg.starts_with("invalid args ") {
+                "deserialize"
+            } else {
+                "command"
+            };
+            json!({
+                "command": cmd,
+                "ok": false,
+                "error": msg,
+                "kind": kind,
+                "duration_ms": duration_ms,
+            })
+        }
+    }
 }
 
 /// Source the handler-name list from the `register_handlers!` macro.
