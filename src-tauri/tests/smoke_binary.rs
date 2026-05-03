@@ -141,3 +141,88 @@ fn denylist_intercepts_before_tauri_arg_deserialization() {
     assert_eq!(json["ok"], false);
     assert_eq!(json["kind"], "blocked");
 }
+
+#[test]
+fn jsonl_streaming_dispatches_multiple_commands() {
+    let input = "\
+{\"id\":\"a\",\"cmd\":\"list_channels\",\"args\":{}}
+{\"id\":\"b\",\"cmd\":\"list_livestreams\",\"args\":{}}
+";
+    let output = smoke()
+        .write_stdin(input)
+        .output()
+        .expect("run jsonl stream");
+    assert!(output.status.success(), "exit: {:?}", output.status);
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let lines: Vec<_> = stdout.trim().split('\n').collect();
+    assert_eq!(lines.len(), 2, "expected 2 response lines, got: {stdout}");
+
+    let r0: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+    assert_eq!(r0["id"], "a");
+    assert_eq!(r0["command"], "list_channels");
+    assert_eq!(r0["ok"], true);
+
+    let r1: serde_json::Value = serde_json::from_str(lines[1]).unwrap();
+    assert_eq!(r1["id"], "b");
+    assert_eq!(r1["command"], "list_livestreams");
+    assert_eq!(r1["ok"], true);
+}
+
+#[test]
+fn jsonl_state_persists_across_calls_in_one_session() {
+    let input = "\
+{\"id\":\"add\",\"cmd\":\"add_channel_from_input\",\"args\":{\"input\":\"twitch.tv/shroud\"}}
+{\"id\":\"list\",\"cmd\":\"list_channels\",\"args\":{}}
+";
+    let output = smoke()
+        .write_stdin(input)
+        .output()
+        .expect("run add+list jsonl stream");
+    assert!(output.status.success(), "exit: {:?} stderr: {}", output.status, String::from_utf8_lossy(&output.stderr));
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let lines: Vec<_> = stdout.trim().split('\n').collect();
+    assert_eq!(lines.len(), 2, "expected 2 response lines, got: {stdout}");
+
+    let add: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+    assert_eq!(add["ok"], true, "add_channel_from_input failed: {add}");
+
+    let list: serde_json::Value = serde_json::from_str(lines[1]).unwrap();
+    assert_eq!(list["ok"], true);
+    let channels = list["value"].as_array().expect("channels array");
+    assert_eq!(channels.len(), 1, "expected 1 channel after add; got {channels:?}");
+    assert_eq!(channels[0]["channel_id"], "shroud");
+}
+
+#[test]
+fn jsonl_malformed_input_continues_session() {
+    let input = "\
+{\"cmd\":\"list_channels\",\"args\":{}}
+this is not json
+{\"cmd\":\"list_livestreams\",\"args\":{}}
+";
+    let output = smoke().write_stdin(input).output().expect("run with malformed line");
+    assert!(output.status.success(), "should exit 0 on EOF even with malformed lines");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let lines: Vec<_> = stdout.trim().split('\n').collect();
+    assert_eq!(lines.len(), 3, "should emit 3 responses (good, bad, good); got: {stdout}");
+
+    let r0: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+    assert_eq!(r0["ok"], true);
+
+    let r1: serde_json::Value = serde_json::from_str(lines[1]).unwrap();
+    assert_eq!(r1["ok"], false);
+    assert_eq!(r1["kind"], "input");
+
+    let r2: serde_json::Value = serde_json::from_str(lines[2]).unwrap();
+    assert_eq!(r2["ok"], true);
+}
+
+#[test]
+fn jsonl_optional_id_omitted_in_response_when_absent_in_input() {
+    let input = "{\"cmd\":\"list_channels\",\"args\":{}}\n";
+    let output = smoke().write_stdin(input).output().expect("run no-id jsonl");
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let json: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert!(json.get("id").is_none(), "id should be omitted when absent in input; got: {json}");
+}

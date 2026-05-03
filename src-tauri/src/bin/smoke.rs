@@ -7,6 +7,7 @@
 //!
 //! See README.md in this directory for the full protocol.
 
+use std::io::{BufRead, Write};
 use std::time::Instant;
 
 use livestreamlist_lib::smoke::{build_smoke_app, DENYLIST};
@@ -62,6 +63,8 @@ fn main() {
         return;
     }
 
+    let allow_side_effects = args.iter().any(|a| a == "--allow-side-effects");
+
     // Strip flag-style args; keep positional (cmd + json).
     let positional: Vec<&str> = args
         .iter()
@@ -69,14 +72,11 @@ fn main() {
         .map(|s| s.as_str())
         .collect();
 
-    if positional.len() != 2 {
-        eprintln!("expected exactly 2 positional args (cmd + json args); got {}", positional.len());
-        eprintln!("for JSONL streaming mode (Task 6), pass no positionals.");
+    if positional.len() != 0 && positional.len() != 2 {
+        eprintln!("expected 0 (JSONL stream) or 2 (single-shot) positional args; got {}", positional.len());
         eprintln!("run with --help for usage.");
         std::process::exit(2);
     }
-    let cmd = positional[0];
-    let raw_args = positional[1];
 
     let temp = match tempfile::tempdir() {
         Ok(t) => t,
@@ -100,8 +100,13 @@ fn main() {
         }
     };
 
-    let allow_side_effects = args.iter().any(|a| a == "--allow-side-effects");
-    let envelope = dispatch_one(&webview, cmd, raw_args, allow_side_effects);
+    if positional.is_empty() {
+        run_jsonl_loop(&webview, allow_side_effects);
+        drop(temp);
+        return;
+    }
+
+    let envelope = dispatch_one(&webview, positional[0], positional[1], allow_side_effects);
     println!("{}", serde_json::to_string(&envelope).unwrap());
     // Keep temp alive until after the print to ensure XDG paths are valid for the dispatch.
     drop(temp);
@@ -199,6 +204,61 @@ fn dispatch_one(
             })
         }
     }
+}
+
+/// Read JSONL from stdin; for each line, parse {id?, cmd, args} and emit
+/// a JSONL response. Continue on malformed lines (emit kind='input'). Exit
+/// 0 on EOF.
+fn run_jsonl_loop(
+    webview: &tauri::WebviewWindow<tauri::test::MockRuntime>,
+    allow_side_effects: bool,
+) {
+    let stdin = std::io::stdin();
+    let stdout = std::io::stdout();
+    let mut out = stdout.lock();
+    for line in stdin.lock().lines() {
+        let line = match line {
+            Ok(l) if l.trim().is_empty() => continue,
+            Ok(l) => l,
+            Err(e) => {
+                let env = json!({
+                    "ok": false,
+                    "error": format!("stdin read error: {e}"),
+                    "kind": "input",
+                });
+                writeln!(out, "{}", serde_json::to_string(&env).unwrap()).ok();
+                continue;
+            }
+        };
+        let parsed: Result<JsonlInput, _> = serde_json::from_str(&line);
+        let envelope = match parsed {
+            Err(e) => {
+                json!({
+                    "command": Value::Null,
+                    "ok": false,
+                    "error": format!("malformed input line ({e}): {line}"),
+                    "kind": "input",
+                })
+            }
+            Ok(JsonlInput { id, cmd, args }) => {
+                let raw_args = serde_json::to_string(&args).unwrap_or_else(|_| "{}".to_string());
+                let mut env = dispatch_one(webview, &cmd, &raw_args, allow_side_effects);
+                if let Some(id) = id {
+                    env["id"] = Value::String(id);
+                }
+                env
+            }
+        };
+        writeln!(out, "{}", serde_json::to_string(&envelope).unwrap()).ok();
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct JsonlInput {
+    id: Option<String>,
+    cmd: String,
+    #[serde(default)]
+    args: Value,
 }
 
 /// Source the handler-name list from the `register_handlers!` macro.
