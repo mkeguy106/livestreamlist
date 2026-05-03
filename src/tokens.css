@@ -137,6 +137,10 @@ body { background: var(--zinc-950); }
   font-family: var(--font-sans);
   outline: none;
   transition: border-color 120ms ease;
+  /* Without this, `width: 100%` makes the content area 100% of the parent
+     and padding+border (18px) push the rendered box past the wrapper —
+     in the chat composer the right edge bled into the Browser button. */
+  box-sizing: border-box;
 }
 .rx-input:focus { border-color: var(--zinc-600); }
 
