@@ -47,7 +47,7 @@ pub const DENYLIST: &[&str] = &[
 // `build_smoke_app` and its tests require `tauri/test` (the MockRuntime),
 // which is only compiled when the `smoke` feature is enabled.
 #[cfg(feature = "smoke")]
-pub use smoke_impl::build_smoke_app;
+pub use smoke_impl::{build_real_config_app, build_smoke_app};
 
 #[cfg(feature = "smoke")]
 mod smoke_impl {
@@ -86,6 +86,36 @@ mod smoke_impl {
         // runtime-agnostic subset here. Skipped: ChatManager + PlayerManager
         // (their commands are in DENYLIST; calling them returns a clean
         // 'missing state' error which is acceptable signal for agents).
+        let state = crate::AppState::new()?;
+        app.manage(state);
+
+        let embed_mgr = crate::embed::EmbedHost::new();
+        app.manage(embed_mgr);
+
+        let login_popup_mgr = crate::login_popup::LoginPopupManager::new();
+        app.manage(login_popup_mgr);
+
+        let personal_dict_path = crate::config::config_dir()
+            .unwrap_or_else(|_| std::path::PathBuf::from("."))
+            .join("personal_dict.json");
+        let spellchecker = Arc::new(crate::spellcheck::SpellChecker::new(personal_dict_path));
+        app.manage(spellchecker);
+
+        Ok(app)
+    }
+
+    /// Build the smoke app against the user's real ~/.config/livestreamlist/
+    /// (and ~/.local/share/...). For agent debugging cases that need to
+    /// inspect actual state. Don't write through this — the safety story
+    /// for the smoke binary is "isolated by default."
+    pub fn build_real_config_app() -> anyhow::Result<App<MockRuntime>> {
+        let resource_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        std::env::set_var("LIVESTREAMLIST_RESOURCE_DIR", resource_dir);
+
+        let mut app = mock_builder()
+            .invoke_handler(crate::register_handlers!())
+            .build(mock_context(noop_assets()))?;
+
         let state = crate::AppState::new()?;
         app.manage(state);
 

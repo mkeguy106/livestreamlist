@@ -78,19 +78,36 @@ fn main() {
         std::process::exit(2);
     }
 
-    let temp = match tempfile::tempdir() {
-        Ok(t) => t,
-        Err(e) => {
-            eprintln!("failed to create temp dir: {e}");
-            std::process::exit(2);
+    let use_real_config = args.iter().any(|a| a == "--use-real-config");
+
+    let _temp_keepalive: Option<tempfile::TempDir>; // hold TempDir for process lifetime when isolated
+    let app = if use_real_config {
+        eprintln!("WARN: --use-real-config: dispatching against ~/.config/livestreamlist/");
+        _temp_keepalive = None;
+        match livestreamlist_lib::smoke::build_real_config_app() {
+            Ok(a) => a,
+            Err(e) => {
+                eprintln!("build_real_config_app: {e:#}");
+                std::process::exit(2);
+            }
         }
-    };
-    let app = match build_smoke_app(temp.path()) {
-        Ok(a) => a,
-        Err(e) => {
-            eprintln!("build_smoke_app failed: {e:#}");
-            std::process::exit(2);
-        }
+    } else {
+        let temp = match tempfile::tempdir() {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!("failed to create temp dir: {e}");
+                std::process::exit(2);
+            }
+        };
+        let app = match build_smoke_app(temp.path()) {
+            Ok(a) => a,
+            Err(e) => {
+                eprintln!("build_smoke_app failed: {e:#}");
+                std::process::exit(2);
+            }
+        };
+        _temp_keepalive = Some(temp);
+        app
     };
     let webview = match WebviewWindowBuilder::new(&app, "main", Default::default()).build() {
         Ok(w) => w,
@@ -102,14 +119,11 @@ fn main() {
 
     if positional.is_empty() {
         run_jsonl_loop(&webview, allow_side_effects);
-        drop(temp);
         return;
     }
 
     let envelope = dispatch_one(&webview, positional[0], positional[1], allow_side_effects);
     println!("{}", serde_json::to_string(&envelope).unwrap());
-    // Keep temp alive until after the print to ensure XDG paths are valid for the dispatch.
-    drop(temp);
     std::process::exit(if envelope["ok"].as_bool().unwrap_or(false) { 0 } else { 1 });
 }
 

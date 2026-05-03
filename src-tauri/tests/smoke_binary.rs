@@ -287,3 +287,50 @@ fn jsonl_omitted_args_dispatches_with_empty_object() {
     assert_eq!(json["ok"], true, "omitted args should dispatch as empty object; got: {json}");
     assert_eq!(json["value"], serde_json::json!([]));
 }
+
+#[test]
+fn config_isolated_by_default_across_runs() {
+    // Two independent smoke runs. Each gets a fresh temp config.
+    // The second run must NOT see channels added by the first.
+    let r1 = smoke()
+        .args(["add_channel_from_input", r#"{"input":"https://twitch.tv/shroud"}"#])
+        .output().expect("first run");
+    assert!(r1.status.success(), "first add failed: {:?}", String::from_utf8_lossy(&r1.stderr));
+
+    let r2 = smoke()
+        .args(["list_channels", "{}"])
+        .output().expect("second run");
+    assert!(r2.status.success());
+    let stdout = String::from_utf8(r2.stdout).unwrap();
+    let json: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(
+        json["value"], serde_json::json!([]),
+        "second run must see empty channel list (isolation broken if non-empty); got: {json}"
+    );
+}
+
+#[test]
+fn use_real_config_flag_does_not_use_temp_dir() {
+    // We can't easily assert this against the user's real ~/.config
+    // (we'd corrupt their state). Instead: verify the flag doesn't
+    // crash and the response shape is correct.
+    let output = smoke()
+        .args(["--use-real-config", "list_channels", "{}"])
+        .output()
+        .expect("run --use-real-config list_channels");
+    // Status may be 0 or non-zero depending on whether the user has
+    // channels persisted. The point: it must not crash.
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let json: serde_json::Value = serde_json::from_str(stdout.trim())
+        .unwrap_or_else(|e| panic!("stdout not JSON ({e}): {stdout}"));
+    // Shape check.
+    assert_eq!(json["command"], "list_channels");
+    assert!(json["ok"].is_boolean());
+
+    // The stderr WARN about real config should be visible
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("--use-real-config"),
+        "stderr should warn about real config use; got: {stderr}"
+    );
+}
