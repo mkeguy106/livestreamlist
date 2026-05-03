@@ -334,3 +334,48 @@ fn use_real_config_flag_does_not_use_temp_dir() {
         "stderr should warn about real config use; got: {stderr}"
     );
 }
+
+#[test]
+fn list_count_matches_register_handlers_macro_body() {
+    // Asserts that the hard-coded handler list in src/bin/smoke.rs's
+    // list_handlers() stays in sync with the register_handlers! macro
+    // body in src/lib.rs. Adding a new command without updating both
+    // will fail this test, surfacing the drift before it ships.
+    //
+    // We count `$crate::` occurrences inside the macro body — each
+    // command is registered as `$crate::name,` exactly once. This is
+    // more robust than counting `#[tauri::command]` annotations because
+    // some commands have cfg-gated stub variants that ALSO carry the
+    // annotation but appear only once in the macro.
+    let lib_rs = std::fs::read_to_string("src/lib.rs").expect("read lib.rs");
+
+    // Extract the register_handlers! macro body. The body is delimited by
+    // `tauri::generate_handler![` ... `]` inside the macro definition.
+    let macro_start = lib_rs
+        .find("macro_rules! register_handlers")
+        .expect("register_handlers! macro not found in lib.rs");
+    let after_macro_start = &lib_rs[macro_start..];
+    let body_start = after_macro_start
+        .find("tauri::generate_handler![")
+        .expect("generate_handler![ not found inside register_handlers! macro");
+    let body_relative = &after_macro_start[body_start..];
+    let body_end = body_relative
+        .find(']')
+        .expect("closing ] not found inside generate_handler![");
+    let macro_body = &body_relative[..=body_end];
+
+    let macro_command_count = macro_body.matches("$crate::").count();
+
+    let output = smoke().arg("--list").output().expect("run --list");
+    assert!(output.status.success());
+    let list_count = String::from_utf8(output.stdout).unwrap()
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .count();
+
+    assert_eq!(
+        list_count, macro_command_count,
+        "smoke --list ({list_count}) must equal the count of $crate:: entries in register_handlers! macro ({macro_command_count}). \
+         Did you add a #[tauri::command] without updating list_handlers() in src/bin/smoke.rs and register_handlers!() in src/lib.rs?"
+    );
+}
