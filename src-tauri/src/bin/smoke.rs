@@ -324,7 +324,7 @@ fn list_handlers() -> Vec<String> {
     [
         "list_livestreams", "list_channels", "add_channel_from_input",
         "clipboard_channel_url", "remove_channel", "set_favorite",
-        "refresh_all", "launch_stream", "stop_stream", "list_playing",
+        "refresh_all", "refresh_channel", "launch_stream", "stop_stream", "list_playing",
         "open_in_browser", "open_url", "list_socials",
         "chat_connect", "chat_disconnect", "chat_send", "chat_open_in_browser",
         "chat_detach", "chat_reattach", "chat_focus_detached",

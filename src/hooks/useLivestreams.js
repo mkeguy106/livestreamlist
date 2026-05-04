@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { listLivestreams, refreshAll } from '../ipc.js';
+import { listLivestreams, refreshAll, refreshChannel as refreshChannelIpc } from '../ipc.js';
 
 const DEFAULT_REFRESH_MS = 60_000;
 
@@ -32,6 +32,42 @@ export function useLivestreams({ intervalSeconds } = {}) {
     }
   }, []);
 
+  // Drop all livestream entries for a given channel key from local state.
+  // Used after remove_channel IPC succeeds so the UI updates immediately
+  // without waiting for the next 60 s refresh_all cycle.
+  const dropLivestream = useCallback((uniqueKey) => {
+    if (!uniqueKey) return;
+    const prefix = `${uniqueKey}:`;
+    setLivestreams((prev) =>
+      prev.filter(
+        (ls) => ls.unique_key !== uniqueKey && !ls.unique_key.startsWith(prefix),
+      ),
+    );
+  }, []);
+
+  // Per-channel refresh, used immediately after adding a channel so the user
+  // sees its live status without waiting for the next 60 s poll. Merges the
+  // returned livestream(s) for this channel into the current snapshot,
+  // dropping any prior entries for the same channel-key prefix.
+  const refreshChannel = useCallback(async (uniqueKey) => {
+    if (!uniqueKey) return [];
+    try {
+      const updates = await refreshChannelIpc(uniqueKey);
+      if (!mounted.current) return updates;
+      const prefix = `${uniqueKey}:`;
+      setLivestreams((prev) => {
+        const filtered = prev.filter(
+          (ls) => ls.unique_key !== uniqueKey && !ls.unique_key.startsWith(prefix),
+        );
+        return [...filtered, ...updates];
+      });
+      return updates;
+    } catch (e) {
+      if (mounted.current) setError(String(e?.message ?? e));
+      return [];
+    }
+  }, []);
+
   useEffect(() => {
     mounted.current = true;
     (async () => {
@@ -48,5 +84,5 @@ export function useLivestreams({ intervalSeconds } = {}) {
     };
   }, [refresh, intervalMs]);
 
-  return { livestreams, loading, error, refresh };
+  return { livestreams, loading, error, refresh, refreshChannel, dropLivestream };
 }

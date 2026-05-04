@@ -188,6 +188,42 @@ async fn refresh_all<R: tauri::Runtime>(
     Ok(snapshot)
 }
 
+/// Refresh a single channel's live status. Called immediately after a
+/// channel is added so the user doesn't wait up to 60 s for the next
+/// `refresh_all` cycle. Returns the resulting livestream(s) (length 0+
+/// for YouTube multi-stream, length 1 for everything else).
+#[tauri::command]
+async fn refresh_channel<R: tauri::Runtime>(
+    unique_key: String,
+    app: tauri::AppHandle<R>,
+    state: State<'_, AppState>,
+) -> Result<Vec<Livestream>, String> {
+    let unique_key = channels::channel_key_of(&unique_key).to_string();
+    let store = Arc::clone(&state.store);
+    let client = state.http.clone();
+    let yt_browser = state
+        .settings
+        .read()
+        .general
+        .youtube_cookies_browser
+        .clone();
+    let result = refresh::refresh_one(store, client, yt_browser, &unique_key)
+        .await
+        .map_err(err_string)?;
+
+    // Pre-seed the notifier with this channel's current live state so the
+    // next refresh_all cycle doesn't fire a "X is live" notification for a
+    // channel the user just added.
+    let any_live = result.iter().any(|ls| ls.is_live);
+    state.notifier.seed_channel(&unique_key, any_live);
+
+    let snapshot = state.store.lock().snapshot();
+    let live = snapshot.iter().filter(|l| l.is_live).count();
+    tray::update_tooltip(&app, live, snapshot.len());
+
+    Ok(result)
+}
+
 #[tauri::command]
 fn launch_stream(
     unique_key: String,
@@ -1517,6 +1553,7 @@ macro_rules! register_handlers {
             $crate::remove_channel,
             $crate::set_favorite,
             $crate::refresh_all,
+            $crate::refresh_channel,
             $crate::launch_stream,
             $crate::stop_stream,
             $crate::list_playing,
