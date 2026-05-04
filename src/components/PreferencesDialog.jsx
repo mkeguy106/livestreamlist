@@ -819,11 +819,112 @@ function SpellcheckSection({ settings, patch }) {
   );
 }
 
+function EventBannerSection({ settings, patch }) {
+  const c = settings.chat || {};
+  const eb = c.event_banners || {};
+  const kinds = eb.kinds || {};
+  const enabled = eb.enabled !== false; // default on
+
+  // Default kinds shape if eb.kinds is missing (settings.json predates this field).
+  const k = (name, fallback) => (kinds[name] ?? fallback) === true;
+  const sub = k('sub', false);
+  const resub = k('resub', false);
+  const subgift = k('subgift', true);
+  const submysterygift = k('submysterygift', true);
+  const raid = k('raid', true);
+  const bitsbadgetier = k('bitsbadgetier', false);
+  const announcement = k('announcement', false);
+
+  const setKind = (name, value) => {
+    patch((prev) => ({
+      ...prev,
+      chat: {
+        ...c,
+        event_banners: {
+          enabled: enabled,
+          kinds: {
+            sub, resub, subgift, submysterygift,
+            raid, bitsbadgetier, announcement,
+            [name]: value,
+          },
+        },
+      },
+    }));
+  };
+
+  return (
+    <>
+      <Row
+        label="Show chat event banners"
+        hint={enabled
+          ? 'Highlight subscriber events, gift bombs, raids, and announcements above the chat composer.'
+          : 'Banners disabled. In-stream rows still appear in chat.'}
+      >
+        <Toggle
+          checked={enabled}
+          onChange={(v) => patch((prev) => ({
+            ...prev,
+            chat: {
+              ...c,
+              event_banners: {
+                enabled: v,
+                kinds: { sub, resub, subgift, submysterygift,
+                         raid, bitsbadgetier, announcement },
+              },
+            },
+          }))}
+        />
+      </Row>
+
+      <Row
+        label="Show banner for"
+        hint={enabled ? null : 'Enable banners above to choose which events surface.'}
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <EventKindCheckbox label="Subscriber alerts (new subs)" checked={sub} disabled={!enabled} onChange={(v) => setKind('sub', v)} />
+          <EventKindCheckbox label="Resubscriber alerts" checked={resub} disabled={!enabled} onChange={(v) => setKind('resub', v)} />
+          <EventKindCheckbox label="Gift subs" checked={subgift} disabled={!enabled} onChange={(v) => setKind('subgift', v)} />
+          <EventKindCheckbox label="Mystery gift bombs" checked={submysterygift} disabled={!enabled} onChange={(v) => setKind('submysterygift', v)} />
+          <EventKindCheckbox label="Raids and hosts" checked={raid} disabled={!enabled} onChange={(v) => setKind('raid', v)} />
+          <EventKindCheckbox label="Bits badge tier-ups" checked={bitsbadgetier} disabled={!enabled} onChange={(v) => setKind('bitsbadgetier', v)} />
+          <EventKindCheckbox label="Mod announcements" checked={announcement} disabled={!enabled} onChange={(v) => setKind('announcement', v)} />
+        </div>
+      </Row>
+    </>
+  );
+}
+
+function EventKindCheckbox({ label, checked, disabled, onChange }) {
+  return (
+    <label
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        opacity: disabled ? 0.5 : 1,
+        fontSize: 'var(--t-12)',
+        color: 'var(--zinc-200)',
+      }}
+    >
+      <input
+        type="checkbox"
+        checked={checked && !disabled}
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.checked)}
+      />
+      {label}
+    </label>
+  );
+}
+
 function ChatTab({ settings, patch }) {
   const c = settings.chat || {};
   return (
     <>
       <SpellcheckSection settings={settings} patch={patch} />
+
+      <EventBannerSection settings={settings} patch={patch} />
 
       <Row label="24-hour timestamps">
         <Toggle
