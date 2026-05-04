@@ -92,6 +92,8 @@ export default function ChatView({
   const [findQuery, setFindQuery] = useState('');
   const [findIndex, setFindIndex] = useState(-1);
   const findInputRef = useRef(null);
+  const [replyTo, setReplyTo] = useState(null);
+  // { msg_id, parent_login, parent_display_name, parent_text }
 
   const myLogin =
     (platform === 'kick' ? auth.kick?.login : auth.twitch?.login)?.toLowerCase() ?? null;
@@ -276,6 +278,15 @@ export default function ChatView({
     [onUsernameHover, channelKey],
   );
 
+  const startReply = useCallback((m) => {
+    setReplyTo({
+      msg_id: m.id,
+      parent_login: m.user.login,
+      parent_display_name: m.user.display_name || m.user.login,
+      parent_text: m.text,
+    });
+  }, []);
+
   const clearTimers = useCallback(() => {
     if (pauseTimerRef.current) {
       clearTimeout(pauseTimerRef.current);
@@ -357,6 +368,9 @@ export default function ChatView({
     setPauseSecondsLeft(0);
     clearTimers();
   }, [channelKey, clearTimers]);
+  useEffect(() => {
+    setReplyTo(null);
+  }, [channelKey]);
 
   const onScroll = (e) => {
     if (suppressScrollRef.current) return;
@@ -368,6 +382,8 @@ export default function ChatView({
       beginPause();
     }
   };
+
+  const replyEnabled = (platform === 'twitch' || platform === 'kick') && Boolean(auth?.[platform]);
 
   return (
     <div
@@ -425,6 +441,8 @@ export default function ChatView({
                   onUsernameOpen={handleOpen}
                   onUsernameContext={handleContext}
                   onUsernameHover={handleHover}
+                  onStartReply={startReply}
+                  replyEnabled={replyEnabled}
                 />
               ) : (
                 <IrcRow
@@ -438,6 +456,8 @@ export default function ChatView({
                   onUsernameOpen={handleOpen}
                   onUsernameContext={handleContext}
                   onUsernameHover={handleHover}
+                  onStartReply={startReply}
+                  replyEnabled={replyEnabled}
                 />
               );
               const isHistorical = m.is_backfill || m.is_log_replay;
@@ -527,6 +547,8 @@ export default function ChatView({
           platform={platform}
           auth={auth}
           mentionCandidates={mentionCandidates}
+          replyTo={replyTo}
+          onCancelReply={() => setReplyTo(null)}
         />
       )}
       <ConversationDialog
