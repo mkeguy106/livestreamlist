@@ -352,6 +352,38 @@ body { background: var(--zinc-950); }
   }
 }
 
+/* Reply chiclet — inline marker in Composer when replying to a chat message */
+.rx-reply-chiclet {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: rgba(168, 85, 247, 0.14);
+  border: 1px solid rgba(168, 85, 247, 0.3);
+  color: #c4b5fd;
+  border-radius: 3px;
+  padding: 1px 6px;
+  font-size: var(--t-11);
+  line-height: 1.3;
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  white-space: nowrap;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rx-reply-chiclet-x {
+  color: var(--zinc-500);
+  margin-left: 2px;
+  cursor: pointer;
+  font-size: var(--t-13);
+  line-height: 1;
+}
+
+.rx-reply-chiclet-x:hover {
+  color: var(--zinc-200);
+}
+
 /* Sub-anniversary banner — pinned above chat composer */
 .rx-sub-anniv-banner {
   display: flex;
