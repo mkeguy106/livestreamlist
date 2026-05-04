@@ -345,6 +345,7 @@ Gap analysis against the Qt app (`~/livestream.list.qt/`) — docs (`README.md`,
 
 ### Live status refresh
 
+- [x] **Instant per-channel refresh on add/delete** (PR #124) — adding a channel now fetches just that channel's live status (~150 ms via the appropriate platform client) instead of waiting up to 60 s for the next `refresh_all` cycle; deleting a channel drops it from local snapshot state immediately rather than chaining a full refresh. New `refresh::refresh_one` + `refresh_channel` IPC for the add path; `useLivestreams.dropLivestream(key)` for the delete path. Pre-seeds `NotifyTracker` for the new channel so adding a live channel doesn't fire a "X is live" desktop notification.
 - [ ] **User-configurable refresh interval** — expose the current hard-coded 60 s as a 10–300 s preference. → Ph 4 General tab
 - [ ] **Per-platform concurrency caps** — YouTube and Kick `Semaphore` limits exposed in Preferences → Performance (matches Qt's `PerformanceSettings.youtube_concurrency` / `kick_concurrency`). → Ph 4
 - [ ] **Debounced on-disk writes for channel flag changes** — favorite / auto-launch / dont-notify flips should debounce ~2 s before hitting disk to avoid I/O thrash on bulk operations. → new (minor; sits in `channels.rs`)
