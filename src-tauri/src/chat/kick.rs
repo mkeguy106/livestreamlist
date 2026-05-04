@@ -153,8 +153,16 @@ async fn read_loop(
                     WsMessage::Frame(_) => {}
                 }
             }
-            Some((text, _reply_target, reply)) = cfg.outbound.recv() => {
-                let result = send_via_rest(&cfg.http, ids.broadcaster_user_id, &text).await;
+            Some((text, reply_target, reply)) = cfg.outbound.recv() => {
+                let reply_to_id = reply_target
+                    .as_ref()
+                    .and_then(|r| r.parent_id.parse::<u64>().ok());
+                let result = send_via_rest(
+                    &cfg.http,
+                    ids.broadcaster_user_id,
+                    &text,
+                    reply_to_id,
+                ).await;
                 if let Err(e) = &result {
                     log::warn!("Kick send failed: {e:#}");
                     emit_status(
@@ -468,17 +476,25 @@ fn value_to_u64(v: &Value) -> Option<u64> {
     }
 }
 
-async fn send_via_rest(http: &reqwest::Client, broadcaster_user_id: u64, text: &str) -> Result<()> {
+async fn send_via_rest(
+    http: &reqwest::Client,
+    broadcaster_user_id: u64,
+    text: &str,
+    reply_to_original_message_id: Option<u64>,
+) -> Result<()> {
     // Kick's /public/v1/chat requires `broadcaster_user_id` (integer) when
     // `type=user` — the bearer identifies the sender, not the target room.
     let Some(token) = auth::kick::stored_access_token()? else {
         anyhow::bail!("not logged in to Kick");
     };
-    let body = json!({
+    let mut body = json!({
         "broadcaster_user_id": broadcaster_user_id,
         "type": "user",
         "content": text,
     });
+    if let Some(id) = reply_to_original_message_id {
+        body["reply_to_original_message_id"] = serde_json::Value::from(id);
+    }
     let resp = http
         .post(SEND_URL)
         .bearer_auth(&token)
