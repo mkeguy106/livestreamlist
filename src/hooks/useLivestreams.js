@@ -32,6 +32,19 @@ export function useLivestreams({ intervalSeconds } = {}) {
     }
   }, []);
 
+  // Drop all livestream entries for a given channel key from local state.
+  // Used after remove_channel IPC succeeds so the UI updates immediately
+  // without waiting for the next 60 s refresh_all cycle.
+  const dropLivestream = useCallback((uniqueKey) => {
+    if (!uniqueKey) return;
+    const prefix = `${uniqueKey}:`;
+    setLivestreams((prev) =>
+      prev.filter(
+        (ls) => ls.unique_key !== uniqueKey && !ls.unique_key.startsWith(prefix),
+      ),
+    );
+  }, []);
+
   // Per-channel refresh, used immediately after adding a channel so the user
   // sees its live status without waiting for the next 60 s poll. Merges the
   // returned livestream(s) for this channel into the current snapshot,
@@ -71,5 +84,5 @@ export function useLivestreams({ intervalSeconds } = {}) {
     };
   }, [refresh, intervalMs]);
 
-  return { livestreams, loading, error, refresh, refreshChannel };
+  return { livestreams, loading, error, refresh, refreshChannel, dropLivestream };
 }

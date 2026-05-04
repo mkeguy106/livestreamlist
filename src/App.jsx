@@ -64,7 +64,8 @@ export default function App() {
   const hoverEnabled = settings?.chat?.user_card_hover !== false; // default true
   const hoverDelay = settings?.chat?.user_card_hover_delay_ms ?? 400;
   const intervalSeconds = settings?.general?.refresh_interval_seconds;
-  const { livestreams, loading, error, refresh, refreshChannel } = useLivestreams({ intervalSeconds });
+  const { livestreams, loading, error, refresh, refreshChannel, dropLivestream } =
+    useLivestreams({ intervalSeconds });
   const onTitlebarMouseDown = useDragHandler();
   const card = useUserCard();
   // Destructure stable callbacks once so dependent useCallbacks don't
@@ -267,13 +268,15 @@ export default function App() {
     openInBrowser: (key) =>
       openInBrowser(key).catch((e) => console.error('open_in_browser', e)),
     removeChannel: (key) =>
-      removeChannel(key).then(refresh).catch((e) => console.error('remove_channel', e)),
+      removeChannel(key)
+        .then(() => dropLivestream(key))
+        .catch((e) => console.error('remove_channel', e)),
     setFavorite: (key, fav) =>
       setFavorite(key, fav).then(refresh).catch((e) => console.error('set_favorite', e)),
     onUsernameOpen,
     onUsernameContext,
     onUsernameHover,
-  }), [livestreams, loading, error, refresh, selectedKey, onUsernameOpen, onUsernameContext, onUsernameHover]);
+  }), [livestreams, loading, error, refresh, dropLivestream, selectedKey, onUsernameOpen, onUsernameContext, onUsernameHover]);
 
   const current = LAYOUTS.find((l) => l.id === layoutId) ?? LAYOUTS[0];
   const Layout = current.Component;
