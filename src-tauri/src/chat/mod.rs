@@ -29,7 +29,6 @@ use crate::platforms::Platform;
 /// The four `parent_*` fields let the Twitch self-echo synthesize a
 /// `ReplyInfo` without a buffer roundtrip.
 #[derive(Debug, Clone)]
-#[allow(dead_code)] // fields wired through in subsequent reply-threading tasks
 pub struct OutboundReply {
     pub parent_id: String,
     pub parent_login: String,
@@ -216,7 +215,7 @@ impl ChatManager {
         &self,
         unique_key: &str,
         line: String,
-        reply: Option<OutboundReply>,
+        reply_target: Option<OutboundReply>,
     ) -> Result<()> {
         let (reply_tx, reply_rx) = oneshot::channel();
         {
@@ -225,7 +224,7 @@ impl ChatManager {
                 anyhow::bail!("no live chat for {unique_key}");
             };
             h.outbound
-                .send((line, reply, reply_tx))
+                .send((line, reply_target, reply_tx))
                 .map_err(|e| anyhow::anyhow!("chat channel closed: {e}"))?;
         }
         match reply_rx.await {
