@@ -30,7 +30,7 @@ export function shouldQueue(message, eventBannerSettings) {
   return eventBannerSettings.kinds?.[kind] === true;
 }
 
-if (process.env.NODE_ENV !== 'production') {
+if (typeof import.meta !== 'undefined' && import.meta.env?.DEV) {
   // Module-load DEV asserts — same pattern as utils/autocorrect.js.
   const enabledAll = {
     enabled: true,
