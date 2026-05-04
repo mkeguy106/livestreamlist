@@ -1,3 +1,7 @@
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { listenEvent } from '../ipc.js';
+import { usePreferences } from './usePreferences.jsx';
+
 /**
  * Per-channel event-banner queue for chat USERNOTICE events.
  *
@@ -89,4 +93,110 @@ if (typeof import.meta !== 'undefined' && import.meta.env?.DEV) {
     shouldQueue({ system: { kind: 'subgift' }, text: '' }, { enabled: true }) === false,
     'shouldQueue: settings missing kinds object',
   );
+}
+
+const TIMER_MS = 8000;
+
+export function useEventBanner(channelKey) {
+  const { settings } = usePreferences();
+  const eventBannerSettings = settings?.chat?.event_banners ?? null;
+
+  const [current, setCurrent] = useState(null);
+  const queueRef = useRef([]);
+  const timerRef = useRef(null);
+  const settingsRef = useRef(eventBannerSettings);
+
+  // Keep settingsRef in sync so the listener closure (frozen on subscribe)
+  // sees the latest filter rules without re-subscribing on every toggle.
+  useEffect(() => {
+    settingsRef.current = eventBannerSettings;
+  }, [eventBannerSettings]);
+
+  const advance = useCallback(() => {
+    if (timerRef.current != null) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+    const next = queueRef.current.shift() ?? null;
+    setCurrent(next);
+    if (next) {
+      timerRef.current = setTimeout(() => {
+        timerRef.current = null;
+        advance();
+      }, TIMER_MS);
+    }
+  }, []);
+
+  const dismiss = useCallback(() => {
+    advance();
+  }, [advance]);
+
+  // Master-toggle off: clear queue + current banner + timer immediately.
+  useEffect(() => {
+    if (eventBannerSettings && !eventBannerSettings.enabled) {
+      queueRef.current = [];
+      if (timerRef.current != null) {
+        clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+      setCurrent(null);
+    }
+  }, [eventBannerSettings?.enabled]);
+
+  // Subscribe to chat:message:{channelKey}; resets on channelKey change.
+  useEffect(() => {
+    if (!channelKey) return undefined;
+    let unlisten = null;
+    let cancelled = false;
+
+    listenEvent(`chat:message:${channelKey}`, (msg) => {
+      if (!shouldQueue(msg, settingsRef.current)) return;
+      const banner = {
+        id: msg.id,
+        kind: msg.system.kind,
+        text: msg.system.text || '',
+        userText: msg.text || '',
+        emoteRanges: msg.emote_ranges || [],
+        linkRanges: msg.link_ranges || [],
+        timestamp: msg.timestamp,
+        channelKey: msg.channel_key,
+      };
+      queueRef.current.push(banner);
+      // If nothing's currently displayed, advance immediately to show this one.
+      // Otherwise the active banner finishes its 8 s timer first (finish-then-advance).
+      setCurrent((prev) => {
+        if (prev) return prev; // active banner already running; queue grows behind it
+        const next = queueRef.current.shift() ?? null;
+        if (next && timerRef.current == null) {
+          timerRef.current = setTimeout(() => {
+            timerRef.current = null;
+            advance();
+          }, TIMER_MS);
+        }
+        return next;
+      });
+    })
+      .then((u) => {
+        if (cancelled) {
+          u?.();
+        } else {
+          unlisten = u;
+        }
+      })
+      .catch(() => {});
+
+    return () => {
+      cancelled = true;
+      if (unlisten) unlisten();
+      // Drop queue + timer + current banner on channel switch.
+      queueRef.current = [];
+      if (timerRef.current != null) {
+        clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+      setCurrent(null);
+    };
+  }, [channelKey, advance]);
+
+  return { current, dismiss };
 }
