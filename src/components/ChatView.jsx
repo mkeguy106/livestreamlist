@@ -628,7 +628,11 @@ function IrcRow({
       }}
     >
       {replyEnabled && onStartReply && (
-        <Tooltip text="Reply" align="right" wrapperStyle={{ position: 'static' }}>
+        <Tooltip
+          text="Reply"
+          align="right"
+          wrapperStyle={{ position: 'absolute', top: 1, right: 6, zIndex: 1 }}
+        >
           <button
             type="button"
             className="rx-chat-row-action"
@@ -743,7 +747,11 @@ function CompactRow({
       }}
     >
       {replyEnabled && onStartReply && (
-        <Tooltip text="Reply" align="right" wrapperStyle={{ position: 'static' }}>
+        <Tooltip
+          text="Reply"
+          align="right"
+          wrapperStyle={{ position: 'absolute', top: 1, right: 6, zIndex: 1 }}
+        >
           <button
             type="button"
             className="rx-chat-row-action"
