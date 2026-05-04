@@ -89,7 +89,14 @@ async function runAutocorrectFor(
  * Chat composer with inline `:emote` and `@mention` autocomplete. Disabled
  * until the user is authed on the channel's platform.
  */
-export default function Composer({ channelKey, platform, auth, mentionCandidates }) {
+export default function Composer({
+  channelKey,
+  platform,
+  auth,
+  mentionCandidates,
+  replyTo,
+  onCancelReply,
+}) {
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
@@ -114,7 +121,9 @@ export default function Composer({ channelKey, platform, auth, mentionCandidates
     ? platform === 'twitch' || platform === 'kick'
       ? `Log in to ${platform[0].toUpperCase()}${platform.slice(1)} to chat`
       : 'This platform chats on its own site — click Browser ↗ to open it'
-    : 'Send a message…  —  `:` for emotes, `@` for mentions';
+    : replyTo
+      ? `Reply to @${replyTo.parent_display_name}…`
+      : 'Send a message…  —  `:` for emotes, `@` for mentions';
 
   // Cache emotes per-channel. Re-runs on channelKey change AND whenever the
   // backend signals the user-emote layer changed (login, logout, app-start
@@ -172,6 +181,14 @@ export default function Composer({ channelKey, platform, auth, mentionCandidates
     clearRecent();
     clearIgnored();
   }, [channelKey, clearRecent, clearIgnored]);
+
+  // Auto-focus the input when reply mode arms — user clicked Reply on a
+  // message, expects to start typing immediately without a second click.
+  useEffect(() => {
+    if (replyTo) {
+      inputRef.current?.focus();
+    }
+  }, [replyTo]);
 
   // Autocorrect: on every text/misspellings change, look for a misspelled
   // word that meets all the autocorrect conditions. Skip the word the
@@ -369,12 +386,23 @@ export default function Composer({ channelKey, platform, auth, mentionCandidates
     setBusy(true);
     setError(null);
     try {
-      await chatSend(channelKey, body);
+      const replyArg = replyTo
+        ? {
+            msgId: replyTo.msg_id,
+            parentLogin: replyTo.parent_login,
+            parentDisplayName: replyTo.parent_display_name,
+            parentText: replyTo.parent_text,
+          }
+        : null;
+      await chatSend(channelKey, body, replyArg);
       setText('');
       setPopup(null);
       clearIgnored();
+      onCancelReply?.();
     } catch (e) {
       setError(String(e?.message ?? e));
+      // On send rejection, keep replyTo set so the user can retry
+      // without re-clicking the parent message.
     } finally {
       setBusy(false);
       inputRef.current?.focus();
@@ -405,6 +433,13 @@ export default function Composer({ channelKey, platform, auth, mentionCandidates
       }
     }
     if (e.key === 'Escape') {
+      // Reply cancel takes precedence over spellcheck-undo when the chiclet
+      // is visually present — user expects Esc → that visible affordance.
+      if (replyTo) {
+        e.preventDefault();
+        onCancelReply?.();
+        return;
+      }
       const restored = undoLast();
       if (restored) {
         e.preventDefault();
@@ -454,6 +489,22 @@ export default function Composer({ channelKey, platform, auth, mentionCandidates
         <div className="rx-mono rx-chiclet" style={{ color: 'var(--zinc-600)' }}>
           {authed ? `@${platformAuth.login}` : platform}
         </div>
+        {replyTo && (
+          <span className="rx-reply-chiclet">
+            <span style={{ color: 'var(--zinc-500)' }}>↩</span>
+            @{replyTo.parent_display_name}
+            <span
+              className="rx-reply-chiclet-x"
+              role="button"
+              aria-label="Cancel reply"
+              onMouseDown={(e) => {
+                e.preventDefault();
+                onCancelReply?.();
+                inputRef.current?.focus();
+              }}
+            >×</span>
+          </span>
+        )}
         <div style={{ position: 'relative', flex: 1, minWidth: 0 }}>
           <input
             ref={inputRef}

@@ -27,7 +27,8 @@ export const listPlaying = () => invoke('list_playing');
 export const openInBrowser = (uniqueKey) => invoke('open_in_browser', { uniqueKey });
 export const chatConnect = (uniqueKey) => invoke('chat_connect', { uniqueKey });
 export const chatDisconnect = (uniqueKey) => invoke('chat_disconnect', { uniqueKey });
-export const chatSend = (uniqueKey, text) => invoke('chat_send', { uniqueKey, text });
+export const chatSend = (uniqueKey, text, replyTo = null) =>
+  invoke('chat_send', { uniqueKey, text, replyTo });
 export const chatOpenInBrowser = (uniqueKey) => invoke('chat_open_in_browser', { uniqueKey });
 export const chatDetach = (uniqueKey) => invoke('chat_detach', { uniqueKey });
 export const chatReattach = (uniqueKey) => invoke('chat_reattach', { uniqueKey });
@@ -335,6 +336,14 @@ async function mockInvoke(name, args) {
         emote_ranges: [],
         badges: [],
         is_action: false,
+        reply_to: args.replyTo
+          ? {
+              parent_id: args.replyTo.msgId,
+              parent_login: args.replyTo.parentLogin,
+              parent_display_name: args.replyTo.parentDisplayName,
+              parent_text: args.replyTo.parentText,
+            }
+          : null,
       });
       return null;
     case 'list_channels':

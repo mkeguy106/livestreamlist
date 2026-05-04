@@ -986,10 +986,20 @@ fn list_emotes(unique_key: String, chat: State<'_, Arc<ChatManager>>) -> Vec<cha
     chat.list_emotes(&unique_key)
 }
 
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ReplyTarget {
+    msg_id: String,
+    parent_login: String,
+    parent_display_name: String,
+    parent_text: String,
+}
+
 #[tauri::command]
 async fn chat_send(
     unique_key: String,
     text: String,
+    reply_to: Option<ReplyTarget>,
     state: State<'_, AppState>,
     chat: State<'_, Arc<ChatManager>>,
 ) -> Result<(), String> {
@@ -1010,10 +1020,18 @@ async fn chat_send(
         return Ok(());
     }
 
+    let outbound_reply = reply_to.map(|r| crate::chat::OutboundReply {
+        parent_id: r.msg_id,
+        parent_login: r.parent_login,
+        parent_display_name: r.parent_display_name,
+        parent_text: r.parent_text,
+    });
+
     match channel.platform {
-        Platform::Twitch | Platform::Kick => {
-            chat.send_raw(&unique_key, clean).await.map_err(err_string)
-        }
+        Platform::Twitch | Platform::Kick => chat
+            .send_raw(&unique_key, clean, outbound_reply)
+            .await
+            .map_err(err_string),
         _ => Err("sending not yet supported for this platform".to_string()),
     }
 }

@@ -191,6 +191,46 @@ body { background: var(--zinc-950); }
   text-decoration: underline;
 }
 
+/* Hover-revealed action button anchored to a chat row (e.g. the Reply ↩ icon).
+ * Positioning is handled by the wrapping Tooltip (`wrapperStyle: { position:
+ * 'absolute', top, right }`) so this class is just visual styling. The wrapper
+ * being absolute is critical: an inline-flex wrapper sitting in a row's
+ * normal flow reserves a line-height even when its only child is absolute,
+ * adding a blank line between every chat row.
+ *
+ * Zinc scale: higher number = darker. Chat rows sit on --zinc-950 background,
+ * so the button uses --zinc-800 at rest (a touch lighter than the row) and
+ * --zinc-700 on hover (slightly more prominent / "lifted"). */
+.rx-chat-row-with-action {
+  position: relative;
+}
+
+.rx-chat-row-action {
+  background: var(--zinc-800);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: var(--zinc-400);
+  border-radius: 3px;
+  padding: 1px 6px;
+  font-size: var(--t-11);
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 80ms;
+  font-family: inherit;
+}
+
+.rx-chat-row-with-action:hover .rx-chat-row-action,
+.rx-chat-row-action:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.rx-chat-row-action:hover {
+  color: var(--zinc-100);
+  background: var(--zinc-700);
+}
+
 @keyframes usercard-pulse {
   0%, 100% { opacity: 0.35; }
   50%      { opacity: 0.55; }
@@ -350,6 +390,38 @@ body { background: var(--zinc-950); }
     background: transparent;
     box-shadow: inset 0 0 0 1px rgba(60, 200, 60, 0);
   }
+}
+
+/* Reply chiclet — inline marker in Composer when replying to a chat message */
+.rx-reply-chiclet {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: rgba(168, 85, 247, 0.14);
+  border: 1px solid rgba(168, 85, 247, 0.3);
+  color: #c4b5fd;
+  border-radius: 3px;
+  padding: 1px 6px;
+  font-size: var(--t-11);
+  line-height: 1.3;
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  white-space: nowrap;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rx-reply-chiclet-x {
+  color: var(--zinc-500);
+  margin-left: 2px;
+  cursor: pointer;
+  font-size: var(--t-13);
+  line-height: 1;
+}
+
+.rx-reply-chiclet-x:hover {
+  color: var(--zinc-200);
 }
 
 /* Sub-anniversary banner — pinned above chat composer */

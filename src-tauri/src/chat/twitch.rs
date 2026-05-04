@@ -242,17 +242,17 @@ async fn read_loop(
                     WsMessage::Frame(_) => {}
                 }
             }
-            Some((text, reply)) = cfg.outbound.recv() => {
+            Some((text, reply_target, reply)) = cfg.outbound.recv() => {
                 // Outbound is user text — format as PRIVMSG on the way out.
                 // IRC has no per-message ack, so ws-write success is as
                 // close to a delivery confirmation as we get; Twitch may
                 // still silently drop for ratelimit/slow-mode/ban.
-                let line = format!("PRIVMSG #{} :{}", cfg.channel_login.to_ascii_lowercase(), text);
+                let line = build_outbound_line(&cfg.channel_login, &text, reply_target.as_ref());
                 let result = match ws.send(WsMessage::Text(line)).await {
                     Ok(()) => {
                         // Local echo: IRC doesn't echo own PRIVMSG. Synthesize so
                         // the user sees their own message and badges.
-                        if let Some(echo) = build_self_echo(cfg, &text) {
+                        if let Some(echo) = build_self_echo(cfg, &text, reply_target.as_ref()) {
                             log::info!(
                                 "self-echo emit channel={} id={}",
                                 cfg.channel_key, echo.id
@@ -513,7 +513,31 @@ fn extract_reply_info(tags: &std::collections::HashMap<String, String>) -> Optio
     })
 }
 
-fn build_self_echo(cfg: &TwitchChatConfig, text: &str) -> Option<ChatMessage> {
+fn build_outbound_line(
+    channel_login: &str,
+    text: &str,
+    reply: Option<&crate::chat::OutboundReply>,
+) -> String {
+    match reply {
+        Some(r) => format!(
+            "@reply-parent-msg-id={} PRIVMSG #{} :{}",
+            r.parent_id,
+            channel_login.to_ascii_lowercase(),
+            text
+        ),
+        None => format!(
+            "PRIVMSG #{} :{}",
+            channel_login.to_ascii_lowercase(),
+            text
+        ),
+    }
+}
+
+fn build_self_echo(
+    cfg: &TwitchChatConfig,
+    text: &str,
+    reply_target: Option<&crate::chat::OutboundReply>,
+) -> Option<ChatMessage> {
     // Anonymous (justinfan…) connections shouldn't echo — they can't even
     // send. Require auth to be present.
     let auth = cfg.auth.as_ref()?;
@@ -575,7 +599,12 @@ fn build_self_echo(cfg: &TwitchChatConfig, text: &str) -> Option<ChatMessage> {
         badges,
         is_action,
         is_first_message: false,
-        reply_to: None,
+        reply_to: reply_target.map(|r| ReplyInfo {
+            parent_id: r.parent_id.clone(),
+            parent_login: r.parent_login.clone(),
+            parent_display_name: r.parent_display_name.clone(),
+            parent_text: r.parent_text.clone(),
+        }),
         system: None,
         is_backfill: false,
         is_log_replay: false,
@@ -1062,5 +1091,30 @@ mod tests {
         tags.insert("followers-only".to_string(), "-1".to_string());
         let s = apply_roomstate_tags(&tags, ChatRoomState::default());
         assert_eq!(s.followers_only_minutes, -1);
+    }
+
+    #[test]
+    fn build_outbound_line_no_reply() {
+        let line = build_outbound_line("xqc", "hello world", None);
+        assert_eq!(line, "PRIVMSG #xqc :hello world");
+    }
+
+    #[test]
+    fn build_outbound_line_with_reply() {
+        let reply = crate::chat::OutboundReply {
+            parent_id: "abc-123".to_string(),
+            parent_login: "user1".to_string(),
+            parent_display_name: "User1".to_string(),
+            parent_text: "hi".to_string(),
+        };
+        let line = build_outbound_line("xqc", "hello world", Some(&reply));
+        assert_eq!(line, "@reply-parent-msg-id=abc-123 PRIVMSG #xqc :hello world");
+    }
+
+    #[test]
+    fn build_outbound_line_lowercases_channel() {
+        // Channel logins are always lowercased on the wire — preserve existing behavior.
+        let line = build_outbound_line("XQC", "hi", None);
+        assert_eq!(line, "PRIVMSG #xqc :hi");
     }
 }

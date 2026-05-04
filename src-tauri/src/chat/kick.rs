@@ -26,7 +26,7 @@ use super::badges::classify_mod_kick;
 use super::emotes::EmoteCache;
 use super::links::scan_links;
 use super::log_store::ChatLogWriter;
-use super::models::{ChatBadge, ChatMessage, ChatRoomState, ChatRoomStateEvent, ChatStatus, ChatStatusEvent, ChatUser, EmoteRange};
+use super::models::{ChatBadge, ChatMessage, ChatRoomState, ChatRoomStateEvent, ChatStatus, ChatStatusEvent, ChatUser, EmoteRange, ReplyInfo};
 use super::OutboundMsg;
 use crate::auth;
 use crate::platforms::Platform;
@@ -153,8 +153,16 @@ async fn read_loop(
                     WsMessage::Frame(_) => {}
                 }
             }
-            Some((text, reply)) = cfg.outbound.recv() => {
-                let result = send_via_rest(&cfg.http, ids.broadcaster_user_id, &text).await;
+            Some((text, reply_target, reply)) = cfg.outbound.recv() => {
+                let reply_to_id = reply_target
+                    .as_ref()
+                    .and_then(|r| r.parent_id.parse::<u64>().ok());
+                let result = send_via_rest(
+                    &cfg.http,
+                    ids.broadcaster_user_id,
+                    &text,
+                    reply_to_id,
+                ).await;
                 if let Err(e) = &result {
                     log::warn!("Kick send failed: {e:#}");
                     emit_status(
@@ -231,6 +239,30 @@ async fn handle_pusher_line(
         }
     }
     Ok(())
+}
+
+fn extract_kick_reply(payload: &serde_json::Value) -> Option<ReplyInfo> {
+    let original = payload.pointer("/metadata/original_message")?;
+    // id is sometimes a string, sometimes a number — accept both.
+    let parent_id = original
+        .get("id")
+        .and_then(|v| v.as_str().map(|s| s.to_string()).or_else(|| v.as_u64().map(|n| n.to_string())))?;
+    let parent_text = original
+        .get("content")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let parent_login = payload
+        .pointer("/metadata/original_sender/username")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    Some(ReplyInfo {
+        parent_id,
+        parent_login: parent_login.clone(),
+        parent_display_name: parent_login,
+        parent_text,
+    })
 }
 
 fn build_chat_message(cfg: &KickChatConfig, parsed: &Value) -> Option<ChatMessage> {
@@ -349,7 +381,7 @@ fn build_chat_message(cfg: &KickChatConfig, parsed: &Value) -> Option<ChatMessag
         badges,
         is_action: false,
         is_first_message: false,
-        reply_to: None,
+        reply_to: extract_kick_reply(&data),
         system: None,
         is_backfill: false,
         is_log_replay: false,
@@ -444,17 +476,25 @@ fn value_to_u64(v: &Value) -> Option<u64> {
     }
 }
 
-async fn send_via_rest(http: &reqwest::Client, broadcaster_user_id: u64, text: &str) -> Result<()> {
+async fn send_via_rest(
+    http: &reqwest::Client,
+    broadcaster_user_id: u64,
+    text: &str,
+    reply_to_original_message_id: Option<u64>,
+) -> Result<()> {
     // Kick's /public/v1/chat requires `broadcaster_user_id` (integer) when
     // `type=user` — the bearer identifies the sender, not the target room.
     let Some(token) = auth::kick::stored_access_token()? else {
         anyhow::bail!("not logged in to Kick");
     };
-    let body = json!({
+    let mut body = json!({
         "broadcaster_user_id": broadcaster_user_id,
         "type": "user",
         "content": text,
     });
+    if let Some(id) = reply_to_original_message_id {
+        body["reply_to_original_message_id"] = serde_json::Value::from(id);
+    }
     let resp = http
         .post(SEND_URL)
         .bearer_auth(&token)
@@ -638,5 +678,60 @@ mod tests {
         let s = parse_chatroom_modes(&v);
         assert_eq!(s.slow_seconds, 0);
         assert_eq!(s.followers_only_minutes, -1);
+    }
+
+    #[test]
+    fn extract_kick_reply_present() {
+        let payload = json!({
+            "metadata": {
+                "original_message": {
+                    "id": "12345",
+                    "content": "hello world"
+                },
+                "original_sender": {
+                    "id": 99,
+                    "username": "alice"
+                }
+            }
+        });
+        let info = extract_kick_reply(&payload).expect("should parse");
+        assert_eq!(info.parent_id, "12345");
+        assert_eq!(info.parent_login, "alice");
+        assert_eq!(info.parent_display_name, "alice");
+        assert_eq!(info.parent_text, "hello world");
+    }
+
+    #[test]
+    fn extract_kick_reply_missing_metadata() {
+        let payload = json!({ "content": "no reply here" });
+        assert!(extract_kick_reply(&payload).is_none());
+    }
+
+    #[test]
+    fn extract_kick_reply_missing_original_sender() {
+        // Defensive: original_message present but original_sender missing —
+        // still parse a reply, just with empty login.
+        let payload = json!({
+            "metadata": {
+                "original_message": { "id": "9", "content": "hi" }
+            }
+        });
+        let info = extract_kick_reply(&payload).expect("should parse with empty login");
+        assert_eq!(info.parent_id, "9");
+        assert_eq!(info.parent_login, "");
+        assert_eq!(info.parent_text, "hi");
+    }
+
+    #[test]
+    fn extract_kick_reply_id_as_number() {
+        // Some Kick payloads carry id as a JSON number rather than string.
+        let payload = json!({
+            "metadata": {
+                "original_message": { "id": 12345, "content": "x" },
+                "original_sender": { "username": "bob" }
+            }
+        });
+        let info = extract_kick_reply(&payload).expect("should parse numeric id");
+        assert_eq!(info.parent_id, "12345");
     }
 }
