@@ -64,7 +64,7 @@ export default function App() {
   const hoverEnabled = settings?.chat?.user_card_hover !== false; // default true
   const hoverDelay = settings?.chat?.user_card_hover_delay_ms ?? 400;
   const intervalSeconds = settings?.general?.refresh_interval_seconds;
-  const { livestreams, loading, error, refresh } = useLivestreams({ intervalSeconds });
+  const { livestreams, loading, error, refresh, refreshChannel } = useLivestreams({ intervalSeconds });
   const onTitlebarMouseDown = useDragHandler();
   const card = useUserCard();
   // Destructure stable callbacks once so dependent useCallbacks don't
@@ -345,7 +345,14 @@ export default function App() {
         {totalCount === 0 ? <EmptyState onAdd={() => setAddOpen(true)} /> : <Layout ctx={ctx} />}
       </main>
 
-      <AddChannelDialog open={addOpen} onClose={() => setAddOpen(false)} onAdded={refresh} />
+      <AddChannelDialog
+        open={addOpen}
+        onClose={() => setAddOpen(false)}
+        onAdded={(ch) => {
+          const key = `${ch.platform}:${ch.channel_id}`;
+          refreshChannel(key);
+        }}
+      />
       <UserHistoryDialog
         open={historyDlg.open}
         channelKey={historyDlg.channelKey}

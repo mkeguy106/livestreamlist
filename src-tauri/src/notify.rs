@@ -40,6 +40,16 @@ impl NotifyTracker {
         }
     }
 
+    /// Pre-seed a single channel as if it had been observed in a prior
+    /// snapshot. Used when a channel is freshly added and its initial live
+    /// status is fetched eagerly — without this, the next `refresh_all`
+    /// would treat the channel as a missing→live transition and fire a
+    /// "X is live" notification for a channel the user just clicked Add on.
+    pub fn seed_channel(&self, unique_key: &str, is_live: bool) {
+        *self.seeded.lock() = true;
+        self.prev.lock().insert(unique_key.to_string(), is_live);
+    }
+
     /// Note: `channels` drives the `dont_notify` lookup; snapshot supplies
     /// the transient live state. Caller supplies both so we don't need to
     /// hold the store lock.

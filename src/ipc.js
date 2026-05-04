@@ -20,6 +20,7 @@ export const clipboardChannelUrl = () => invoke('clipboard_channel_url');
 export const removeChannel = (uniqueKey) => invoke('remove_channel', { uniqueKey });
 export const setFavorite = (uniqueKey, favorite) => invoke('set_favorite', { uniqueKey, favorite });
 export const refreshAll = () => invoke('refresh_all');
+export const refreshChannel = (uniqueKey) => invoke('refresh_channel', { uniqueKey });
 export const launchStream = (uniqueKey, quality) => invoke('launch_stream', { uniqueKey, quality });
 export const stopStream = (uniqueKey) => invoke('stop_stream', { uniqueKey });
 export const listPlaying = () => invoke('list_playing');
@@ -220,6 +221,12 @@ async function mockInvoke(name, args) {
     case 'list_livestreams':
     case 'refresh_all':
       return mockSnapshot();
+    case 'refresh_channel': {
+      const key = args.uniqueKey;
+      return mockSnapshot().filter(
+        (ls) => ls.unique_key === key || ls.unique_key.startsWith(`${key}:`),
+      );
+    }
     case 'chat_connect':
       startMockChat(args.uniqueKey);
       return null;
