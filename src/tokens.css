@@ -484,3 +484,78 @@ body { background: var(--zinc-950); }
   flex: 1;
   min-width: 0;
 }
+
+/* User-notice event banner — pinned above chat composer for ~8s per event */
+.rx-event-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 14px;
+  border-top: var(--hair);
+  border-left: 2px solid var(--zinc-700);
+  background: rgba(255, 255, 255, 0.03);
+  font-size: var(--t-12);
+  line-height: 1.4;
+  color: var(--zinc-200);
+}
+.rx-event-banner__glyph {
+  font-size: 14px;
+  flex-shrink: 0;
+  color: var(--zinc-400);
+}
+.rx-event-banner__text {
+  flex: 1;
+  min-width: 0;
+}
+.rx-event-banner__user {
+  display: block;
+  font-size: var(--t-11);
+  color: var(--zinc-400);
+  margin-top: 2px;
+}
+.rx-event-banner__dismiss {
+  background: transparent;
+  border: 0;
+  color: var(--zinc-400);
+  cursor: pointer;
+  padding: 2px 6px;
+  font-size: 16px;
+  line-height: 1;
+  border-radius: var(--r-1);
+}
+.rx-event-banner__dismiss:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--zinc-100);
+}
+
+/* Per-kind palette — mirrors SystemRow palette in ChatView.jsx */
+.rx-event-banner[data-kind="raid"] {
+  border-left-color: #fb923c;
+}
+.rx-event-banner[data-kind="raid"] .rx-event-banner__glyph {
+  color: #fb923c;
+}
+.rx-event-banner[data-kind="sub"],
+.rx-event-banner[data-kind="resub"],
+.rx-event-banner[data-kind="subgift"],
+.rx-event-banner[data-kind="submysterygift"] {
+  border-left-color: #a78bfa;
+}
+.rx-event-banner[data-kind="sub"] .rx-event-banner__glyph,
+.rx-event-banner[data-kind="resub"] .rx-event-banner__glyph,
+.rx-event-banner[data-kind="subgift"] .rx-event-banner__glyph,
+.rx-event-banner[data-kind="submysterygift"] .rx-event-banner__glyph {
+  color: #a78bfa;
+}
+.rx-event-banner[data-kind="announcement"] {
+  border-left-color: #4ade80;
+}
+.rx-event-banner[data-kind="announcement"] .rx-event-banner__glyph {
+  color: #4ade80;
+}
+.rx-event-banner[data-kind="bitsbadgetier"] {
+  border-left-color: #fbbf24;
+}
+.rx-event-banner[data-kind="bitsbadgetier"] .rx-event-banner__glyph {
+  color: #fbbf24;
+}
