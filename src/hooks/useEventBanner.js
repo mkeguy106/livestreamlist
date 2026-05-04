@@ -103,7 +103,6 @@ export function useEventBanner(channelKey) {
 
   const [current, setCurrent] = useState(null);
   const queueRef = useRef([]);
-  const timerRef = useRef(null);
   const settingsRef = useRef(eventBannerSettings);
 
   // Keep settingsRef in sync so the listener closure (frozen on subscribe)
@@ -113,32 +112,28 @@ export function useEventBanner(channelKey) {
   }, [eventBannerSettings]);
 
   const advance = useCallback(() => {
-    if (timerRef.current != null) {
-      clearTimeout(timerRef.current);
-      timerRef.current = null;
-    }
-    const next = queueRef.current.shift() ?? null;
-    setCurrent(next);
-    if (next) {
-      timerRef.current = setTimeout(() => {
-        timerRef.current = null;
-        advance();
-      }, TIMER_MS);
-    }
+    setCurrent(queueRef.current.shift() ?? null);
   }, []);
 
   const dismiss = useCallback(() => {
     advance();
   }, [advance]);
 
-  // Master-toggle off: clear queue + current banner + timer immediately.
+  // 8 s auto-dismiss timer driven by `current` becoming non-null.
+  // Replaces the side-effecty setTimeout-inside-setCurrent-updater pattern
+  // flagged by code review (StrictMode double-invokes functional updaters).
+  useEffect(() => {
+    if (!current) return undefined;
+    const timer = setTimeout(() => {
+      advance();
+    }, TIMER_MS);
+    return () => clearTimeout(timer);
+  }, [current, advance]);
+
+  // Master-toggle off: clear queue + current banner immediately.
   useEffect(() => {
     if (eventBannerSettings && !eventBannerSettings.enabled) {
       queueRef.current = [];
-      if (timerRef.current != null) {
-        clearTimeout(timerRef.current);
-        timerRef.current = null;
-      }
       setCurrent(null);
     }
   }, [eventBannerSettings?.enabled]);
@@ -162,19 +157,10 @@ export function useEventBanner(channelKey) {
         channelKey: msg.channel_key,
       };
       queueRef.current.push(banner);
-      // If nothing's currently displayed, advance immediately to show this one.
-      // Otherwise the active banner finishes its 8 s timer first (finish-then-advance).
-      setCurrent((prev) => {
-        if (prev) return prev; // active banner already running; queue grows behind it
-        const next = queueRef.current.shift() ?? null;
-        if (next && timerRef.current == null) {
-          timerRef.current = setTimeout(() => {
-            timerRef.current = null;
-            advance();
-          }, TIMER_MS);
-        }
-        return next;
-      });
+      // If nothing's currently displayed, promote the just-queued banner.
+      // Otherwise the active banner finishes its 8 s timer (finish-then-advance);
+      // the timer-effect below will pick up the next item when current advances to null.
+      setCurrent((prev) => prev ?? queueRef.current.shift() ?? null);
     })
       .then((u) => {
         if (cancelled) {
@@ -188,15 +174,11 @@ export function useEventBanner(channelKey) {
     return () => {
       cancelled = true;
       if (unlisten) unlisten();
-      // Drop queue + timer + current banner on channel switch.
+      // Drop queue + current banner on channel switch.
       queueRef.current = [];
-      if (timerRef.current != null) {
-        clearTimeout(timerRef.current);
-        timerRef.current = null;
-      }
       setCurrent(null);
     };
-  }, [channelKey, advance]);
+  }, [channelKey]);
 
   return { current, dismiss };
 }
