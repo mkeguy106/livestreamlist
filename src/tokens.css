@@ -191,6 +191,44 @@ body { background: var(--zinc-950); }
   text-decoration: underline;
 }
 
+/* Hover-revealed action button anchored to a chat row (e.g. the Reply ↩ icon).
+ * Zinc scale: higher number = darker. Chat rows sit on --zinc-950 background,
+ * so the button uses --zinc-800 at rest (a touch lighter than the row) and
+ * --zinc-700 on hover (slightly more prominent / "lifted"). */
+.rx-chat-row-with-action {
+  position: relative;
+}
+
+.rx-chat-row-action {
+  position: absolute;
+  top: 1px;
+  right: 6px;
+  background: var(--zinc-800);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: var(--zinc-400);
+  border-radius: 3px;
+  padding: 1px 6px;
+  font-size: var(--t-11);
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 80ms;
+  font-family: inherit;
+  z-index: 1;
+}
+
+.rx-chat-row-with-action:hover .rx-chat-row-action,
+.rx-chat-row-action:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.rx-chat-row-action:hover {
+  color: var(--zinc-100);
+  background: var(--zinc-700);
+}
+
 @keyframes usercard-pulse {
   0%, 100% { opacity: 0.35; }
   50%      { opacity: 0.55; }

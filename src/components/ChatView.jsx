@@ -584,11 +584,14 @@ function IrcRow({
   onUsernameOpen,
   onUsernameContext,
   onUsernameHover,
+  onStartReply,
+  replyEnabled,
 }) {
   const time = formatTime(m.timestamp, timestamp24h);
   const mentionsMe = mentionsLogin(m.text, myLogin);
   return (
     <div
+      className={replyEnabled ? 'rx-chat-row-with-action' : undefined}
       style={{
         padding: '1px 14px',
         background: mentionsMe ? 'rgba(251,146,60,.08)' : undefined,
@@ -597,6 +600,19 @@ function IrcRow({
         textDecoration: m.hidden ? 'line-through' : 'none',
       }}
     >
+      {replyEnabled && onStartReply && (
+        <Tooltip text="Reply" align="right" wrapperStyle={{ position: 'static' }}>
+          <button
+            type="button"
+            className="rx-chat-row-action"
+            aria-label="Reply"
+            onClick={(e) => {
+              e.stopPropagation();
+              onStartReply(m);
+            }}
+          >↩</button>
+        </Tooltip>
+      )}
       {m.reply_to && (
         <ReplyContextRow
           reply={m.reply_to}
@@ -675,10 +691,13 @@ function CompactRow({
   onUsernameOpen,
   onUsernameContext,
   onUsernameHover,
+  onStartReply,
+  replyEnabled,
 }) {
   const mentionsMe = mentionsLogin(m.text, myLogin);
   return (
     <div
+      className={replyEnabled ? 'rx-chat-row-with-action' : undefined}
       style={{
         padding: '1px 0 1px 4px',
         background: mentionsMe ? 'rgba(251,146,60,.08)' : undefined,
@@ -687,6 +706,19 @@ function CompactRow({
         textDecoration: m.hidden ? 'line-through' : 'none',
       }}
     >
+      {replyEnabled && onStartReply && (
+        <Tooltip text="Reply" align="right" wrapperStyle={{ position: 'static' }}>
+          <button
+            type="button"
+            className="rx-chat-row-action"
+            aria-label="Reply"
+            onClick={(e) => {
+              e.stopPropagation();
+              onStartReply(m);
+            }}
+          >↩</button>
+        </Tooltip>
+      )}
       {m.reply_to && (
         <ReplyContextRow
           reply={m.reply_to}
