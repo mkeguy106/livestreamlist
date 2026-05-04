@@ -821,7 +821,7 @@ function ReplyContextRow({ reply, compact = false, onClick }) {
         cursor: onClick ? 'pointer' : 'default',
         display: 'flex',
         gap: 4,
-        alignItems: 'baseline',
+        alignItems: 'flex-start',
         color: 'var(--zinc-500)',
         fontSize: compact ? 10 : 11,
         fontStyle: 'italic',
@@ -834,9 +834,6 @@ function ReplyContextRow({ reply, compact = false, onClick }) {
       <span
         style={{
           color: 'var(--zinc-500)',
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-          whiteSpace: 'nowrap',
           minWidth: 0,
         }}
       >
