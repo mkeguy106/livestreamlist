@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { listenEvent } from '../ipc.js';
 import { usePreferences } from './usePreferences.jsx';
 
@@ -114,7 +114,7 @@ export function useEventBanner(channelKey) {
 
   // Mirror current into a ref so the listener can synchronously check
   // whether a banner is already showing without using a functional updater.
-  useEffect(() => {
+  useLayoutEffect(() => {
     currentRef.current = current;
   }, [current]);
 
