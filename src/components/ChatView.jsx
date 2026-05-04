@@ -10,6 +10,7 @@ import Composer from './Composer.jsx';
 import ConversationDialog from './ConversationDialog.jsx';
 import EmbedSlot from './EmbedSlot.jsx';
 import EmoteText from './EmoteText.jsx';
+import MessageContextMenu from './MessageContextMenu.jsx';
 import { SubAnniversaryBanner } from './SubAnniversaryBanner.jsx';
 import Tooltip from './Tooltip.jsx';
 import { TwitchWebConnectPrompt } from './TwitchWebConnectPrompt.jsx';
@@ -94,6 +95,8 @@ export default function ChatView({
   const findInputRef = useRef(null);
   const [replyTo, setReplyTo] = useState(null);
   // { msg_id, parent_login, parent_display_name, parent_text }
+  const [msgCtxMenu, setMsgCtxMenu] = useState(null);
+  // { msg, x, y } when open
 
   const myLogin =
     (platform === 'kick' ? auth.kick?.login : auth.twitch?.login)?.toLowerCase() ?? null;
@@ -287,6 +290,10 @@ export default function ChatView({
     });
   }, []);
 
+  const openMessageMenu = useCallback((m, x, y) => {
+    setMsgCtxMenu({ msg: m, x, y });
+  }, []);
+
   const clearTimers = useCallback(() => {
     if (pauseTimerRef.current) {
       clearTimeout(pauseTimerRef.current);
@@ -442,6 +449,7 @@ export default function ChatView({
                   onUsernameContext={handleContext}
                   onUsernameHover={handleHover}
                   onStartReply={startReply}
+                  onMessageContext={openMessageMenu}
                   replyEnabled={replyEnabled}
                 />
               ) : (
@@ -457,6 +465,7 @@ export default function ChatView({
                   onUsernameContext={handleContext}
                   onUsernameHover={handleHover}
                   onStartReply={startReply}
+                  onMessageContext={openMessageMenu}
                   replyEnabled={replyEnabled}
                 />
               );
@@ -557,6 +566,15 @@ export default function ChatView({
         pair={conversation}
         onClose={() => setConversation(null)}
       />
+      {msgCtxMenu && (
+        <MessageContextMenu
+          x={msgCtxMenu.x}
+          y={msgCtxMenu.y}
+          canReply={replyEnabled}
+          onReply={() => startReply(msgCtxMenu.msg)}
+          onClose={() => setMsgCtxMenu(null)}
+        />
+      )}
     </div>
   );
 }
@@ -585,6 +603,7 @@ function IrcRow({
   onUsernameContext,
   onUsernameHover,
   onStartReply,
+  onMessageContext,
   replyEnabled,
 }) {
   const time = formatTime(m.timestamp, timestamp24h);
@@ -592,6 +611,14 @@ function IrcRow({
   return (
     <div
       className={replyEnabled ? 'rx-chat-row-with-action' : undefined}
+      onContextMenu={(e) => {
+        // If the click target is the username (or descends from a
+        // user-card anchor), let its own onContextMenu handler run.
+        if (e.target.closest('[data-user-card-anchor]')) return;
+        if (!replyEnabled || !onMessageContext) return;
+        e.preventDefault();
+        onMessageContext(m, e.clientX, e.clientY);
+      }}
       style={{
         padding: '1px 14px',
         background: mentionsMe ? 'rgba(251,146,60,.08)' : undefined,
@@ -692,12 +719,21 @@ function CompactRow({
   onUsernameContext,
   onUsernameHover,
   onStartReply,
+  onMessageContext,
   replyEnabled,
 }) {
   const mentionsMe = mentionsLogin(m.text, myLogin);
   return (
     <div
       className={replyEnabled ? 'rx-chat-row-with-action' : undefined}
+      onContextMenu={(e) => {
+        // If the click target is the username (or descends from a
+        // user-card anchor), let its own onContextMenu handler run.
+        if (e.target.closest('[data-user-card-anchor]')) return;
+        if (!replyEnabled || !onMessageContext) return;
+        e.preventDefault();
+        onMessageContext(m, e.clientX, e.clientY);
+      }}
       style={{
         padding: '1px 0 1px 4px',
         background: mentionsMe ? 'rgba(251,146,60,.08)' : undefined,
