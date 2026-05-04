@@ -153,7 +153,7 @@ async fn read_loop(
                     WsMessage::Frame(_) => {}
                 }
             }
-            Some((text, reply)) = cfg.outbound.recv() => {
+            Some((text, _reply_target, reply)) = cfg.outbound.recv() => {
                 let result = send_via_rest(&cfg.http, ids.broadcaster_user_id, &text).await;
                 if let Err(e) = &result {
                     log::warn!("Kick send failed: {e:#}");

@@ -242,7 +242,7 @@ async fn read_loop(
                     WsMessage::Frame(_) => {}
                 }
             }
-            Some((text, reply)) = cfg.outbound.recv() => {
+            Some((text, _reply_target, reply)) = cfg.outbound.recv() => {
                 // Outbound is user text — format as PRIVMSG on the way out.
                 // IRC has no per-message ack, so ws-write success is as
                 // close to a delivery confirmation as we get; Twitch may

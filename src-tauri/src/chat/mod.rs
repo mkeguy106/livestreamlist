@@ -23,11 +23,25 @@ use emotes::EmoteCache;
 use crate::auth;
 use crate::platforms::Platform;
 
-/// Payload queued on a channel's outbound mpsc: the message text plus a
-/// oneshot for the platform task to report success/failure back to the
-/// IPC caller. Keeps the composer's error row honest — a silent REST 4xx
-/// on the Kick side no longer looks like a successful send.
-pub type OutboundMsg = (String, oneshot::Sender<Result<(), String>>);
+/// Reply context attached to an outbound message. The `parent_id` becomes
+/// the platform-appropriate reply identifier (Twitch: `@reply-parent-msg-id`
+/// IRC tag; Kick: `reply_to_original_message_id` in the REST POST body).
+/// The four `parent_*` fields let the Twitch self-echo synthesize a
+/// `ReplyInfo` without a buffer roundtrip.
+#[derive(Debug, Clone)]
+#[allow(dead_code)] // fields wired through in subsequent reply-threading tasks
+pub struct OutboundReply {
+    pub parent_id: String,
+    pub parent_login: String,
+    pub parent_display_name: String,
+    pub parent_text: String,
+}
+
+/// Payload queued on a channel's outbound mpsc: the message text, an optional
+/// reply target, and a oneshot for the platform task to report success/failure
+/// back to the IPC caller. Keeps the composer's error row honest — a silent
+/// REST 4xx on the Kick side no longer looks like a successful send.
+pub type OutboundMsg = (String, Option<OutboundReply>, oneshot::Sender<Result<(), String>>);
 
 pub struct ChatManager {
     app: AppHandle,
@@ -198,7 +212,12 @@ impl ChatManager {
     /// the caller sees the real send result (Kick REST 4xx, Twitch ws write
     /// failure, etc.). Returns an error if there's no live task for that
     /// key — connect first.
-    pub async fn send_raw(&self, unique_key: &str, line: String) -> Result<()> {
+    pub async fn send_raw(
+        &self,
+        unique_key: &str,
+        line: String,
+        reply: Option<OutboundReply>,
+    ) -> Result<()> {
         let (reply_tx, reply_rx) = oneshot::channel();
         {
             let guard = self.connections.lock();
@@ -206,7 +225,7 @@ impl ChatManager {
                 anyhow::bail!("no live chat for {unique_key}");
             };
             h.outbound
-                .send((line, reply_tx))
+                .send((line, reply, reply_tx))
                 .map_err(|e| anyhow::anyhow!("chat channel closed: {e}"))?;
         }
         match reply_rx.await {

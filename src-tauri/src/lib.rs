@@ -976,7 +976,7 @@ async fn chat_send(
 
     match channel.platform {
         Platform::Twitch | Platform::Kick => {
-            chat.send_raw(&unique_key, clean).await.map_err(err_string)
+            chat.send_raw(&unique_key, clean, None).await.map_err(err_string)
         }
         _ => Err("sending not yet supported for this platform".to_string()),
     }
