@@ -103,6 +103,7 @@ export function useEventBanner(channelKey) {
 
   const [current, setCurrent] = useState(null);
   const queueRef = useRef([]);
+  const currentRef = useRef(null);
   const settingsRef = useRef(eventBannerSettings);
 
   // Keep settingsRef in sync so the listener closure (frozen on subscribe)
@@ -110,6 +111,12 @@ export function useEventBanner(channelKey) {
   useEffect(() => {
     settingsRef.current = eventBannerSettings;
   }, [eventBannerSettings]);
+
+  // Mirror current into a ref so the listener can synchronously check
+  // whether a banner is already showing without using a functional updater.
+  useEffect(() => {
+    currentRef.current = current;
+  }, [current]);
 
   const advance = useCallback(() => {
     setCurrent(queueRef.current.shift() ?? null);
@@ -159,8 +166,16 @@ export function useEventBanner(channelKey) {
       queueRef.current.push(banner);
       // If nothing's currently displayed, promote the just-queued banner.
       // Otherwise the active banner finishes its 8 s timer (finish-then-advance);
-      // the timer-effect below will pick up the next item when current advances to null.
-      setCurrent((prev) => prev ?? queueRef.current.shift() ?? null);
+      // advance() will pick up the next item when the timer effect fires.
+      //
+      // Reading current via currentRef (rather than a functional updater)
+      // keeps the listener side-effect-free under StrictMode double-invoke
+      // of state updaters: queueRef.current.shift() is a mutation and must
+      // not run inside a functional updater.
+      if (currentRef.current === null) {
+        const next = queueRef.current.shift();
+        if (next) setCurrent(next);
+      }
     })
       .then((u) => {
         if (cancelled) {
