@@ -133,6 +133,8 @@ pub struct ChatSettings {
     pub show_sub_anniversary_banner: bool,
     #[serde(default)]
     pub dismissed_sub_anniversaries: std::collections::HashMap<String, String>,
+    #[serde(default)]
+    pub event_banners: EventBannerSettings,
 }
 
 fn default_timestamp_24h() -> bool {
@@ -163,6 +165,55 @@ fn default_lang() -> String {
         .unwrap_or_else(|| "en_US".to_string())
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EventBannerSettings {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub kinds: EventBannerKinds,
+}
+
+impl Default for EventBannerSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            kinds: EventBannerKinds::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EventBannerKinds {
+    #[serde(default)]
+    pub sub: bool,
+    #[serde(default)]
+    pub resub: bool,
+    #[serde(default = "default_true")]
+    pub subgift: bool,
+    #[serde(default = "default_true")]
+    pub submysterygift: bool,
+    #[serde(default = "default_true")]
+    pub raid: bool,
+    #[serde(default)]
+    pub bitsbadgetier: bool,
+    #[serde(default)]
+    pub announcement: bool,
+}
+
+impl Default for EventBannerKinds {
+    fn default() -> Self {
+        Self {
+            sub: false,
+            resub: false,
+            subgift: true,
+            submysterygift: true,
+            raid: true,
+            bitsbadgetier: false,
+            announcement: false,
+        }
+    }
+}
+
 impl Default for ChatSettings {
     fn default() -> Self {
         Self {
@@ -178,6 +229,7 @@ impl Default for ChatSettings {
             spellcheck_language: default_lang(),
             show_sub_anniversary_banner: default_true(),
             dismissed_sub_anniversaries: std::collections::HashMap::new(),
+            event_banners: EventBannerSettings::default(),
         }
     }
 }
@@ -255,6 +307,7 @@ mod tests {
             spellcheck_language: "es_ES".to_string(),
             show_sub_anniversary_banner: true,
             dismissed_sub_anniversaries: std::collections::HashMap::new(),
+            event_banners: EventBannerSettings::default(),
         };
         let json = serde_json::to_string(&chat).unwrap();
         let back: ChatSettings = serde_json::from_str(&json).unwrap();
@@ -275,5 +328,50 @@ mod tests {
         assert!(chat.spellcheck_enabled);
         assert!(chat.autocorrect_enabled);
         assert!(!chat.spellcheck_language.is_empty());
+    }
+
+    #[test]
+    fn event_banner_settings_defaults_match_c_scope() {
+        let s = EventBannerSettings::default();
+        assert!(s.enabled, "master toggle defaults on");
+        assert!(s.kinds.subgift, "subgift defaults on (C scope)");
+        assert!(s.kinds.submysterygift, "submysterygift defaults on (C scope)");
+        assert!(s.kinds.raid, "raid defaults on (C scope)");
+        assert!(!s.kinds.sub, "sub defaults off");
+        assert!(!s.kinds.resub, "resub defaults off");
+        assert!(!s.kinds.bitsbadgetier, "bitsbadgetier defaults off");
+        assert!(!s.kinds.announcement, "announcement defaults off");
+    }
+
+    #[test]
+    fn event_banner_settings_deserialize_from_empty_object() {
+        let chat: ChatSettings = serde_json::from_str(r#"{}"#).unwrap();
+        let s = chat.event_banners;
+        assert!(s.enabled);
+        assert!(s.kinds.subgift);
+        assert!(s.kinds.submysterygift);
+        assert!(s.kinds.raid);
+        assert!(!s.kinds.sub);
+        assert!(!s.kinds.resub);
+        assert!(!s.kinds.bitsbadgetier);
+        assert!(!s.kinds.announcement);
+    }
+
+    #[test]
+    fn event_banner_settings_round_trip() {
+        let s = EventBannerSettings {
+            enabled: false,
+            kinds: EventBannerKinds {
+                sub: true, resub: false, subgift: false, submysterygift: false,
+                raid: false, bitsbadgetier: true, announcement: true,
+            },
+        };
+        let json = serde_json::to_string(&s).unwrap();
+        let back: EventBannerSettings = serde_json::from_str(&json).unwrap();
+        assert!(!back.enabled);
+        assert!(back.kinds.sub);
+        assert!(!back.kinds.subgift);
+        assert!(back.kinds.bitsbadgetier);
+        assert!(back.kinds.announcement);
     }
 }

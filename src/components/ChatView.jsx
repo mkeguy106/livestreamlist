@@ -4,6 +4,7 @@ import { useAuth } from '../hooks/useAuth.jsx';
 import { useChat } from '../hooks/useChat.js';
 import { usePreferences } from '../hooks/usePreferences.jsx';
 import { useSubAnniversary } from '../hooks/useSubAnniversary.js';
+import { useEventBanner } from '../hooks/useEventBanner.js';
 import ChaturbateAuthBanner from './ChaturbateAuthBanner.jsx';
 import ChatModeBanner from './ChatModeBanner.jsx';
 import Composer from './Composer.jsx';
@@ -14,6 +15,7 @@ import MessageContextMenu from './MessageContextMenu.jsx';
 import { SubAnniversaryBanner } from './SubAnniversaryBanner.jsx';
 import Tooltip from './Tooltip.jsx';
 import { TwitchWebConnectPrompt } from './TwitchWebConnectPrompt.jsx';
+import UserNoticeBanner from './UserNoticeBanner.jsx';
 import UserBadges from './UserBadges.jsx';
 
 // Qt-style auto-scroll: when the user scrolls up, pause auto-follow for 5
@@ -47,6 +49,10 @@ export default function ChatView({
   // Hook must be called unconditionally before any early returns.
   const { info: anniversaryInfo, connectPromptVisible, share: shareAnniversary, dismiss: dismissAnniversary, dismissPrompt } =
     useSubAnniversary(channelKey);
+
+  // Event banner for sub/gift/raid/announcement USERNOTICE events.
+  // Filtered by settings.chat.event_banners (master + per-kind toggles).
+  const { current: eventBanner, dismiss: dismissEventBanner } = useEventBanner(channelKey);
 
   // YouTube and Chaturbate don't have a built-in chat client — we mount the
   // platform's own /live_chat (or room) page as a child webview overlaid on
@@ -549,6 +555,9 @@ export default function ChatView({
         <TwitchWebConnectPrompt
           onDismiss={dismissPrompt}
         />
+      )}
+      {eventBanner && (
+        <UserNoticeBanner event={eventBanner} onDismiss={dismissEventBanner} />
       )}
       {footer ?? (
         <Composer
