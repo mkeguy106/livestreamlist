@@ -53,10 +53,16 @@ pub fn tokenize(text: &str, channel_emotes: &[String]) -> Vec<TokenRange> {
         let raw = &text[token_start..raw_end];
 
         // Trim leading/trailing punctuation (parens, quotes, commas, etc.)
-        // that sit OUTSIDE the spellable word. We don't trim @, :, /, ., -
-        // because those carry meaning (mention, emote, URL, hyphenated word).
+        // that sit OUTSIDE the spellable word. We don't trim leading @, :, /,
+        // ., - because those carry meaning at the start (mention, emote, URL,
+        // dotfile, hyphenated word). Trailing `.` IS stripped along with the
+        // others — sentence-ending periods otherwise block adjacent quote/
+        // punctuation chars from being trimmed (e.g. `meat".` would survive
+        // intact because trim_matches stops at the non-matching `.`).
         let trim_chars: &[char] = &['(', ')', ',', '!', '?', '"', '\'', ';', '`'];
-        let trimmed = raw.trim_matches(trim_chars);
+        let trimmed = raw
+            .trim_start_matches(trim_chars)
+            .trim_end_matches(|c: char| trim_chars.contains(&c) || c == '.');
         if trimmed.is_empty() { continue; }
         let inner_start_offset = raw.find(trimmed).unwrap_or(0);
         let start = token_start + inner_start_offset;
@@ -234,5 +240,39 @@ mod tests {
         let r = classes("(hello), 'world'!", &[]);
         let words: Vec<&str> = r.iter().filter(|(c, _)| *c == TokenClass::Word).map(|(_, t)| *t).collect();
         assert_eq!(words, vec!["hello", "world"]);
+    }
+
+    #[test]
+    fn trailing_period_does_not_block_quote_trim() {
+        // Regression: `meat".` used to keep `".` glued to `meat` because
+        // `.` was excluded from the trim set, blocking the quote from being
+        // stripped from the right.
+        let r = classes("\"my front meat\".", &[]);
+        let words: Vec<&str> = r.iter().filter(|(c, _)| *c == TokenClass::Word).map(|(_, t)| *t).collect();
+        assert_eq!(words, vec!["my", "front", "meat"]);
+    }
+
+    #[test]
+    fn trailing_period_stripped_from_plain_words() {
+        // Sentence-ending period must not be part of the tokenized word.
+        let r = classes("hello world.", &[]);
+        let words: Vec<&str> = r.iter().filter(|(c, _)| *c == TokenClass::Word).map(|(_, t)| *t).collect();
+        assert_eq!(words, vec!["hello", "world"]);
+    }
+
+    #[test]
+    fn trailing_period_does_not_break_url_detection() {
+        // A URL at the end of a sentence must still be classified as a URL
+        // after the trailing period is stripped.
+        let r = classes("watch twitch.tv/shroud.", &[]);
+        assert!(r.iter().any(|(c, t)| *c == TokenClass::Url && *t == "twitch.tv/shroud"));
+    }
+
+    #[test]
+    fn leading_dot_is_preserved() {
+        // `.gitignore`-style references keep their leading dot (consistent
+        // with intent — leading `.` carries meaning, trailing `.` does not).
+        let r = classes(".gitignore matters", &[]);
+        assert!(r.iter().any(|(_, t)| *t == ".gitignore"));
     }
 }
