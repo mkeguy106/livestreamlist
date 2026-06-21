@@ -6,6 +6,7 @@ import Tooltip from './Tooltip.jsx';
 import SidebarPositionPicker from './SidebarPositionPicker.jsx';
 import {
   importTwitchFollows,
+  importYoutubeSubscriptions,
   importChaturbateFollows,
   listBlockedUsers,
   setUserMetadata,
@@ -22,9 +23,64 @@ const TABS = [
   { id: 'accounts', label: 'Accounts' },
 ];
 
+const PLATFORMS = [
+  {
+    id: 'twitch', name: 'Twitch', letter: 'T', tag: 'TTV',
+    accent: 'var(--twitch)', monoBg: 'rgba(167,139,250,.12)', monoBorder: 'rgba(167,139,250,.22)',
+    importTitle: 'Import follows',
+    importDesc: 'Adds every channel you follow on Twitch. Existing entries are skipped.',
+  },
+  {
+    id: 'youtube', name: 'YouTube', letter: 'Y', tag: 'YT',
+    accent: 'var(--youtube)', monoBg: 'rgba(248,113,113,.12)', monoBorder: 'rgba(248,113,113,.22)',
+    importTitle: 'Import subscriptions',
+    importDesc: 'Adds every channel you’re subscribed to on YouTube. Existing entries are skipped.',
+  },
+  {
+    id: 'kick', name: 'Kick', letter: 'K', tag: 'KICK',
+    accent: 'var(--kick)', monoBg: 'rgba(74,222,128,.12)', monoBorder: 'rgba(74,222,128,.22)',
+    importTitle: 'Import follows', importDesc: '',
+  },
+  {
+    id: 'chaturbate', name: 'Chaturbate', letter: 'C', tag: 'CB',
+    accent: 'var(--cb)', monoBg: 'rgba(251,146,60,.12)', monoBorder: 'rgba(251,146,60,.22)',
+    importTitle: 'Import follows',
+    importDesc: 'Adds every model you follow on Chaturbate. Existing entries are skipped.',
+  },
+];
+
+const IMPORT_RUNNERS = {
+  twitch: importTwitchFollows,
+  youtube: importYoutubeSubscriptions,
+  chaturbate: importChaturbateFollows,
+};
+
+function platformConnected(id, auth) {
+  switch (id) {
+    case 'twitch': return !!auth.twitch;
+    case 'youtube': return !!(auth.youtube?.has_paste || auth.youtube?.browser);
+    case 'kick': return !!auth.kick;
+    case 'chaturbate': return !!auth.chaturbate?.signed_in;
+    default: return false;
+  }
+}
+
+// Import is possible only when connected AND we actually have a working path.
+// Kick has no follows API; YouTube needs keyring cookies (not browser-cookie).
+function importCapable(id, auth) {
+  switch (id) {
+    case 'twitch': return !!auth.twitch;
+    case 'youtube': return !!auth.youtube?.has_paste;
+    case 'chaturbate': return !!auth.chaturbate?.signed_in;
+    default: return false;
+  }
+}
+
 export default function PreferencesDialog({ open, onClose }) {
   const [tab, setTab] = useState('general');
   const { settings, error, patch } = usePreferences();
+  const auth = useAuth();
+  const connectedCount = PLATFORMS.filter((p) => platformConnected(p.id, auth)).length;
 
   useEffect(() => {
     if (!open) return;
@@ -81,6 +137,10 @@ export default function PreferencesDialog({ open, onClose }) {
               type="button"
               onClick={() => setTab(t.id)}
               style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 8,
                 textAlign: 'left',
                 padding: '6px 10px',
                 border: 'none',
@@ -92,7 +152,12 @@ export default function PreferencesDialog({ open, onClose }) {
                 cursor: 'pointer',
               }}
             >
-              {t.label}
+              <span>{t.label}</span>
+              {t.id === 'accounts' && (
+                <span className="rx-mono" style={{ fontSize: 10, color: 'var(--zinc-500)' }}>
+                  {connectedCount}/4
+                </span>
+              )}
             </button>
           ))}
           <div style={{ flex: 1 }} />
@@ -132,8 +197,6 @@ export default function PreferencesDialog({ open, onClose }) {
 function AccountsTab() {
   const { twitch, twitch_web, kick, youtube, chaturbate, login, logout, loginYoutubePaste, refresh } = useAuth();
   const { settings, patch } = usePreferences();
-  const [importState, setImportState] = useState(null); // {running, result, error}
-  const [cbImportState, setCbImportState] = useState(null); // {running, result, error}
   const [ytLoginRunning, setYtLoginRunning] = useState(false);
   const [cbLoginRunning, setCbLoginRunning] = useState(false);
   const [cbError, setCbError] = useState(null);
@@ -193,26 +256,6 @@ function AccountsTab() {
     };
   }, []);
 
-  const runImport = async () => {
-    setImportState({ running: true });
-    try {
-      const r = await importTwitchFollows();
-      setImportState({ running: false, result: r });
-    } catch (e) {
-      setImportState({ running: false, error: String(e?.message ?? e) });
-    }
-  };
-
-  const runCbImport = async () => {
-    setCbImportState({ running: true });
-    try {
-      const r = await importChaturbateFollows();
-      setCbImportState({ running: false, result: r });
-    } catch (e) {
-      setCbImportState({ running: false, error: String(e?.message ?? e) });
-    }
-  };
-
   const runYoutubeLogin = async () => {
     setYtError(null);
     setYtLoginRunning(true);
@@ -240,220 +283,89 @@ function AccountsTab() {
   const ytLabelFor = (id) =>
     browsers?.find((b) => b.id === id)?.label ?? id;
 
-  return (
-    <>
-      <Row label="Twitch" hint={twitch ? `Logged in as @${twitch.login}` : 'Not logged in'}>
-        {twitch ? (
+  const auth = useAuth();
+  const [imports, setImports] = useState({}); // id -> { status, result, error }
+
+  const runImport = useCallback(async (id) => {
+    const runner = IMPORT_RUNNERS[id];
+    if (!runner) return;
+    setImports((s) => ({ ...s, [id]: { status: 'running' } }));
+    try {
+      const result = await runner();
+      setImports((s) => ({ ...s, [id]: { status: 'done', result } }));
+    } catch (e) {
+      setImports((s) => ({ ...s, [id]: { status: 'error', error: String(e?.message ?? e) } }));
+    }
+  }, []);
+
+  const anyImportRunning = Object.values(imports).some((x) => x?.status === 'running');
+
+  const importAll = useCallback(() => {
+    for (const p of PLATFORMS) {
+      if (importCapable(p.id, auth) && imports[p.id]?.status !== 'running') {
+        runImport(p.id);
+      }
+    }
+  }, [auth, imports, runImport]);
+
+  const anyCapable = PLATFORMS.some((p) => importCapable(p.id, auth));
+
+  const detailFor = (id) => {
+    switch (id) {
+      case 'twitch':
+        return auth.twitch ? `@${auth.twitch.login}` : 'Not logged in';
+      case 'youtube':
+        return ytBrowser
+          ? `Using cookies from ${ytLabelFor(ytBrowser)}`
+          : auth.youtube?.has_paste
+          ? 'Signed in via Google'
+          : 'Not signed in';
+      case 'kick':
+        return auth.kick ? `@${auth.kick.login}` : 'Not logged in';
+      case 'chaturbate':
+        return auth.chaturbate?.signed_in
+          ? `Signed in · verified ${formatRelative(auth.chaturbate.last_verified_at)}`
+          : 'Not signed in';
+      default:
+        return '';
+    }
+  };
+
+  const authButtonFor = (id) => {
+    const connected = platformConnected(id, auth);
+    switch (id) {
+      case 'twitch':
+        return connected ? (
           <button type="button" className="rx-btn rx-btn-ghost" onClick={() => logout('twitch')}>
             Log out
           </button>
         ) : (
           <button type="button" className="rx-btn" onClick={() => login('twitch')}>
-            Log in to Twitch
+            Connect
           </button>
-        )}
-      </Row>
-
-      <Row
-        label="Import Twitch follows"
-        hint="Adds every channel you follow on Twitch to this app. Existing entries are skipped."
-      >
-        <button
-          type="button"
-          className="rx-btn"
-          onClick={runImport}
-          disabled={!twitch || importState?.running}
-        >
-          {importState?.running ? 'Importing…' : 'Import now'}
-        </button>
-        {importState?.result && (
-          <div style={{ marginTop: 6, fontSize: 'var(--t-11)', color: 'var(--zinc-400)' }}>
-            Added {importState.result.added} · skipped {importState.result.skipped} · seen {importState.result.total_seen}
-          </div>
-        )}
-        {importState?.error && (
-          <div style={{ marginTop: 6, fontSize: 'var(--t-11)', color: '#f87171' }}>
-            {importState.error}
-          </div>
-        )}
-      </Row>
-
-      <Row
-        label="Twitch web session"
-        hint={
-          twitch_web
-            ? `Connected as @${twitch_web.login}`
-            : 'Sign in once for sub-anniversary detection (separate from chat login)'
-        }
-      >
-        {twitch_web ? (
-          <button type="button" className="rx-btn rx-btn-ghost" onClick={runTwitchWebClear}>
-            Disconnect
+        );
+      case 'youtube':
+        return connected ? (
+          <button type="button" className="rx-btn rx-btn-ghost" onClick={() => logout('youtube')}>
+            Log out
           </button>
         ) : (
-          <button
-            type="button"
-            className="rx-btn"
-            onClick={runTwitchWebLogin}
-            disabled={twWebRunning}
-          >
-            {twWebRunning ? 'Waiting on Twitch…' : 'Connect web session'}
+          <button type="button" className="rx-btn" onClick={runYoutubeLogin} disabled={ytLoginRunning}>
+            {ytLoginRunning ? 'Waiting on Google…' : 'Connect'}
           </button>
-        )}
-      </Row>
-      {twWebError && (
-        <div style={{
-          color: 'var(--warn, #f59e0b)',
-          fontSize: 'var(--t-11)',
-          margin: '4px 0 8px 0',
-          paddingLeft: 8,
-        }}>
-          {twWebError}
-        </div>
-      )}
-
-      <Row label="Kick" hint={kick ? `Logged in as @${kick.login}` : 'Not logged in'}>
-        {kick ? (
+        );
+      case 'kick':
+        return connected ? (
           <button type="button" className="rx-btn rx-btn-ghost" onClick={() => logout('kick')}>
             Log out
           </button>
         ) : (
           <button type="button" className="rx-btn" onClick={() => login('kick')}>
-            Log in to Kick
+            Connect
           </button>
-        )}
-      </Row>
-
-      <Row
-        label="YouTube"
-        hint={
-          ytBrowser
-            ? `Using cookies from ${ytLabelFor(ytBrowser)}`
-            : youtube?.has_paste
-            ? 'Signed in via Google'
-            : 'Sign in for subs / age-restricted / member content'
-        }
-      >
-        {ytBrowser || youtube?.has_paste ? (
-          <button type="button" className="rx-btn rx-btn-ghost" onClick={() => logout('youtube')}>
-            Log out
-          </button>
-        ) : (
-          <button
-            type="button"
-            className="rx-btn"
-            onClick={runYoutubeLogin}
-            disabled={ytLoginRunning}
-          >
-            {ytLoginRunning ? 'Waiting on Google…' : 'Log in to YouTube'}
-          </button>
-        )}
-        <div style={{ marginTop: 6 }}>
-          <button
-            type="button"
-            onClick={() => setYtAdvanced((v) => !v)}
-            style={{
-              all: 'unset',
-              cursor: 'pointer',
-              fontSize: 'var(--t-11)',
-              color: 'var(--zinc-500)',
-            }}
-          >
-            {ytAdvanced ? '▾ Other ways to sign in' : '▸ Other ways to sign in'}
-          </button>
-        </div>
-        {ytAdvanced && (
-          <div
-            style={{
-              marginTop: 6,
-              padding: '8px 10px',
-              border: '1px solid var(--zinc-800)',
-              borderRadius: 4,
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 8,
-            }}
-          >
-            <div>
-              <div
-                style={{
-                  fontSize: 'var(--t-11)',
-                  color: 'var(--zinc-300)',
-                  marginBottom: 4,
-                  fontWeight: 500,
-                }}
-              >
-                Use cookies from a browser
-              </div>
-              <div style={{ fontSize: 'var(--t-11)', color: 'var(--zinc-500)', marginBottom: 6 }}>
-                Reuses an existing browser session — no extra sign-in needed.
-              </div>
-              {browsers === null ? (
-                <div style={{ fontSize: 'var(--t-11)', color: 'var(--zinc-500)' }}>Detecting…</div>
-              ) : browsers.length === 0 ? (
-                <div style={{ fontSize: 'var(--t-11)', color: 'var(--zinc-500)' }}>
-                  No supported browsers found on this system.
-                </div>
-              ) : (
-                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                  {browsers.map((b) => {
-                    const active = ytBrowser === b.id;
-                    return (
-                      <Tooltip
-                        key={b.id}
-                        text={active ? `Stop using ${b.label} cookies` : `Use ${b.label} cookies`}
-                      >
-                        <button
-                          type="button"
-                          className={active ? 'rx-btn' : 'rx-btn rx-btn-ghost'}
-                          onClick={() => setYtBrowser(active ? null : b.id)}
-                        >
-                          {active ? `✓ ${b.label}` : b.label}
-                        </button>
-                      </Tooltip>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-            <div style={{ borderTop: 'var(--hair)', paddingTop: 8 }}>
-              <div
-                style={{
-                  fontSize: 'var(--t-11)',
-                  color: 'var(--zinc-300)',
-                  marginBottom: 4,
-                  fontWeight: 500,
-                }}
-              >
-                Paste cookies
-              </div>
-              <div style={{ fontSize: 'var(--t-11)', color: 'var(--zinc-500)', marginBottom: 6 }}>
-                For sandboxed builds (Flatpak) where the app can't reach a browser cookie store.
-              </div>
-              <button
-                type="button"
-                className="rx-btn rx-btn-ghost"
-                onClick={() => setYtPasteOpen(true)}
-              >
-                Paste cookies…
-              </button>
-            </div>
-          </div>
-        )}
-        {ytError && (
-          <div style={{ marginTop: 6, fontSize: 'var(--t-11)', color: '#f87171' }}>{ytError}</div>
-        )}
-      </Row>
-
-      <Row
-        label="Chaturbate"
-        hint={
-          chaturbate?.signed_in
-            ? `Signed in · verified ${formatRelative(chaturbate.last_verified_at)}`
-            : 'Sign in to chat as yourself'
-        }
-      >
-        {chaturbate?.signed_in ? (
+        );
+      case 'chaturbate':
+        return connected ? (
           <div style={{ display: 'flex', gap: 6 }}>
             <button
               type="button"
@@ -463,54 +375,145 @@ function AccountsTab() {
             >
               {cbLoginRunning ? 'Signing in…' : 'Sign in again'}
             </button>
-            <button
-              type="button"
-              className="rx-btn rx-btn-ghost"
-              onClick={() => logout('chaturbate')}
-            >
+            <button type="button" className="rx-btn rx-btn-ghost" onClick={() => logout('chaturbate')}>
               Log out
             </button>
           </div>
         ) : (
+          <button type="button" className="rx-btn" onClick={runChaturbateLogin} disabled={cbLoginRunning}>
+            {cbLoginRunning ? 'Waiting on Chaturbate…' : 'Connect'}
+          </button>
+        );
+      default:
+        return null;
+    }
+  };
+
+  const importZoneFor = (p) => {
+    const connected = platformConnected(p.id, auth);
+    if (p.id === 'kick') {
+      return <ImportNote>Kick doesn't expose your follows to apps yet.</ImportNote>;
+    }
+    if (!connected) {
+      return <ImportNote>Connect {p.name} to import the channels you follow.</ImportNote>;
+    }
+    if (p.id === 'youtube' && !auth.youtube?.has_paste) {
+      return (
+        <ImportNote>Sign in with Google or paste cookies to enable subscription import.</ImportNote>
+      );
+    }
+    return (
+      <ImportControl
+        title={p.importTitle}
+        desc={p.importDesc}
+        accent={p.accent}
+        state={imports[p.id]}
+        onRun={() => runImport(p.id)}
+      />
+    );
+  };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16, margin: '-20px -24px', height: 'calc(100% + 40px)' }}>
+      {/* Header */}
+      <div
+        style={{
+          flexShrink: 0,
+          padding: '4px 24px 14px',
+          borderBottom: 'var(--hair)',
+          display: 'flex',
+          alignItems: 'flex-end',
+          justifyContent: 'space-between',
+          gap: 16,
+        }}
+      >
+        <div>
+          <div style={{ fontSize: 'var(--t-16)', fontWeight: 600, color: 'var(--zinc-100)', letterSpacing: '-.01em' }}>
+            Accounts
+          </div>
+          <div style={{ fontSize: 'var(--t-12)', color: 'var(--zinc-500)', marginTop: 3 }}>
+            Connect a platform, then pull in everyone you already follow.
+          </div>
+        </div>
+        <Tooltip text={anyCapable ? 'Import follows from every connected platform' : 'Connect a platform first'}>
           <button
             type="button"
             className="rx-btn"
-            onClick={runChaturbateLogin}
-            disabled={cbLoginRunning}
+            aria-label="Import all follows"
+            onClick={importAll}
+            disabled={!anyCapable || anyImportRunning}
+            style={{ flexShrink: 0 }}
           >
-            {cbLoginRunning ? 'Waiting on Chaturbate…' : 'Sign in to Chaturbate'}
+            <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--ok)' }} />
+            Import all follows
           </button>
-        )}
-        {cbError && (
-          <div style={{ marginTop: 6, fontSize: 'var(--t-11)', color: 'var(--live)' }}>
-            {cbError}
-          </div>
-        )}
-      </Row>
+        </Tooltip>
+      </div>
 
-      <Row
-        label="Import Chaturbate follows"
-        hint="Adds every model you follow on Chaturbate to this app. Existing entries are skipped."
-      >
-        <button
-          type="button"
-          className="rx-btn"
-          onClick={runCbImport}
-          disabled={!chaturbate?.signed_in || cbImportState?.running}
+      {/* Cards */}
+      <div style={{ flex: 1, overflow: 'auto', padding: '0 24px 22px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+        {PLATFORMS.map((p) => (
+          <PlatformCard
+            key={p.id}
+            cfg={p}
+            connected={platformConnected(p.id, auth)}
+            detail={detailFor(p.id)}
+            authButton={authButtonFor(p.id)}
+            importZone={importZoneFor(p)}
+            error={p.id === 'chaturbate' ? cbError : null}
+            disclosure={
+              p.id === 'youtube' && !platformConnected('youtube', auth) ? (
+                <YoutubeSignInExtras
+                  browsers={browsers}
+                  ytBrowser={ytBrowser}
+                  setYtBrowser={setYtBrowser}
+                  ytAdvanced={ytAdvanced}
+                  setYtAdvanced={setYtAdvanced}
+                  onPaste={() => setYtPasteOpen(true)}
+                  ytError={ytError}
+                />
+              ) : null
+            }
+          />
+        ))}
+
+        {/* Twitch web session — secondary, de-emphasized */}
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 12,
+            padding: '10px 13px',
+            border: 'var(--hair)',
+            borderRadius: 6,
+            background: 'var(--zinc-925)',
+          }}
         >
-          {cbImportState?.running ? 'Importing…' : 'Import now'}
-        </button>
-        {cbImportState?.result && (
-          <div style={{ marginTop: 6, fontSize: 'var(--t-11)', color: 'var(--zinc-400)' }}>
-            Added {cbImportState.result.added} · skipped {cbImportState.result.skipped} · seen {cbImportState.result.total_seen}
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: 'var(--t-12)', color: 'var(--zinc-300)', fontWeight: 500 }}>
+              Twitch web session
+            </div>
+            <div style={{ fontSize: 'var(--t-11)', color: 'var(--zinc-500)', marginTop: 2 }}>
+              {twitch_web
+                ? `Connected as @${twitch_web.login}`
+                : 'Sign in once for sub-anniversary detection (separate from chat login)'}
+            </div>
           </div>
+          {twitch_web ? (
+            <button type="button" className="rx-btn rx-btn-ghost" onClick={runTwitchWebClear}>
+              Disconnect
+            </button>
+          ) : (
+            <button type="button" className="rx-btn rx-btn-ghost" onClick={runTwitchWebLogin} disabled={twWebRunning}>
+              {twWebRunning ? 'Waiting on Twitch…' : 'Connect'}
+            </button>
+          )}
+        </div>
+        {twWebError && (
+          <div style={{ color: 'var(--warn, #f59e0b)', fontSize: 'var(--t-11)', paddingLeft: 4 }}>{twWebError}</div>
         )}
-        {cbImportState?.error && (
-          <div style={{ marginTop: 6, fontSize: 'var(--t-11)', color: '#f87171' }}>
-            {cbImportState.error}
-          </div>
-        )}
-      </Row>
+      </div>
 
       <YoutubePasteDialog
         open={ytPasteOpen}
@@ -520,7 +523,187 @@ function AccountsTab() {
           setYtPasteOpen(false);
         }}
       />
-    </>
+    </div>
+  );
+}
+
+function PlatformCard({ cfg, connected, detail, authButton, importZone, disclosure, error }) {
+  return (
+    <div
+      style={{
+        flexShrink: 0,
+        border: '1px solid var(--zinc-800)',
+        borderRadius: 8,
+        background: 'var(--zinc-900)',
+        overflow: 'hidden',
+      }}
+    >
+      {/* Identity row */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 14px' }}>
+        <div
+          style={{
+            width: 36, height: 36, flexShrink: 0, borderRadius: 9,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            fontFamily: 'var(--font-mono)', fontWeight: 600, fontSize: 16,
+            background: cfg.monoBg, color: cfg.accent, border: `1px solid ${cfg.monoBorder}`,
+          }}
+        >
+          {cfg.letter}
+        </div>
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <div style={{ fontSize: 'var(--t-13)', fontWeight: 600, color: 'var(--zinc-100)', display: 'flex', alignItems: 'center', gap: 7 }}>
+            {cfg.name}
+            <span className="rx-mono" style={{ fontSize: 9, letterSpacing: '.07em', textTransform: 'uppercase', color: cfg.accent }}>
+              {cfg.tag}
+            </span>
+          </div>
+          <div style={{ fontSize: 'var(--t-11)', color: 'var(--zinc-500)', marginTop: 3, display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+            <span style={{ width: 6, height: 6, borderRadius: '50%', flexShrink: 0, background: connected ? 'var(--ok)' : 'var(--zinc-600)' }} />
+            <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{detail}</span>
+          </div>
+        </div>
+        <div style={{ flexShrink: 0 }}>{authButton}</div>
+      </div>
+
+      {/* Import zone */}
+      <div style={{ borderTop: '1px solid rgba(255,255,255,.05)', background: 'var(--zinc-925)', padding: '12px 14px 13px' }}>
+        {disclosure}
+        {importZone}
+        {error && (
+          <div style={{ marginTop: 8, fontSize: 'var(--t-11)', color: 'var(--live)' }}>{error}</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ImportNote({ children }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--zinc-600)', fontSize: 'var(--t-11)' }}>
+      <span style={{ display: 'inline-flex', width: 14, height: 14, alignItems: 'center', justifyContent: 'center' }}>⌗</span>
+      {children}
+    </div>
+  );
+}
+
+function ImportControl({ title, desc, accent, state, onRun }) {
+  const status = state?.status ?? 'idle';
+  const running = status === 'running';
+  const label = running ? 'Importing' : status === 'done' ? 'Import again' : 'Import now';
+  const btnClass = status === 'done' ? 'rx-btn rx-btn-ghost' : 'rx-btn';
+  return (
+    <div>
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 14 }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 'var(--t-12)', color: 'var(--zinc-300)', fontWeight: 500 }}>{title}</div>
+          <div style={{ fontSize: 'var(--t-11)', color: 'var(--zinc-500)', marginTop: 2, lineHeight: 1.45 }}>{desc}</div>
+        </div>
+        <button
+          type="button"
+          className={btnClass}
+          onClick={onRun}
+          disabled={running}
+          style={{ flexShrink: 0, minWidth: 96, justifyContent: 'center' }}
+        >
+          {running && (
+            <span
+              style={{
+                width: 11, height: 11, borderRadius: '50%',
+                border: '1.5px solid currentColor', borderTopColor: 'transparent',
+                display: 'inline-block', animation: 'rx-spin .7s linear infinite',
+              }}
+            />
+          )}
+          {label}
+        </button>
+      </div>
+
+      {running && (
+        <div style={{ marginTop: 11 }}>
+          <div style={{ position: 'relative', height: 4, borderRadius: 3, background: 'var(--zinc-800)', overflow: 'hidden' }}>
+            <div
+              style={{
+                position: 'absolute', top: 0, height: '100%', width: '40%',
+                borderRadius: 3, background: accent,
+                animation: 'acc-indeterminate 1.1s ease-in-out infinite',
+              }}
+            />
+          </div>
+          <div className="rx-mono" style={{ fontSize: 10.5, color: 'var(--zinc-400)', marginTop: 6 }}>
+            Importing your follows…
+          </div>
+        </div>
+      )}
+
+      {status === 'done' && state?.result && (
+        <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 8, animation: 'acc-pop .2s ease' }}>
+          <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 15, height: 15, borderRadius: '50%', background: 'rgba(34,197,94,.16)', color: 'var(--ok)', fontSize: 10 }}>✓</span>
+          <span className="rx-mono" style={{ fontSize: 10.5, color: 'var(--zinc-300)' }}>
+            Added {state.result.added} · skipped {state.result.skipped} · {state.result.total_seen} seen
+          </span>
+        </div>
+      )}
+
+      {status === 'error' && (
+        <div style={{ marginTop: 8, fontSize: 'var(--t-11)', color: '#f87171' }}>{state.error}</div>
+      )}
+    </div>
+  );
+}
+
+function YoutubeSignInExtras({ browsers, ytBrowser, setYtBrowser, ytAdvanced, setYtAdvanced, onPaste, ytError }) {
+  return (
+    <div style={{ marginBottom: 10 }}>
+      <button
+        type="button"
+        onClick={() => setYtAdvanced((v) => !v)}
+        style={{ all: 'unset', cursor: 'pointer', fontSize: 'var(--t-11)', color: 'var(--zinc-500)' }}
+      >
+        {ytAdvanced ? '▾ Other ways to sign in' : '▸ Other ways to sign in'}
+      </button>
+      {ytAdvanced && (
+        <div style={{ marginTop: 8, padding: '8px 10px', border: '1px solid var(--zinc-800)', borderRadius: 4, display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div>
+            <div style={{ fontSize: 'var(--t-11)', color: 'var(--zinc-300)', marginBottom: 4, fontWeight: 500 }}>
+              Use cookies from a browser
+            </div>
+            <div style={{ fontSize: 'var(--t-11)', color: 'var(--zinc-500)', marginBottom: 6 }}>
+              Reuses an existing browser session — no extra sign-in needed.
+            </div>
+            {browsers === null ? (
+              <div style={{ fontSize: 'var(--t-11)', color: 'var(--zinc-500)' }}>Detecting…</div>
+            ) : browsers.length === 0 ? (
+              <div style={{ fontSize: 'var(--t-11)', color: 'var(--zinc-500)' }}>No supported browsers found on this system.</div>
+            ) : (
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                {browsers.map((b) => {
+                  const active = ytBrowser === b.id;
+                  return (
+                    <Tooltip key={b.id} text={active ? `Stop using ${b.label} cookies` : `Use ${b.label} cookies`}>
+                      <button
+                        type="button"
+                        className={active ? 'rx-btn' : 'rx-btn rx-btn-ghost'}
+                        onClick={() => setYtBrowser(active ? null : b.id)}
+                      >
+                        {active ? `✓ ${b.label}` : b.label}
+                      </button>
+                    </Tooltip>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+          <div style={{ borderTop: 'var(--hair)', paddingTop: 8 }}>
+            <div style={{ fontSize: 'var(--t-11)', color: 'var(--zinc-300)', marginBottom: 4, fontWeight: 500 }}>Paste cookies</div>
+            <div style={{ fontSize: 'var(--t-11)', color: 'var(--zinc-500)', marginBottom: 6 }}>
+              For sandboxed builds (Flatpak) where the app can't reach a browser cookie store.
+            </div>
+            <button type="button" className="rx-btn rx-btn-ghost" onClick={onPaste}>Paste cookies…</button>
+          </div>
+          {ytError && <div style={{ fontSize: 'var(--t-11)', color: '#f87171' }}>{ytError}</div>}
+        </div>
+      )}
+    </div>
   );
 }
 
