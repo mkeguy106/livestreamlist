@@ -70,6 +70,7 @@ export const youtubeDetectBrowsers = () => invoke('youtube_detect_browsers');
 export const chaturbateLogin = () => invoke('chaturbate_login');
 export const chaturbateLogout = () => invoke('chaturbate_logout');
 export const importTwitchFollows = () => invoke('import_twitch_follows');
+export const importYoutubeSubscriptions = () => invoke('import_youtube_subscriptions');
 export const importChaturbateFollows = () => invoke('import_chaturbate_follows');
 export const getSettings = () => invoke('get_settings');
 export const updateSettings = (patch) => invoke('update_settings', { patch });
@@ -320,6 +321,8 @@ async function mockInvoke(name, args) {
       mockAuth = { ...mockAuth, chaturbate: null };
       return null;
     case 'import_twitch_follows':
+      return { added: 0, skipped: 0, total_seen: 0 };
+    case 'import_youtube_subscriptions':
       return { added: 0, skipped: 0, total_seen: 0 };
     case 'get_settings':
       return mockSettings;

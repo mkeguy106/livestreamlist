@@ -30,6 +30,15 @@ const LOGIN_URL: &str = "https://accounts.google.com/signin/v2/identifier?servic
 const POLL_INTERVAL: Duration = Duration::from_millis(750);
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(300); // 5 min — generous for 2FA
 
+/// Public InnerTube web key (ships in every youtube.com page; not secret).
+const INNERTUBE_KEY: &str = "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8";
+/// InnerTube web client version. YouTube is lenient about the exact value.
+const INNERTUBE_CLIENT_VERSION: &str = "2.20240101.00.00";
+const SUBS_UA: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 \
+     (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36";
+/// Safety cap so a malformed continuation loop can't page forever.
+const SUBS_MAX_PAGES: usize = 50;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct YouTubeCookies {
     #[serde(rename = "SID")]
@@ -493,6 +502,87 @@ pub struct SubChannel {
 pub struct SubsPage {
     pub channels: Vec<SubChannel>,
     pub continuation: Option<String>,
+}
+
+/// Compute the `Authorization: SAPISIDHASH …` header YouTube's authenticated
+/// InnerTube endpoints require: `SHA1("{ts} {SAPISID} {origin}")`.
+fn sapisid_hash(sapisid: &str) -> String {
+    use sha1::{Digest, Sha1};
+    let ts = chrono::Utc::now().timestamp();
+    let origin = "https://www.youtube.com";
+    let digest = Sha1::digest(format!("{ts} {sapisid} {origin}").as_bytes());
+    let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
+    format!("SAPISIDHASH {ts}_{hex}")
+}
+
+/// Fetch the signed-in user's subscriptions via InnerTube `browse`
+/// (`browseId: FEchannels`), paging through continuation tokens. Requires
+/// keyring cookies (in-app Google sign-in or pasted cookies) — returns a
+/// clear error when none are stored.
+pub async fn fetch_subscriptions(http: &reqwest::Client) -> Result<Vec<SubChannel>> {
+    let cookies = load()?.ok_or_else(|| {
+        anyhow!("Sign in to YouTube (or paste cookies) to import your subscriptions")
+    })?;
+    let cookie_header = cookies
+        .entries()
+        .iter()
+        .map(|(k, v)| format!("{k}={v}"))
+        .collect::<Vec<_>>()
+        .join("; ");
+    let auth = sapisid_hash(&cookies.sapisid);
+
+    let context = serde_json::json!({
+        "client": {
+            "clientName": "WEB",
+            "clientVersion": INNERTUBE_CLIENT_VERSION,
+            "hl": "en",
+            "gl": "US"
+        }
+    });
+
+    let url =
+        format!("https://www.youtube.com/youtubei/v1/browse?key={INNERTUBE_KEY}&prettyPrint=false");
+    let mut body = serde_json::json!({ "context": context, "browseId": "FEchannels" });
+
+    let mut all: Vec<SubChannel> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    for _ in 0..SUBS_MAX_PAGES {
+        let resp = http
+            .post(&url)
+            .header("Content-Type", "application/json")
+            .header("Cookie", &cookie_header)
+            .header("Authorization", &auth)
+            .header("Origin", "https://www.youtube.com")
+            .header("X-Origin", "https://www.youtube.com")
+            .header("User-Agent", SUBS_UA)
+            .json(&body)
+            .send()
+            .await
+            .context("POST youtubei/v1/browse")?;
+        if !resp.status().is_success() {
+            anyhow::bail!(
+                "YouTube subscriptions request failed: HTTP {}",
+                resp.status()
+            );
+        }
+        let v: serde_json::Value = resp.json().await.context("parsing browse response")?;
+        let page = parse_subscriptions(&v);
+        for ch in page.channels {
+            if seen.insert(ch.channel_id.clone()) {
+                all.push(ch);
+            }
+        }
+        match page.continuation {
+            Some(token) => {
+                body = serde_json::json!({ "context": context, "continuation": token });
+            }
+            None => break,
+        }
+    }
+
+    log::info!("YouTube import: scraped {} subscription(s)", all.len());
+    Ok(all)
 }
 
 /// Recursively walk an InnerTube `browse` (FEchannels) response, collecting
