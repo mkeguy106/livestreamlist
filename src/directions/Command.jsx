@@ -17,10 +17,11 @@ import { formatUptime, formatViewers } from '../utils/format.js';
 
 const FILTER_OPTS = [
   { k: 'all',       l: 'All channels' },
-  { k: 'twitch',    l: 'Twitch',   icon: 't' },
-  { k: 'kick',      l: 'Kick',     icon: 'k' },
-  { k: 'youtube',   l: 'YouTube',  icon: 'y' },
-  { k: 'favorites', l: 'Favorites' },
+  { k: 'twitch',     l: 'Twitch',     icon: 't' },
+  { k: 'kick',       l: 'Kick',       icon: 'k' },
+  { k: 'youtube',    l: 'YouTube',    icon: 'y' },
+  { k: 'chaturbate', l: 'Chaturbate', icon: 'c' },
+  { k: 'favorites',  l: 'Favorites' },
 ];
 const SORT_OPTS = [
   { k: 'viewers',  l: 'Viewers'   },
@@ -107,11 +108,12 @@ export default function Command({ ctx }) {
         if (!hay.includes(needle)) return false;
       }
       switch (filter) {
-        case 'twitch':    return l.platform === 'twitch';
-        case 'kick':      return l.platform === 'kick';
-        case 'youtube':   return l.platform === 'youtube';
-        case 'favorites': return Boolean(l.favorite);
-        default:          return true;
+        case 'twitch':     return l.platform === 'twitch';
+        case 'kick':       return l.platform === 'kick';
+        case 'youtube':    return l.platform === 'youtube';
+        case 'chaturbate': return l.platform === 'chaturbate';
+        case 'favorites':  return Boolean(l.favorite);
+        default:           return true;
       }
     });
 
