@@ -198,9 +198,16 @@ fn parse(root: &Value, username_fallback: &str) -> ChaturbateLive {
         .and_then(|v| v.as_i64())
         .or_else(|| root.get("num_users_watching").and_then(|v| v.as_i64()));
 
+    // The per-channel `chatvideocontext` endpoint exposes the live title
+    // (tip-goal text included) in `room_title` — confirmed against the live
+    // API and matching Qt's parser. The older fallbacks (`room_topic` /
+    // `room_subject` / `tip_topic`) don't appear in that response, so reading
+    // them first meant the per-channel path surfaced no title at all; they
+    // stay only as defensive fallbacks for any future shape drift.
     let title = root
-        .get("room_topic")
+        .get("room_title")
         .and_then(|v| v.as_str())
+        .or_else(|| root.get("room_topic").and_then(|v| v.as_str()))
         .or_else(|| root.get("room_subject").and_then(|v| v.as_str()))
         .or_else(|| root.get("tip_topic").and_then(|v| v.as_str()))
         .map(String::from);
@@ -225,6 +232,25 @@ fn parse(root: &Value, username_fallback: &str) -> ChaturbateLive {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn parse_reads_room_title() {
+        // The per-channel chatvideocontext endpoint carries the live title
+        // (incl. tip-goal text) in `room_title` — verified against the live
+        // API. The old field guesses (room_topic / room_subject / tip_topic)
+        // don't exist there, so the per-channel path produced no title at all
+        // (Qt reads room_title; this is the parity fix).
+        let root = json!({
+            "broadcaster_username": "modelx",
+            "room_status": "public",
+            "num_viewers": 42,
+            "room_title": "GOAL: squirt [120 tokens remaining] #teen"
+        });
+        let live = parse(&root, "modelx");
+        assert_eq!(live.title.as_deref(), Some("GOAL: squirt [120 tokens remaining] #teen"));
+        assert_eq!(live.viewers, Some(42));
+        assert_eq!(live.room_status, "public");
+    }
 
     #[test]
     fn parse_bulk_room_keeps_followed_public() {
