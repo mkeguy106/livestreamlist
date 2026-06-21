@@ -496,7 +496,6 @@ pub(crate) mod build_linux {
         profile_dir: PathBuf,
         tx: tokio::sync::oneshot::Sender<String>,
     ) -> Result<Arc<wry::WebView>> {
-        use std::sync::atomic::{AtomicBool, Ordering};
         use std::sync::{OnceLock, Weak};
 
         let _ = app; // reserved for parity with build_child; unused here
@@ -513,17 +512,16 @@ pub(crate) mod build_linux {
         // unmount.
         let cell: Arc<OnceLock<Weak<wry::WebView>>> = Arc::new(OnceLock::new());
         let cell_for_handler = cell.clone();
-        let ran = Arc::new(AtomicBool::new(false));
-        let handler = move |event: wry::PageLoadEvent, _url: String| {
+        let handler = move |event: wry::PageLoadEvent, url: String| {
             if !matches!(event, wry::PageLoadEvent::Finished) {
                 return;
             }
-            // Run the scrape exactly once (chaturbate.com may fire Finished on
-            // redirects). The shared profile clears Cloudflare transparently,
-            // so the first Finished is the real page.
-            if ran.swap(true, Ordering::SeqCst) {
-                return;
-            }
+            // Run the scrape on EVERY finished load (not just the first). A
+            // cold profile may land on a Cloudflare challenge / login wall
+            // first; CB_IMPORT_JS only posts back once it gets a definitive
+            // (logged-in) API response, so transient pages don't burn the
+            // single-shot reply — a later real load retries.
+            log::info!("cb import: page finished loading ({url})");
             let Some(weak) = cell_for_handler.get() else {
                 return;
             };
@@ -546,8 +544,10 @@ pub(crate) mod build_linux {
             .with_visible(false)
             .with_bounds(off_screen)
             .with_ipc_handler(move |req: wry::http::Request<String>| {
+                let body = req.into_body();
+                log::info!("cb import: received {} bytes from scrape", body.len());
                 if let Some(tx) = tx_cell.lock().take() {
-                    let _ = tx.send(req.into_body());
+                    let _ = tx.send(body);
                 }
             })
             .with_on_page_load_handler(handler)
@@ -884,8 +884,12 @@ pub const CB_IMPORT_KEY: &str = "chaturbate:__import__";
 /// `_FETCH_ALL_FOLLOWS_JS` + age-gate dismissal.
 const CB_IMPORT_JS: &str = r#"
 (function() {
+  if (!window.ipc || !window.ipc.postMessage) return;          // IPC not ready
   try { var g = document.getElementById('close_entrance_terms'); if (g) g.click(); } catch (e) {}
   function syncGet(url) {
+    // Returns null only when the request itself failed (non-200, threw, or
+    // non-JSON — e.g. a Cloudflare challenge or login wall). A logged-in
+    // endpoint returns a parsed object even when it lists zero rooms.
     try {
       var x = new XMLHttpRequest();
       x.open('GET', url, false);
@@ -897,31 +901,42 @@ const CB_IMPORT_JS: &str = r#"
   function nameOf(r) {
     return ((r && (r.username || r.room || r.slug || r.name)) || '').toLowerCase();
   }
-  var online = [], offline = [], seen = {};
-  function push(arr, n) { if (n && !seen[n]) { seen[n] = 1; arr.push(n); } }
   function rooms(d) { return d ? (d.rooms || d.online || (Array.isArray(d) ? d : [])) : []; }
 
-  var offset = 0, guard = 0;
-  while (guard++ < 200) {
-    var d = syncGet('/api/ts/roomlist/room-list/?follow=true&limit=90&offset=' + offset);
-    var rs = rooms(d);
-    if (rs.length) {
-      rs.forEach(function(r) { push(online, nameOf(r)); });
+  // Probe the followed-rooms endpoint first. If it isn't a definitive
+  // logged-in response, DON'T post — the page is a challenge/login wall or
+  // still warming up. Returning without posting leaves the single-shot reply
+  // channel open so a later page-load Finished retries.
+  var first = syncGet('/api/ts/roomlist/room-list/?follow=true&limit=90&offset=0');
+  if (first === null) return;
+
+  var online = [], offline = [], seen = {};
+  function push(arr, n) { if (n && !seen[n]) { seen[n] = 1; arr.push(n); } }
+
+  function collect(arr, d) {
+    var n = 0;
+    rooms(d).forEach(function(r) { push(arr, nameOf(r)); n++; });
+    return n;
+  }
+
+  collect(online, first);
+  var offset = 90, guard = 0;
+  if (offset < ((first.total_count) || 0)) {
+    while (guard++ < 200) {
+      var d = syncGet('/api/ts/roomlist/room-list/?follow=true&limit=90&offset=' + offset);
+      if (collect(online, d) === 0) break;
       offset += 90;
       if (offset >= ((d && d.total_count) || 0)) break;
-    } else break;
+    }
   }
-  rooms(syncGet('/follow/api/online_followed_rooms/')).forEach(function(r) { push(online, nameOf(r)); });
+  collect(online, syncGet('/follow/api/online_followed_rooms/'));
 
   offset = 0; guard = 0;
   while (guard++ < 200) {
     var d2 = syncGet('/api/ts/roomlist/room-list/?follow=true&limit=90&offline=true&offset=' + offset);
-    var rs2 = rooms(d2);
-    if (rs2.length) {
-      rs2.forEach(function(r) { push(offline, nameOf(r)); });
-      offset += 90;
-      if (offset >= ((d2 && d2.total_count) || 0)) break;
-    } else break;
+    if (collect(offline, d2) === 0) break;
+    offset += 90;
+    if (offset >= ((d2 && d2.total_count) || 0)) break;
   }
 
   var out = JSON.stringify({ online: online, offline: offline, total: online.length + offline.length });
