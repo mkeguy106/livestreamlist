@@ -108,7 +108,7 @@ export default function PreferencesDialog({ open, onClose }) {
         onClick={(e) => e.stopPropagation()}
         style={{
           width: 'min(720px, 100%)',
-          height: 'min(540px, 100%)',
+          height: 'min(700px, 100%)',
           background: 'var(--zinc-925)',
           border: '1px solid var(--zinc-800)',
           borderRadius: 8,
