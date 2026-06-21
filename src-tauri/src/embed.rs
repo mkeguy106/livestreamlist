@@ -494,6 +494,7 @@ pub(crate) mod build_linux {
         host_inner: &Inner,
         app: tauri::AppHandle,
         profile_dir: PathBuf,
+        session_cookie: String,
         tx: tokio::sync::oneshot::Sender<String>,
     ) -> Result<Arc<wry::WebView>> {
         use std::sync::{OnceLock, Weak};
@@ -538,11 +539,21 @@ pub(crate) mod build_linux {
             size: LogicalSize::new(1.0, 1.0).into(),
         };
 
+        // Inject the captured sessionid at document-start so the scrape's XHR
+        // authenticates. CB's sessionid is httpOnly, but the on-disk jar has no
+        // sessionid at all, so a JS-set cookie of the same name+value is what
+        // the server validates — same approach as share_window.rs for Twitch.
+        let init_js = format!(
+            "(function(){{try{{document.cookie='sessionid='+{}+';path=/;domain=.chaturbate.com;secure';}}catch(e){{}}}})();",
+            super::json_string(&session_cookie),
+        );
+
         let webview = WebViewBuilder::new_with_web_context(ctx)
             .with_url("https://chaturbate.com/")
             .with_background_color((9, 9, 11, 255))
             .with_visible(false)
             .with_bounds(off_screen)
+            .with_initialization_script(&init_js)
             .with_ipc_handler(move |req: wry::http::Request<String>| {
                 let body = req.into_body();
                 log::info!("cb import: received {} bytes from scrape", body.len());
@@ -795,6 +806,7 @@ impl EmbedHost {
     pub fn start_chaturbate_import(
         &self,
         app: &tauri::AppHandle,
+        session_cookie: String,
         tx: tokio::sync::oneshot::Sender<String>,
     ) -> anyhow::Result<()> {
         if self.inner.lock().children.contains_key(CB_IMPORT_KEY) {
@@ -803,7 +815,7 @@ impl EmbedHost {
         let profile_dir = crate::auth::chaturbate::webview_profile_dir()?;
         let webview = {
             let g = self.inner.lock();
-            build_linux::build_import_child(&g, app.clone(), profile_dir, tx)?
+            build_linux::build_import_child(&g, app.clone(), profile_dir, session_cookie, tx)?
         };
         let child = ChildEmbed {
             platform: Platform::Chaturbate,
@@ -1059,15 +1071,28 @@ fn handle_chaturbate_auth_outcome(app: &tauri::AppHandle, signed_in: bool) {
 #[cfg(target_os = "linux")]
 fn verify_chaturbate_auth_linux(webview: &Arc<wry::WebView>, app: &tauri::AppHandle) {
     let signed_in = match webview.cookies_for_url("https://chaturbate.com/") {
-        Ok(jar) => jar
-            .iter()
-            .any(|c| c.name() == "sessionid" && !c.value().is_empty()),
+        Ok(jar) => capture_cb_session(jar.iter().map(|c| (c.name(), c.value()))),
         Err(e) => {
             log::warn!("verify_chaturbate_auth cookies_for_url: {e:#}");
             return; // transient — don't flap the UI
         }
     };
     handle_chaturbate_auth_outcome(app, signed_in);
+}
+
+/// Given an iterator of (name, value) cookie pairs, persist `sessionid` for the
+/// follows-import to reuse and return whether the user is signed in. Capturing
+/// here (on every CB chat-embed page load) keeps the stored cookie fresh.
+fn capture_cb_session<'a>(cookies: impl Iterator<Item = (&'a str, &'a str)>) -> bool {
+    for (name, value) in cookies {
+        if name == "sessionid" && !value.is_empty() {
+            if let Err(e) = crate::auth::chaturbate::store_session_cookie(value) {
+                log::warn!("storing CB session cookie: {e:#}");
+            }
+            return true;
+        }
+    }
+    false
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -1077,9 +1102,7 @@ fn verify_chaturbate_auth_other(webview: &tauri::webview::Webview, app: &tauri::
         Err(_) => return,
     };
     let signed_in = match webview.cookies_for_url(site) {
-        Ok(jar) => jar
-            .iter()
-            .any(|c| c.name() == "sessionid" && !c.value().is_empty()),
+        Ok(jar) => capture_cb_session(jar.iter().map(|c| (c.name(), c.value()))),
         Err(e) => {
             log::warn!("verify_chaturbate_auth cookies_for_url: {e:#}");
             return;

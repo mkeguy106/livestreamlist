@@ -358,6 +358,18 @@ async fn import_chaturbate_follows(
     if !matches!(auth::chaturbate::load(), Ok(Some(_))) {
         return Err("Sign in to Chaturbate first".into());
     }
+    // CB's session cookie isn't persisted to the webview profile, so the
+    // import webview can only authenticate with a captured sessionid. We grab
+    // it on login + every CB chat-embed load; if it's missing the user needs
+    // to re-establish it.
+    let session_cookie = match auth::chaturbate::stored_session_cookie() {
+        Some(s) => s,
+        None => {
+            return Err("Couldn't find your Chaturbate session. Open a Chaturbate \
+                        channel's chat once (or use Sign in again), then retry the import."
+                .into())
+        }
+    };
 
     #[cfg(target_os = "linux")]
     {
@@ -373,7 +385,9 @@ async fn import_chaturbate_follows(
         let host_for_build = host.clone();
         let app_for_build = app.clone();
         app.run_on_main_thread(move || {
-            if let Err(e) = host_for_build.start_chaturbate_import(&app_for_build, tx) {
+            if let Err(e) =
+                host_for_build.start_chaturbate_import(&app_for_build, session_cookie, tx)
+            {
                 log::warn!("start_chaturbate_import: {e:#}");
                 // tx dropped → rx resolves to Err below.
             }
@@ -411,7 +425,7 @@ async fn import_chaturbate_follows(
 
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = (&app, &state, &embeds);
+        let _ = (&app, &state, &embeds, session_cookie);
         Err("Chaturbate import is not supported on this platform yet".into())
     }
 }
