@@ -11,7 +11,6 @@ import {
   listBlockedUsers,
   setUserMetadata,
   spellcheckListDicts,
-  twitchWebClear,
   twitchWebLogin,
   youtubeDetectBrowsers,
 } from '../ipc.js';
@@ -224,16 +223,6 @@ function AccountsTab() {
       setTwWebError(String(e?.message ?? e));
     } finally {
       setTwWebRunning(false);
-    }
-  };
-
-  const runTwitchWebClear = async () => {
-    setTwWebError(null);
-    try {
-      await twitchWebClear();
-      await refresh();
-    } catch (e) {
-      setTwWebError(String(e?.message ?? e));
     }
   };
 
@@ -461,6 +450,31 @@ function AccountsTab() {
             authButton={authButtonFor(p.id)}
             importZone={importZoneFor(p)}
             error={p.id === 'chaturbate' ? cbError : null}
+            footer={
+              // Sub-anniversary detection needs Twitch's first-party web cookie,
+              // which is normally captured silently (auto-scrape at launch). Only
+              // surface the manual sign-in when OAuth is connected but the web
+              // cookie wasn't captured — and keep it inside the Twitch card.
+              p.id === 'twitch' && auth.twitch && !twitch_web ? (
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+                  <div style={{ minWidth: 0, fontSize: 'var(--t-11)', color: 'var(--zinc-500)' }}>
+                    Enable sub-anniversary detection with a quick web sign-in.
+                    {twWebError && (
+                      <span style={{ color: 'var(--warn, #f59e0b)', display: 'block', marginTop: 3 }}>{twWebError}</span>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    className="rx-btn rx-btn-ghost"
+                    onClick={runTwitchWebLogin}
+                    disabled={twWebRunning}
+                    style={{ flexShrink: 0 }}
+                  >
+                    {twWebRunning ? 'Waiting on Twitch…' : 'Enable'}
+                  </button>
+                </div>
+              ) : null
+            }
             disclosure={
               p.id === 'youtube' && !platformConnected('youtube', auth) ? (
                 <YoutubeSignInExtras
@@ -476,43 +490,6 @@ function AccountsTab() {
             }
           />
         ))}
-
-        {/* Twitch web session — secondary, de-emphasized */}
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            gap: 12,
-            padding: '10px 13px',
-            border: 'var(--hair)',
-            borderRadius: 6,
-            background: 'var(--zinc-925)',
-          }}
-        >
-          <div style={{ minWidth: 0 }}>
-            <div style={{ fontSize: 'var(--t-12)', color: 'var(--zinc-300)', fontWeight: 500 }}>
-              Twitch web session
-            </div>
-            <div style={{ fontSize: 'var(--t-11)', color: 'var(--zinc-500)', marginTop: 2 }}>
-              {twitch_web
-                ? `Connected as @${twitch_web.login}`
-                : 'Sign in once for sub-anniversary detection (separate from chat login)'}
-            </div>
-          </div>
-          {twitch_web ? (
-            <button type="button" className="rx-btn rx-btn-ghost" onClick={runTwitchWebClear}>
-              Disconnect
-            </button>
-          ) : (
-            <button type="button" className="rx-btn rx-btn-ghost" onClick={runTwitchWebLogin} disabled={twWebRunning}>
-              {twWebRunning ? 'Waiting on Twitch…' : 'Connect'}
-            </button>
-          )}
-        </div>
-        {twWebError && (
-          <div style={{ color: 'var(--warn, #f59e0b)', fontSize: 'var(--t-11)', paddingLeft: 4 }}>{twWebError}</div>
-        )}
       </div>
 
       <YoutubePasteDialog
@@ -527,7 +504,7 @@ function AccountsTab() {
   );
 }
 
-function PlatformCard({ cfg, connected, detail, authButton, importZone, disclosure, error }) {
+function PlatformCard({ cfg, connected, detail, authButton, importZone, disclosure, error, footer }) {
   return (
     <div
       style={{
@@ -573,6 +550,12 @@ function PlatformCard({ cfg, connected, detail, authButton, importZone, disclosu
           <div style={{ marginTop: 8, fontSize: 'var(--t-11)', color: 'var(--live)' }}>{error}</div>
         )}
       </div>
+
+      {footer && (
+        <div style={{ borderTop: '1px solid rgba(255,255,255,.05)', background: 'var(--zinc-925)', padding: '10px 14px' }}>
+          {footer}
+        </div>
+      )}
     </div>
   );
 }
