@@ -168,7 +168,7 @@ pub async fn fetch_live(
     // Step 3: portrait dedupe on primary — only when there's something to swap to.
     let mut primary_resolved = primary_stream.clone();
     let primary_player = match fetch_watch_html(http, &primary_stream.video_id).await {
-        Ok(Some(p)) => Some(p),
+        Ok(Some((p, _viewers))) => Some(p),
         Ok(None) => None,
         Err(e) => {
             log::debug!("YT /watch primary scrape failed: {e:#}");
@@ -190,8 +190,8 @@ pub async fn fetch_live(
             continue;
         }
         match fetch_watch_html(http, vid).await {
-            Ok(Some(player_response)) => {
-                if let Some(stream) = parse_player_response(&player_response) {
+            Ok(Some((player_response, viewers))) => {
+                if let Some(stream) = parse_player_response(&player_response, viewers) {
                     streams.push(stream);
                 }
             }
@@ -219,12 +219,12 @@ async fn find_landscape_alternative(
         if vid == current_video_id {
             continue;
         }
-        let player_response = match fetch_watch_html(http, vid).await {
-            Ok(Some(p)) => p,
+        let (player_response, viewers) = match fetch_watch_html(http, vid).await {
+            Ok(Some(pair)) => pair,
             _ => continue,
         };
         if !is_portrait(&player_response) {
-            return parse_player_response(&player_response);
+            return parse_player_response(&player_response, viewers);
         }
     }
     None
@@ -272,11 +272,17 @@ async fn fetch_primary_via_scrape(
         .unwrap_or(channel_id)
         .to_string();
 
+    // Concurrent viewer count comes from ytInitialData, not the player
+    // response (whose videoDetails.viewCount is the lifetime total).
+    let viewers = extract_initial_data(&html, "ytInitialData")
+        .as_ref()
+        .and_then(parse_concurrent_viewers);
+
     // parse_player_response only returns Some when isLive is true.
     // For offline channels we return Some(YouTubeLive { streams: [] }),
     // which the caller treats as "scrape succeeded, channel offline" —
     // no yt-dlp fallback needed.
-    let streams = if let Some(stream) = parse_player_response(&player_response) {
+    let streams = if let Some(stream) = parse_player_response(&player_response, viewers) {
         vec![stream]
     } else {
         Vec::new()
@@ -484,7 +490,15 @@ async fn fetch_streams_html(http: &reqwest::Client, channel_id: &str) -> Result<
 }
 
 /// HTTP GET `youtube.com/watch?v={id}` and extract `ytInitialPlayerResponse`.
-async fn fetch_watch_html(http: &reqwest::Client, video_id: &str) -> Result<Option<Value>> {
+/// Returns `(ytInitialPlayerResponse, concurrent_viewers)` for a watch page.
+/// The player response carries metadata (id/title/thumbnail/dimensions); the
+/// concurrent viewer count is scraped separately from `ytInitialData` because
+/// the player response only exposes the lifetime total. `None` when the page
+/// has no player-response blob.
+async fn fetch_watch_html(
+    http: &reqwest::Client,
+    video_id: &str,
+) -> Result<Option<(Value, Option<i64>)>> {
     let url = format!("https://www.youtube.com/watch?v={video_id}");
     let mut req = http.get(&url).timeout(HTTP_TIMEOUT);
     for (k, v) in SCRAPE_HEADERS {
@@ -496,7 +510,13 @@ async fn fetch_watch_html(http: &reqwest::Client, video_id: &str) -> Result<Opti
         return Ok(None);
     }
     let html = resp.text().await.context("reading /watch body")?;
-    Ok(extract_initial_data(&html, "ytInitialPlayerResponse"))
+    let Some(player_response) = extract_initial_data(&html, "ytInitialPlayerResponse") else {
+        return Ok(None);
+    };
+    let viewers = extract_initial_data(&html, "ytInitialData")
+        .as_ref()
+        .and_then(parse_concurrent_viewers);
+    Ok(Some((player_response, viewers)))
 }
 
 /// Parse the `ytInitialData` JSON from a YouTube channel's `/streams` page
@@ -555,7 +575,7 @@ fn parse_streams_page(initial_data: &Value) -> Vec<String> {
 /// Parse a `ytInitialPlayerResponse` JSON object into a `YouTubeStream`.
 /// Returns `None` if the video isn't currently live or if any required
 /// field is missing.
-fn parse_player_response(player_response: &Value) -> Option<YouTubeStream> {
+fn parse_player_response(player_response: &Value, viewers: Option<i64>) -> Option<YouTubeStream> {
     let details = player_response.get("videoDetails")?.as_object()?;
     let video_id = details.get("videoId").and_then(|v| v.as_str())?.to_string();
     let title = details
@@ -588,24 +608,11 @@ fn parse_player_response(player_response: &Value) -> Option<YouTubeStream> {
                 .map(String::from)
         });
 
-    // Viewers: prefer `videoDetails.viewCount` — for LIVE streams this
-    // is the concurrent viewer count (Qt's parser uses the same field).
-    // `microformat.playerMicroformatRenderer.viewCount` is the all-time
-    // total and is typically missing on a live broadcast, which left
-    // small streamers showing no viewer count at all.
-    let parse_count = |v: &Value| -> Option<i64> {
-        v.as_str()
-            .and_then(|s| s.parse::<i64>().ok())
-            .or_else(|| v.as_i64())
-    };
-    let viewers = details
-        .get("viewCount")
-        .and_then(parse_count)
-        .or_else(|| {
-            player_response
-                .pointer("/microformat/playerMicroformatRenderer/viewCount")
-                .and_then(parse_count)
-        });
+    // Viewers are passed in by the caller, sourced from the page's
+    // `ytInitialData` concurrent count (see `parse_concurrent_viewers`).
+    // We deliberately do NOT read `videoDetails.viewCount` here: on a live
+    // stream that field is the lifetime total, not the concurrent count
+    // (NASA's perpetual ISS stream reads 1,014,751 → the "1014.7k" bug).
 
     // started_at from liveBroadcastDetails.startTimestamp (RFC3339).
     let started_at = player_response
@@ -622,6 +629,56 @@ fn parse_player_response(player_response: &Value) -> Option<YouTubeStream> {
         started_at,
         thumbnail_url,
     })
+}
+
+/// Extract the live *concurrent* viewer count from a page's `ytInitialData`.
+///
+/// The concurrent ("watching now") count is NOT in `ytInitialPlayerResponse`
+/// — `videoDetails.viewCount` there is the lifetime total (NASA's perpetual
+/// ISS stream reads 1,014,751). The real-time count lives in
+/// `videoPrimaryInfoRenderer.viewCount.videoViewCountRenderer`, which carries
+/// an `isLive` flag plus an unformatted `originalViewCount` and a formatted
+/// `viewCount.runs` ("108" + " watching now"). We require `isLive == true` so
+/// a VOD's total (same renderer, isLive=false) never leaks through.
+fn parse_concurrent_viewers(initial_data: &Value) -> Option<i64> {
+    let renderer = find_value(initial_data, "videoViewCountRenderer")?;
+    if !renderer
+        .get("isLive")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        return None;
+    }
+    // Prefer the unformatted integer string.
+    if let Some(n) = renderer
+        .get("originalViewCount")
+        .and_then(|v| v.as_str())
+        .and_then(|s| s.parse::<i64>().ok())
+    {
+        return Some(n);
+    }
+    // Fall back to the formatted run text, stripping grouping commas.
+    renderer
+        .pointer("/viewCount/runs/0/text")
+        .and_then(|v| v.as_str())
+        .map(|s| s.chars().filter(|c| c.is_ascii_digit()).collect::<String>())
+        .filter(|s| !s.is_empty())
+        .and_then(|s| s.parse::<i64>().ok())
+}
+
+/// Depth-first search for the first object value stored under `key`
+/// anywhere in a JSON tree. Returns a reference to that value.
+fn find_value<'a>(node: &'a Value, key: &str) -> Option<&'a Value> {
+    match node {
+        Value::Object(map) => {
+            if let Some(v) = map.get(key) {
+                return Some(v);
+            }
+            map.values().find_map(|v| find_value(v, key))
+        }
+        Value::Array(arr) => arr.iter().find_map(|v| find_value(v, key)),
+        _ => None,
+    }
 }
 
 /// True when the first format with a width and height has width < height.
@@ -699,6 +756,69 @@ mod tests {
     fn is_portrait_false_when_streaming_data_missing() {
         assert!(!is_portrait(&json!({})));
         assert!(!is_portrait(&json!({ "videoDetails": {} })));
+    }
+
+    /// Mirrors the real `ytInitialData` shape on a `/live` or `/watch`
+    /// page: the concurrent count lives under videoPrimaryInfoRenderer,
+    /// NOT in ytInitialPlayerResponse's videoDetails.viewCount (which is
+    /// the lifetime total — e.g. NASA's 1,014,751).
+    fn watch_next_data_fixture(renderer: Value) -> Value {
+        json!({
+            "contents": {
+                "twoColumnWatchNextResults": {
+                    "results": {
+                        "results": {
+                            "contents": [
+                                { "videoPrimaryInfoRenderer": { "viewCount": renderer } }
+                            ]
+                        }
+                    }
+                }
+            }
+        })
+    }
+
+    #[test]
+    fn parse_concurrent_viewers_reads_original_view_count() {
+        let data = watch_next_data_fixture(json!({
+            "videoViewCountRenderer": {
+                "viewCount": { "runs": [{ "text": "108" }, { "text": " watching now" }] },
+                "isLive": true,
+                "originalViewCount": "108"
+            }
+        }));
+        assert_eq!(parse_concurrent_viewers(&data), Some(108));
+    }
+
+    #[test]
+    fn parse_concurrent_viewers_falls_back_to_runs() {
+        // No originalViewCount — parse the formatted run text instead.
+        let data = watch_next_data_fixture(json!({
+            "videoViewCountRenderer": {
+                "viewCount": { "runs": [{ "text": "1,234" }, { "text": " watching now" }] },
+                "isLive": true
+            }
+        }));
+        assert_eq!(parse_concurrent_viewers(&data), Some(1234));
+    }
+
+    #[test]
+    fn parse_concurrent_viewers_none_when_not_live() {
+        // A VOD's videoViewCountRenderer carries the total view count with
+        // isLive=false; we must NOT surface that as a concurrent count.
+        let data = watch_next_data_fixture(json!({
+            "videoViewCountRenderer": {
+                "viewCount": { "simpleText": "1,014,751 views" },
+                "isLive": false,
+                "originalViewCount": "1014751"
+            }
+        }));
+        assert_eq!(parse_concurrent_viewers(&data), None);
+    }
+
+    #[test]
+    fn parse_concurrent_viewers_none_when_absent() {
+        assert_eq!(parse_concurrent_viewers(&json!({})), None);
     }
 
     fn streams_page_fixture() -> Value {
@@ -788,54 +908,49 @@ mod tests {
     }
 
     #[test]
-    fn parse_player_response_falls_back_to_microformat_view_count() {
-        // Some YT responses put the count only in microformat. Even if
-        // videoDetails.viewCount is missing, we still surface a number.
-        let data = json!({
-            "videoDetails": {
-                "videoId": "vid",
-                "title": "fallback case",
-                "isLive": true,
-                "thumbnail": { "thumbnails": [{ "url": "x", "width": 100, "height": 100 }] }
-            },
-            "microformat": {
-                "playerMicroformatRenderer": {
-                    "liveBroadcastDetails": {
-                        "isLiveNow": true,
-                        "startTimestamp": "2026-04-26T12:00:00+00:00"
-                    },
-                    "viewCount": "9999"
-                }
-            }
-        });
-        let stream = parse_player_response(&data).expect("live");
-        assert_eq!(stream.viewers, Some(9999));
+    fn parse_player_response_surfaces_passed_concurrent_count() {
+        // viewers come from the caller (ytInitialData concurrent count),
+        // NOT from videoDetails.viewCount — which is the lifetime total on
+        // a live stream and was the source of the NASA "1014.7k" bug.
+        let stream = parse_player_response(
+            &watch_player_response_fixture("vidXYZ", "ISS Earth View", 1_014_751),
+            Some(108),
+        )
+        .expect("should parse");
+        assert_eq!(stream.video_id, "vidXYZ");
+        assert_eq!(stream.title, "ISS Earth View");
+        assert_eq!(stream.viewers, Some(108));
+        assert_eq!(
+            stream.thumbnail_url.as_deref(),
+            Some("https://i.ytimg.com/vi/x/hi.jpg")
+        );
+        assert!(stream.started_at.is_some());
     }
 
     #[test]
-    fn parse_player_response_extracts_metadata() {
+    fn parse_player_response_viewers_none_when_no_concurrent_count() {
+        // Never fall back to the lifetime total in videoDetails.viewCount.
         let stream = parse_player_response(
-            &watch_player_response_fixture("vidXYZ", "ISS Earth View", 1234),
-        ).expect("should parse");
-        assert_eq!(stream.video_id, "vidXYZ");
-        assert_eq!(stream.title, "ISS Earth View");
-        assert_eq!(stream.viewers, Some(1234));
-        assert_eq!(stream.thumbnail_url.as_deref(), Some("https://i.ytimg.com/vi/x/hi.jpg"));
-        assert!(stream.started_at.is_some());
+            &watch_player_response_fixture("vidXYZ", "title", 1_014_751),
+            None,
+        )
+        .expect("should parse");
+        assert_eq!(stream.viewers, None);
     }
 
     #[test]
     fn parse_player_response_returns_none_when_not_live() {
         let mut data = watch_player_response_fixture("vidXYZ", "title", 0);
         data["videoDetails"]["isLive"] = json!(false);
-        data["microformat"]["playerMicroformatRenderer"]["liveBroadcastDetails"]["isLiveNow"] = json!(false);
-        assert!(parse_player_response(&data).is_none());
+        data["microformat"]["playerMicroformatRenderer"]["liveBroadcastDetails"]["isLiveNow"] =
+            json!(false);
+        assert!(parse_player_response(&data, Some(5)).is_none());
     }
 
     #[test]
     fn parse_player_response_returns_none_for_unexpected_shape() {
-        assert!(parse_player_response(&json!({})).is_none());
-        assert!(parse_player_response(&json!({ "videoDetails": "wrong" })).is_none());
+        assert!(parse_player_response(&json!({}), None).is_none());
+        assert!(parse_player_response(&json!({ "videoDetails": "wrong" }), None).is_none());
     }
 
     #[test]
