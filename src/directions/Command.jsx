@@ -370,7 +370,7 @@ export default function Command({ ctx }) {
                           </span>
                         </Tooltip>
                       )}
-                      <span style={{ fontSize: 'var(--t-12)', color: priv ? 'var(--cb)' : 'var(--zinc-100)', fontWeight: 500 }}>
+                      <span style={{ fontSize: 'var(--t-12)', color: priv ? 'var(--zinc-400)' : 'var(--zinc-100)', fontWeight: 500 }}>
                         {ch.display_name}
                       </span>
                       {isPlaying && (
