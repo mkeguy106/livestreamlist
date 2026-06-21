@@ -657,7 +657,7 @@ function YoutubeSignInExtras({ browsers, ytBrowser, setYtBrowser, ytAdvanced, se
       <button
         type="button"
         onClick={() => setYtAdvanced((v) => !v)}
-        style={{ all: 'unset', cursor: 'pointer', fontSize: 'var(--t-11)', color: 'var(--zinc-500)' }}
+        style={{ all: 'unset', cursor: 'pointer', fontSize: 'var(--t-11)', color: 'var(--zinc-500)', outline: 'revert', outlineOffset: 2 }}
       >
         {ytAdvanced ? '▾ Other ways to sign in' : '▸ Other ways to sign in'}
       </button>
@@ -683,6 +683,7 @@ function YoutubeSignInExtras({ browsers, ytBrowser, setYtBrowser, ytAdvanced, se
                       <button
                         type="button"
                         className={active ? 'rx-btn' : 'rx-btn rx-btn-ghost'}
+                        aria-label={active ? `Stop using ${b.label} cookies` : `Use ${b.label} cookies`}
                         onClick={() => setYtBrowser(active ? null : b.id)}
                       >
                         {active ? `✓ ${b.label}` : b.label}
