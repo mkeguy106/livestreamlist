@@ -119,16 +119,16 @@ export default function PreferencesDialog({ open, onClose }) {
         }}
       >
         {/* Close (top-right) */}
-        <Tooltip text="Close" align="right">
+        <Tooltip
+          text="Close"
+          align="right"
+          wrapperStyle={{ position: 'absolute', top: 10, right: 10, zIndex: 2 }}
+        >
           <button
             type="button"
             onClick={onClose}
             aria-label="Close preferences"
             style={{
-              position: 'absolute',
-              top: 10,
-              right: 10,
-              zIndex: 2,
               width: 28,
               height: 28,
               display: 'flex',
