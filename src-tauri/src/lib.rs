@@ -331,7 +331,10 @@ async fn import_twitch_follows(state: State<'_, AppState>) -> Result<ImportResul
                 f.broadcaster_name
             },
             favorite: false,
-            dont_notify: false,
+            // Bulk-imported channels build a monitoring list, not an alert
+            // list — default to no go-live notification so importing a large
+            // follow list doesn't flood the desktop. Re-enable per channel.
+            dont_notify: true,
             auto_play: false,
             added_at: Some(Utc::now()),
         })

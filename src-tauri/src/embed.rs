@@ -886,10 +886,11 @@ const CB_IMPORT_JS: &str = r#"
 (function() {
   if (!window.ipc || !window.ipc.postMessage) return;          // IPC not ready
   try { var g = document.getElementById('close_entrance_terms'); if (g) g.click(); } catch (e) {}
+  function post(o) { try { window.ipc.postMessage(JSON.stringify(o)); } catch (e) {} }
   function syncGet(url) {
-    // Returns null only when the request itself failed (non-200, threw, or
-    // non-JSON — e.g. a Cloudflare challenge or login wall). A logged-in
-    // endpoint returns a parsed object even when it lists zero rooms.
+    // null only when the request itself failed (non-200, threw, or non-JSON —
+    // a Cloudflare challenge or login wall). A logged-in endpoint returns a
+    // parsed object even when it lists zero rooms.
     try {
       var x = new XMLHttpRequest();
       x.open('GET', url, false);
@@ -902,45 +903,56 @@ const CB_IMPORT_JS: &str = r#"
     return ((r && (r.username || r.room || r.slug || r.name)) || '').toLowerCase();
   }
   function rooms(d) { return d ? (d.rooms || d.online || (Array.isArray(d) ? d : [])) : []; }
+  function follows(r) { return r && r.is_following === true; }
 
-  // Probe the followed-rooms endpoint first. If it isn't a definitive
-  // logged-in response, DON'T post — the page is a challenge/login wall or
-  // still warming up. Returning without posting leaves the single-shot reply
-  // channel open so a later page-load Finished retries.
   var first = syncGet('/api/ts/roomlist/room-list/?follow=true&limit=90&offset=0');
-  if (first === null) return;
+  if (first === null) return;            // page not ready — retry on next load
+
+  // CRITICAL anonymous-guard: `follow=true` is silently ignored for
+  // unauthenticated requests and returns the ENTIRE public live roomlist
+  // (thousands of rooms, all is_following:false). A real follow-filtered
+  // response contains only followed rooms. If we got a large list with zero
+  // is_following flags, we are NOT signed in — refuse to import the public
+  // list and report it so the user sees a real error instead of 5000 rooms.
+  var rs0 = rooms(first);
+  var total = first.total_count || 0;
+  if (rs0.length > 0 && !rs0.some(follows) && total > 200) {
+    post({ error: 'not_authenticated' });
+    return;
+  }
 
   var online = [], offline = [], seen = {};
   function push(arr, n) { if (n && !seen[n]) { seen[n] = 1; arr.push(n); } }
-
+  // Collect ONLY rooms the user actually follows. Returns rooms seen on this
+  // page (for the loop's empty-page break), not rooms kept.
   function collect(arr, d) {
-    var n = 0;
-    rooms(d).forEach(function(r) { push(arr, nameOf(r)); n++; });
-    return n;
+    var rs = rooms(d);
+    rs.forEach(function(r) { if (follows(r)) push(arr, nameOf(r)); });
+    return rs.length;
   }
 
   collect(online, first);
   var offset = 90, guard = 0;
-  if (offset < ((first.total_count) || 0)) {
-    while (guard++ < 200) {
-      var d = syncGet('/api/ts/roomlist/room-list/?follow=true&limit=90&offset=' + offset);
-      if (collect(online, d) === 0) break;
-      offset += 90;
-      if (offset >= ((d && d.total_count) || 0)) break;
-    }
+  while (offset < total && guard++ < 60) {
+    var d = syncGet('/api/ts/roomlist/room-list/?follow=true&limit=90&offset=' + offset);
+    if (collect(online, d) === 0) break;
+    offset += 90;
   }
-  collect(online, syncGet('/follow/api/online_followed_rooms/'));
 
   offset = 0; guard = 0;
-  while (guard++ < 200) {
-    var d2 = syncGet('/api/ts/roomlist/room-list/?follow=true&limit=90&offline=true&offset=' + offset);
-    if (collect(offline, d2) === 0) break;
-    offset += 90;
-    if (offset >= ((d2 && d2.total_count) || 0)) break;
+  var d2 = syncGet('/api/ts/roomlist/room-list/?follow=true&limit=90&offline=true&offset=0');
+  if (d2 !== null) {
+    var totalOff = d2.total_count || 0;
+    collect(offline, d2);
+    offset = 90;
+    while (offset < totalOff && guard++ < 60) {
+      var dn = syncGet('/api/ts/roomlist/room-list/?follow=true&limit=90&offline=true&offset=' + offset);
+      if (collect(offline, dn) === 0) break;
+      offset += 90;
+    }
   }
 
-  var out = JSON.stringify({ online: online, offline: offline, total: online.length + offline.length });
-  try { window.ipc.postMessage(out); } catch (e) {}
+  post({ online: online, offline: offline, total: online.length + offline.length });
 })();
 "#;
 
@@ -950,14 +962,29 @@ struct CbFollowsPayload {
     online: Vec<String>,
     #[serde(default)]
     offline: Vec<String>,
+    #[serde(default)]
+    error: Option<String>,
 }
 
 /// Parse the JSON the import JS posts back and return a lowercased, deduped,
-/// non-empty list of followed usernames. Pure — unit-tested, no webview.
+/// list of followed usernames. Pure — unit-tested, no webview.
+///
+/// The scrape posts `{ error: "not_authenticated" }` when the followed-rooms
+/// endpoint returned the public list (the import webview had no session) — we
+/// translate that into a user-facing error rather than importing 5000 rooms.
 pub fn parse_cb_follows(payload: &str) -> anyhow::Result<Vec<String>> {
     use anyhow::Context as _;
     let p: CbFollowsPayload =
         serde_json::from_str(payload).context("parsing Chaturbate follows payload")?;
+    if let Some(err) = p.error.as_deref() {
+        if err == "not_authenticated" {
+            anyhow::bail!(
+                "Couldn't read your Chaturbate follows — the import wasn't signed in. \
+                 Open Chaturbate chat in the app once, then try the import again."
+            );
+        }
+        anyhow::bail!("Chaturbate import error: {err}");
+    }
     let mut seen = std::collections::HashSet::new();
     let mut out = Vec::new();
     for u in p.online.into_iter().chain(p.offline) {
@@ -1246,5 +1273,11 @@ mod tests {
     #[test]
     fn parse_cb_follows_rejects_garbage() {
         assert!(parse_cb_follows("not json").is_err());
+    }
+
+    #[test]
+    fn parse_cb_follows_not_authenticated_marker_errors() {
+        let err = parse_cb_follows(r#"{"error":"not_authenticated"}"#).unwrap_err();
+        assert!(err.to_string().contains("wasn't signed in"));
     }
 }
