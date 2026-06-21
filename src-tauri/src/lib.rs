@@ -343,6 +343,35 @@ async fn import_twitch_follows(state: State<'_, AppState>) -> Result<ImportResul
     Ok(add_imported_channels(&state.store, channels))
 }
 
+#[tauri::command]
+async fn import_youtube_subscriptions(state: State<'_, AppState>) -> Result<ImportResult, String> {
+    let subs = auth::youtube::fetch_subscriptions(&state.http)
+        .await
+        .map_err(err_string)?;
+
+    let channels = subs
+        .into_iter()
+        .map(|s| Channel {
+            platform: Platform::Youtube,
+            channel_id: s.channel_id.clone(),
+            display_name: if s.title.is_empty() {
+                s.channel_id
+            } else {
+                s.title
+            },
+            favorite: false,
+            // Bulk import = monitoring list, not an alert list — default to no
+            // go-live notification so importing a large subscription list
+            // doesn't flood the desktop. Re-enable per channel.
+            dont_notify: true,
+            auto_play: false,
+            added_at: Some(Utc::now()),
+        })
+        .collect();
+
+    Ok(add_imported_channels(&state.store, channels))
+}
+
 /// Bulk-import the signed-in user's Chaturbate follows. Drives a transient,
 /// invisible logged-in Chaturbate webview that scrapes the followed-room
 /// endpoints and posts the list back via wry IPC (see `embed::build_import_child`).
@@ -1728,6 +1757,7 @@ macro_rules! register_handlers {
             $crate::chaturbate_login,
             $crate::chaturbate_logout,
             $crate::import_twitch_follows,
+            $crate::import_youtube_subscriptions,
             $crate::import_chaturbate_follows,
             $crate::spellcheck_check,
             $crate::spellcheck_suggest,
