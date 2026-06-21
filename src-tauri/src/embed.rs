@@ -484,6 +484,79 @@ pub(crate) mod build_linux {
         let _ = cell.set(Arc::downgrade(&webview_arc));
         Ok(webview_arc)
     }
+
+    /// Build the transient, invisible Chaturbate follows-import webview. Loads
+    /// chaturbate.com with the logged-in profile, runs `CB_IMPORT_JS` once on
+    /// first page-load Finished, and forwards the JS's `window.ipc.postMessage`
+    /// payload through `tx` (fired at most once). Parked off-screen at 1×1 and
+    /// never shown — it only needs a live page context to run same-origin XHR.
+    pub(crate) fn build_import_child(
+        host_inner: &Inner,
+        app: tauri::AppHandle,
+        profile_dir: PathBuf,
+        tx: tokio::sync::oneshot::Sender<String>,
+    ) -> Result<Arc<wry::WebView>> {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::{OnceLock, Weak};
+
+        let _ = app; // reserved for parity with build_child; unused here
+        let fixed = host_inner
+            .fixed
+            .as_ref()
+            .context("install_overlay was not called yet — gtk::Fixed missing")?;
+
+        let ctx: &'static mut WebContext =
+            Box::leak(Box::new(WebContext::new(Some(profile_dir))));
+
+        // Same Weak/OnceLock discipline as build_child: capturing a strong Arc
+        // in the page-load closure would cycle and prevent webview.destroy() on
+        // unmount.
+        let cell: Arc<OnceLock<Weak<wry::WebView>>> = Arc::new(OnceLock::new());
+        let cell_for_handler = cell.clone();
+        let ran = Arc::new(AtomicBool::new(false));
+        let handler = move |event: wry::PageLoadEvent, _url: String| {
+            if !matches!(event, wry::PageLoadEvent::Finished) {
+                return;
+            }
+            // Run the scrape exactly once (chaturbate.com may fire Finished on
+            // redirects). The shared profile clears Cloudflare transparently,
+            // so the first Finished is the real page.
+            if ran.swap(true, Ordering::SeqCst) {
+                return;
+            }
+            let Some(weak) = cell_for_handler.get() else {
+                return;
+            };
+            let Some(wv) = weak.upgrade() else { return; };
+            let _ = wv.evaluate_script(super::CB_IMPORT_JS);
+        };
+
+        // oneshot::Sender::send consumes self, but with_ipc_handler wants Fn —
+        // stash it in an Option behind a Mutex and take() on first message.
+        let tx_cell = Arc::new(Mutex::new(Some(tx)));
+
+        let off_screen = WryRect {
+            position: LogicalPosition::new(-10_000.0, -10_000.0).into(),
+            size: LogicalSize::new(1.0, 1.0).into(),
+        };
+
+        let webview = WebViewBuilder::new_with_web_context(ctx)
+            .with_url("https://chaturbate.com/")
+            .with_background_color((9, 9, 11, 255))
+            .with_visible(false)
+            .with_bounds(off_screen)
+            .with_ipc_handler(move |req: wry::http::Request<String>| {
+                if let Some(tx) = tx_cell.lock().take() {
+                    let _ = tx.send(req.into_body());
+                }
+            })
+            .with_on_page_load_handler(handler)
+            .build_gtk(&fixed.0)
+            .map_err(|e| anyhow::anyhow!("build_gtk (cb import) failed: {e}"))?;
+        let webview_arc = Arc::new(webview);
+        let _ = cell.set(Arc::downgrade(&webview_arc));
+        Ok(webview_arc)
+    }
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -710,6 +783,40 @@ impl EmbedHost {
         }
         Ok(())
     }
+
+    /// Mount the transient Chaturbate follows-import webview under
+    /// [`CB_IMPORT_KEY`]. Results arrive on `tx` (the scraped follow JSON);
+    /// the caller awaits it and then calls `unmount(CB_IMPORT_KEY)` to drop the
+    /// webview. Single-flight: errors if an import is already in flight.
+    ///
+    /// MUST be called on the GTK main thread (builds a wry WebView via
+    /// `build_gtk`) — invoke through `AppHandle::run_on_main_thread`.
+    #[cfg(target_os = "linux")]
+    pub fn start_chaturbate_import(
+        &self,
+        app: &tauri::AppHandle,
+        tx: tokio::sync::oneshot::Sender<String>,
+    ) -> anyhow::Result<()> {
+        if self.inner.lock().children.contains_key(CB_IMPORT_KEY) {
+            anyhow::bail!("a Chaturbate import is already running");
+        }
+        let profile_dir = crate::auth::chaturbate::webview_profile_dir()?;
+        let webview = {
+            let g = self.inner.lock();
+            build_linux::build_import_child(&g, app.clone(), profile_dir, tx)?
+        };
+        let child = ChildEmbed {
+            platform: Platform::Chaturbate,
+            bounds: Rect::new(-10_000.0, -10_000.0, 1.0, 1.0),
+            visible: false,
+            inner: ChildInner(webview),
+        };
+        self.inner
+            .lock()
+            .children
+            .insert(CB_IMPORT_KEY.to_string(), child);
+        Ok(())
+    }
 }
 
 const YT_THEME_CSS: &str = r#"
@@ -763,6 +870,90 @@ const CB_ISOLATE_JS: &str = r#"
   var iv = setInterval(function() { tries++; if (apply() || tries > 80) clearInterval(iv); }, 250);
 })();
 "#;
+
+/// Reserved EmbedKey for the transient Chaturbate follows-import webview.
+/// Not a real channel — never collides with a `platform:channel_id` key
+/// because real Chaturbate keys use the model's username.
+pub const CB_IMPORT_KEY: &str = "chaturbate:__import__";
+
+/// JS run once (on the first page-load Finished) inside a logged-in
+/// Chaturbate webview. Synchronously scrapes the followed-room endpoints —
+/// same-origin, so the session cookie rides along and Cloudflare is already
+/// cleared by the shared profile — then posts the result back to Rust via
+/// wry's `window.ipc.postMessage`. Ported from the Qt app's
+/// `_FETCH_ALL_FOLLOWS_JS` + age-gate dismissal.
+const CB_IMPORT_JS: &str = r#"
+(function() {
+  try { var g = document.getElementById('close_entrance_terms'); if (g) g.click(); } catch (e) {}
+  function syncGet(url) {
+    try {
+      var x = new XMLHttpRequest();
+      x.open('GET', url, false);
+      x.send();
+      if (x.status === 200) return JSON.parse(x.responseText);
+      return null;
+    } catch (e) { return null; }
+  }
+  function nameOf(r) {
+    return ((r && (r.username || r.room || r.slug || r.name)) || '').toLowerCase();
+  }
+  var online = [], offline = [], seen = {};
+  function push(arr, n) { if (n && !seen[n]) { seen[n] = 1; arr.push(n); } }
+  function rooms(d) { return d ? (d.rooms || d.online || (Array.isArray(d) ? d : [])) : []; }
+
+  var offset = 0, guard = 0;
+  while (guard++ < 200) {
+    var d = syncGet('/api/ts/roomlist/room-list/?follow=true&limit=90&offset=' + offset);
+    var rs = rooms(d);
+    if (rs.length) {
+      rs.forEach(function(r) { push(online, nameOf(r)); });
+      offset += 90;
+      if (offset >= ((d && d.total_count) || 0)) break;
+    } else break;
+  }
+  rooms(syncGet('/follow/api/online_followed_rooms/')).forEach(function(r) { push(online, nameOf(r)); });
+
+  offset = 0; guard = 0;
+  while (guard++ < 200) {
+    var d2 = syncGet('/api/ts/roomlist/room-list/?follow=true&limit=90&offline=true&offset=' + offset);
+    var rs2 = rooms(d2);
+    if (rs2.length) {
+      rs2.forEach(function(r) { push(offline, nameOf(r)); });
+      offset += 90;
+      if (offset >= ((d2 && d2.total_count) || 0)) break;
+    } else break;
+  }
+
+  var out = JSON.stringify({ online: online, offline: offline, total: online.length + offline.length });
+  try { window.ipc.postMessage(out); } catch (e) {}
+})();
+"#;
+
+#[derive(serde::Deserialize)]
+struct CbFollowsPayload {
+    #[serde(default)]
+    online: Vec<String>,
+    #[serde(default)]
+    offline: Vec<String>,
+}
+
+/// Parse the JSON the import JS posts back and return a lowercased, deduped,
+/// non-empty list of followed usernames. Pure — unit-tested, no webview.
+pub fn parse_cb_follows(payload: &str) -> anyhow::Result<Vec<String>> {
+    use anyhow::Context as _;
+    let p: CbFollowsPayload =
+        serde_json::from_str(payload).context("parsing Chaturbate follows payload")?;
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for u in p.online.into_iter().chain(p.offline) {
+        let u = u.trim().to_lowercase();
+        if u.is_empty() || !seen.insert(u.clone()) {
+            continue;
+        }
+        out.push(u);
+    }
+    Ok(out)
+}
 
 fn json_string(s: &str) -> String {
     serde_json::to_string(s).unwrap_or_else(|_| "''".to_string())
@@ -1012,5 +1203,33 @@ mod tests {
     #[test]
     fn classify_not_logged_in_when_neither() {
         assert_eq!(classify_chaturbate_auth(false, false), "not_logged_in");
+    }
+
+    #[test]
+    fn parse_cb_follows_lowercases_and_dedupes() {
+        let json = r#"{"online":["Alice","BOB","alice"],"offline":["bob","carol"]}"#;
+        let got = parse_cb_follows(json).unwrap();
+        assert_eq!(got, vec!["alice", "bob", "carol"]);
+    }
+
+    #[test]
+    fn parse_cb_follows_skips_blanks_and_handles_missing_fields() {
+        let json = r#"{"online":["","  ","Dave"]}"#;
+        let got = parse_cb_follows(json).unwrap();
+        assert_eq!(got, vec!["dave"]);
+    }
+
+    #[test]
+    fn parse_cb_follows_empty_payload_is_empty_list() {
+        assert_eq!(parse_cb_follows("{}").unwrap(), Vec::<String>::new());
+        assert_eq!(
+            parse_cb_follows(r#"{"online":[],"offline":[],"total":0}"#).unwrap(),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn parse_cb_follows_rejects_garbage() {
+        assert!(parse_cb_follows("not json").is_err());
     }
 }

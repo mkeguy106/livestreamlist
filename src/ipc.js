@@ -70,6 +70,7 @@ export const youtubeDetectBrowsers = () => invoke('youtube_detect_browsers');
 export const chaturbateLogin = () => invoke('chaturbate_login');
 export const chaturbateLogout = () => invoke('chaturbate_logout');
 export const importTwitchFollows = () => invoke('import_twitch_follows');
+export const importChaturbateFollows = () => invoke('import_chaturbate_follows');
 export const getSettings = () => invoke('get_settings');
 export const updateSettings = (patch) => invoke('update_settings', { patch });
 export const openUrl = (url) => invoke('open_url', { url });
