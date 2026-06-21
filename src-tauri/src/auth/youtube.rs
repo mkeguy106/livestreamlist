@@ -478,6 +478,109 @@ pub async fn login_via_webview(app: AppHandle) -> Result<YouTubeCookies> {
     }
 }
 
+/// One subscribed channel from the YouTube subscriptions feed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubChannel {
+    /// Handle without `@` (from `/@handle`) or the `UC…` id (from
+    /// `/channel/UC…`) — matches `platforms::parse_channel_input` so imported
+    /// channels dedupe against manually-added ones.
+    pub channel_id: String,
+    pub title: String,
+}
+
+/// One page of the InnerTube `browse` (FEchannels) response.
+#[derive(Debug, Default)]
+pub struct SubsPage {
+    pub channels: Vec<SubChannel>,
+    pub continuation: Option<String>,
+}
+
+/// Recursively walk an InnerTube `browse` (FEchannels) response, collecting
+/// every `channelRenderer` and the next continuation token. Walking the tree
+/// rather than indexing fixed paths keeps this robust to YouTube's frequent
+/// layout churn. Pure — unit-tested.
+pub fn parse_subscriptions(v: &serde_json::Value) -> SubsPage {
+    let mut page = SubsPage::default();
+    let mut seen = std::collections::HashSet::new();
+    walk_subs(v, &mut page, &mut seen);
+    page
+}
+
+fn walk_subs(
+    v: &serde_json::Value,
+    page: &mut SubsPage,
+    seen: &mut std::collections::HashSet<String>,
+) {
+    match v {
+        serde_json::Value::Object(map) => {
+            if let Some(renderer) = map.get("channelRenderer") {
+                if let Some(ch) = extract_channel(renderer) {
+                    if seen.insert(ch.channel_id.clone()) {
+                        page.channels.push(ch);
+                    }
+                }
+            }
+            if let Some(cmd) = map.get("continuationCommand") {
+                if let Some(tok) = cmd.get("token").and_then(|t| t.as_str()) {
+                    if !tok.is_empty() {
+                        page.continuation = Some(tok.to_string());
+                    }
+                }
+            }
+            for child in map.values() {
+                walk_subs(child, page, seen);
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for child in arr {
+                walk_subs(child, page, seen);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn extract_channel(r: &serde_json::Value) -> Option<SubChannel> {
+    let title = r
+        .get("title")
+        .and_then(|t| {
+            t.get("simpleText")
+                .and_then(|s| s.as_str())
+                .map(String::from)
+                .or_else(|| {
+                    t.get("runs")
+                        .and_then(|runs| runs.get(0))
+                        .and_then(|r0| r0.get("text"))
+                        .and_then(|s| s.as_str())
+                        .map(String::from)
+                })
+        })
+        .unwrap_or_default();
+
+    let canonical = r
+        .get("navigationEndpoint")
+        .and_then(|n| n.get("browseEndpoint"))
+        .and_then(|b| b.get("canonicalBaseUrl"))
+        .and_then(|s| s.as_str());
+
+    let channel_id = match canonical {
+        Some(url) if url.starts_with("/@") => url.trim_start_matches("/@").to_string(),
+        Some(url) if url.starts_with("/channel/") => {
+            url.trim_start_matches("/channel/").to_string()
+        }
+        _ => r
+            .get("channelId")
+            .and_then(|s| s.as_str())
+            .unwrap_or("")
+            .to_string(),
+    };
+
+    if channel_id.is_empty() {
+        return None;
+    }
+    Some(SubChannel { channel_id, title })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -522,5 +625,84 @@ mod tests {
     fn rejects_empty() {
         assert!(parse_pasted("").is_err());
         assert!(parse_pasted("   \n\n  ").is_err());
+    }
+
+    #[test]
+    fn parse_subscriptions_extracts_handle_and_title() {
+        let v: serde_json::Value = serde_json::from_str(
+            r#"{"a":{"channelRenderer":{
+                "channelId":"UCabc",
+                "title":{"simpleText":"Ludwig"},
+                "navigationEndpoint":{"browseEndpoint":{
+                    "browseId":"UCabc","canonicalBaseUrl":"/@LudwigAhgren"}}}}}"#,
+        )
+        .unwrap();
+        let page = parse_subscriptions(&v);
+        assert_eq!(page.channels.len(), 1);
+        assert_eq!(page.channels[0].channel_id, "LudwigAhgren");
+        assert_eq!(page.channels[0].title, "Ludwig");
+        assert_eq!(page.continuation, None);
+    }
+
+    #[test]
+    fn parse_subscriptions_falls_back_to_channel_id_url() {
+        let v: serde_json::Value = serde_json::from_str(
+            r#"{"channelRenderer":{
+                "channelId":"UCxyz",
+                "title":{"runs":[{"text":"Some Channel"}]},
+                "navigationEndpoint":{"browseEndpoint":{"canonicalBaseUrl":"/channel/UCxyz"}}}}"#,
+        )
+        .unwrap();
+        let page = parse_subscriptions(&v);
+        assert_eq!(page.channels.len(), 1);
+        assert_eq!(page.channels[0].channel_id, "UCxyz");
+        assert_eq!(page.channels[0].title, "Some Channel");
+    }
+
+    #[test]
+    fn parse_subscriptions_reads_continuation_token() {
+        let v: serde_json::Value = serde_json::from_str(
+            r#"{"items":[
+                {"continuationItemRenderer":{"continuationEndpoint":{
+                    "continuationCommand":{"token":"TOKEN123"}}}}]}"#,
+        )
+        .unwrap();
+        let page = parse_subscriptions(&v);
+        assert!(page.channels.is_empty());
+        assert_eq!(page.continuation.as_deref(), Some("TOKEN123"));
+    }
+
+    #[test]
+    fn parse_subscriptions_dedupes_within_page() {
+        let v: serde_json::Value = serde_json::from_str(
+            r#"{"list":[
+                {"channelRenderer":{"channelId":"UC1","title":{"simpleText":"A"},
+                    "navigationEndpoint":{"browseEndpoint":{"canonicalBaseUrl":"/@a"}}}},
+                {"channelRenderer":{"channelId":"UC1","title":{"simpleText":"A"},
+                    "navigationEndpoint":{"browseEndpoint":{"canonicalBaseUrl":"/@a"}}}}]}"#,
+        )
+        .unwrap();
+        let page = parse_subscriptions(&v);
+        assert_eq!(page.channels.len(), 1);
+        assert_eq!(page.channels[0].channel_id, "a");
+    }
+
+    #[test]
+    fn parse_subscriptions_empty_and_garbage_are_safe() {
+        let empty: serde_json::Value = serde_json::from_str("{}").unwrap();
+        assert!(parse_subscriptions(&empty).channels.is_empty());
+        let arr: serde_json::Value = serde_json::from_str("[1,2,3,\"x\"]").unwrap();
+        let page = parse_subscriptions(&arr);
+        assert!(page.channels.is_empty());
+        assert_eq!(page.continuation, None);
+    }
+
+    #[test]
+    fn parse_subscriptions_skips_renderer_without_id() {
+        let v: serde_json::Value = serde_json::from_str(
+            r#"{"channelRenderer":{"title":{"simpleText":"No Id"}}}"#,
+        )
+        .unwrap();
+        assert!(parse_subscriptions(&v).channels.is_empty());
     }
 }
