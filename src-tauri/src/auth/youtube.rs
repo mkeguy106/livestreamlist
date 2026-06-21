@@ -529,7 +529,6 @@ pub async fn fetch_subscriptions(http: &reqwest::Client) -> Result<Vec<SubChanne
         .map(|(k, v)| format!("{k}={v}"))
         .collect::<Vec<_>>()
         .join("; ");
-    let auth = sapisid_hash(&cookies.sapisid);
 
     let context = serde_json::json!({
         "client": {
@@ -548,6 +547,7 @@ pub async fn fetch_subscriptions(http: &reqwest::Client) -> Result<Vec<SubChanne
     let mut seen = std::collections::HashSet::new();
 
     for _ in 0..SUBS_MAX_PAGES {
+        let auth = sapisid_hash(&cookies.sapisid);
         let resp = http
             .post(&url)
             .header("Content-Type", "application/json")
