@@ -89,6 +89,13 @@ pub struct Livestream {
     /// an extra round-trip.
     #[serde(default)]
     pub favorite: bool,
+    /// Chaturbate-only: the non-public room status (`private` / `hidden` /
+    /// `group` / `away`) when the room is live but not watchable. `None` for
+    /// public-live, offline, and all other platforms. Lets the UI render a
+    /// muted "live but private" row distinct from offline. `is_live` stays
+    /// `false` for these — only public counts as watchable-live.
+    #[serde(default)]
+    pub room_status: Option<String>,
 }
 
 impl Livestream {
@@ -157,9 +164,11 @@ impl Livestream {
             ls.viewers = live.viewers;
             ls.thumbnail_url = live.thumbnail_url.clone();
         } else if live.room_status != "offline" {
-            // "private", "hidden", "group" — not live for our purposes but
-            // worth surfacing as a non-error status so the UI can dim the row.
-            ls.error = Some(live.room_status.clone());
+            // "private" / "hidden" / "group" / "away" — live but not watchable.
+            // Surface it in a dedicated field (not `error`, which is for real
+            // fetch failures) so the UI can render a muted "live but private"
+            // row. `is_live` stays false — only public is watchable-live.
+            ls.room_status = Some(live.room_status.clone());
         }
         ls
     }
@@ -470,6 +479,49 @@ mod tests {
         assert_eq!(channel_key_of("twitch:ninja"), "twitch:ninja");
         assert_eq!(channel_key_of("kick:adin"), "kick:adin");
         assert_eq!(channel_key_of("chaturbate:user"), "chaturbate:user");
+    }
+
+    fn cb_live(room_status: &str) -> ChaturbateLive {
+        ChaturbateLive {
+            username: "model".to_string(),
+            display_name: "model".to_string(),
+            room_status: room_status.to_string(),
+            viewers: Some(42),
+            title: Some("hi".to_string()),
+            thumbnail_url: Some("https://x/y.jpg".to_string()),
+        }
+    }
+
+    #[test]
+    fn from_chaturbate_public_is_watchable_live() {
+        let ch = test_channel(Platform::Chaturbate, "model");
+        let ls = Livestream::from_chaturbate(&ch, &cb_live("public"));
+        assert!(ls.is_live);
+        assert_eq!(ls.room_status, None);
+        assert_eq!(ls.error, None);
+        assert_eq!(ls.viewers, Some(42));
+    }
+
+    #[test]
+    fn from_chaturbate_private_is_not_live_but_carries_status() {
+        for status in ["private", "hidden", "group", "away"] {
+            let ch = test_channel(Platform::Chaturbate, "model");
+            let ls = Livestream::from_chaturbate(&ch, &cb_live(status));
+            assert!(!ls.is_live, "{status} must not be watchable-live");
+            assert_eq!(ls.room_status.as_deref(), Some(status));
+            assert_eq!(ls.error, None, "{status} must not set error");
+            // non-public never leaks public-only fields
+            assert_eq!(ls.viewers, None);
+        }
+    }
+
+    #[test]
+    fn from_chaturbate_offline_has_no_status() {
+        let ch = test_channel(Platform::Chaturbate, "model");
+        let ls = Livestream::from_chaturbate(&ch, &cb_live("offline"));
+        assert!(!ls.is_live);
+        assert_eq!(ls.room_status, None);
+        assert_eq!(ls.error, None);
     }
 
     #[test]

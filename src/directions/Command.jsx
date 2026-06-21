@@ -37,6 +37,27 @@ const STORAGE_KEYS = {
   hideOffline: 'livestreamlist.sidebar.hideOffline',
 };
 
+// A Chaturbate room that's live but not public (private/hidden/group/away):
+// not watchable (is_live stays false), but surfaced as a muted "live but
+// private" row rather than plain offline. `room_status` carries the label.
+const isPrivateLive = (l) => !l.is_live && Boolean(l.room_status);
+const privateShowLabel = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : '');
+// Sort rank: public-live (0) floats above private-live (1) above offline (2).
+const liveRank = (l) => (l.is_live ? 0 : isPrivateLive(l) ? 1 : 2);
+
+// ── Module-scope DEV asserts (run once on import in dev). ──────────────────
+if (typeof import.meta !== 'undefined' && import.meta.env?.DEV) {
+  const pub = { is_live: true, room_status: null };
+  const prv = { is_live: false, room_status: 'private' };
+  const off = { is_live: false, room_status: null };
+  console.assert(isPrivateLive(prv), 'private room_status with is_live=false is private-live');
+  console.assert(!isPrivateLive(off) && !isPrivateLive(pub), 'offline/public are not private-live');
+  console.assert(
+    liveRank(pub) < liveRank(prv) && liveRank(prv) < liveRank(off),
+    'sort rank must order public-live < private-live < offline',
+  );
+}
+
 function loadPref(key, fallback) {
   try {
     const v = localStorage.getItem(key);
@@ -102,7 +123,8 @@ export default function Command({ ctx }) {
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
     let list = livestreams.filter((l) => {
-      if (hideOffline && !l.is_live) return false;
+      // Live-but-private rooms stay visible under "hide offline" — they're live.
+      if (hideOffline && !l.is_live && !isPrivateLive(l)) return false;
       if (needle) {
         const hay = `${l.display_name} ${l.channel_id}`.toLowerCase();
         if (!hay.includes(needle)) return false;
@@ -127,8 +149,8 @@ export default function Command({ ctx }) {
     }[sort] ?? byName;
 
     list = [...list];
-    // Live rows always float above offline rows, regardless of sort key.
-    list.sort((a, b) => (a.is_live === b.is_live ? cmp(a, b) : a.is_live ? -1 : 1));
+    // 3-tier: public-live → live-but-private → offline, sort key within each tier.
+    list.sort((a, b) => liveRank(a) - liveRank(b) || cmp(a, b));
     return list;
   }, [livestreams, filter, sort, hideOffline, playing, query]);
 
@@ -295,11 +317,18 @@ export default function Command({ ctx }) {
             {filtered.map((ch) => {
               const active = ch.unique_key === activeTabKey;
               const isPlaying = playing.has(ch.unique_key);
+              const priv = isPrivateLive(ch);
               return (
                 <Tooltip
                   key={ch.unique_key}
                   block
-                  text={ch.is_live ? 'Double-click to play' : null}
+                  text={
+                    ch.is_live
+                      ? 'Double-click to play'
+                      : priv
+                        ? `Room is in a ${privateShowLabel(ch.room_status)} show — stream unavailable`
+                        : null
+                  }
                 >
                   <button
                     type="button"
@@ -312,9 +341,9 @@ export default function Command({ ctx }) {
                       e.preventDefault();
                       setMenu({ x: e.clientX, y: e.clientY, channel: ch });
                     }}
-                    style={{ opacity: ch.is_live ? 1 : 0.45 }}
+                    style={{ opacity: ch.is_live ? 1 : priv ? 0.7 : 0.45 }}
                   >
-                  <span className={`rx-status-dot ${ch.is_live ? 'live' : 'off'}`} />
+                  <span className={`rx-status-dot ${ch.is_live ? 'live' : priv ? 'private' : 'off'}`} />
 
                   {/* Center column — name row + meta line. Hidden as a unit in collapsed mode. */}
                   <div className="cmd-row-text" style={{ minWidth: 0 }}>
@@ -341,7 +370,7 @@ export default function Command({ ctx }) {
                           </span>
                         </Tooltip>
                       )}
-                      <span style={{ fontSize: 'var(--t-12)', color: 'var(--zinc-100)', fontWeight: 500 }}>
+                      <span style={{ fontSize: 'var(--t-12)', color: priv ? 'var(--cb)' : 'var(--zinc-100)', fontWeight: 500 }}>
                         {ch.display_name}
                       </span>
                       {isPlaying && (
@@ -367,7 +396,7 @@ export default function Command({ ctx }) {
                         textOverflow: 'ellipsis',
                       }}
                     >
-                      {ch.is_live ? (ch.game ?? 'live') : 'offline'}
+                      {ch.is_live ? (ch.game ?? 'live') : priv ? privateShowLabel(ch.room_status) : 'offline'}
                     </div>
                   </div>
 
@@ -541,7 +570,11 @@ function SelectedPane({ channel, isActiveTab, onMention, onLaunch, onOpenBrowser
           flexShrink: 0,
         }}
       >
-        {channel.is_live ? <span className="rx-live-dot pulse" /> : <span className="rx-status-dot off" />}
+        {channel.is_live ? (
+          <span className="rx-live-dot pulse" />
+        ) : (
+          <span className={`rx-status-dot ${isPrivateLive(channel) ? 'private' : 'off'}`} />
+        )}
         <span style={{ fontSize: 'var(--t-13)', color: 'var(--zinc-100)', fontWeight: 600 }}>
           {channel.display_name}
         </span>

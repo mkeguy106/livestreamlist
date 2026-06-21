@@ -101,6 +101,8 @@ body { background: var(--zinc-950); }
 
 .rx-status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--zinc-600); flex-shrink: 0; }
 .rx-status-dot.live { background: var(--live); box-shadow: 0 0 6px rgba(239, 68, 68, 0.55); }
+/* Chaturbate live-but-private: amber, a third state between live and offline. */
+.rx-status-dot.private { background: var(--cb); box-shadow: 0 0 6px rgba(251, 146, 60, 0.5); }
 .rx-status-dot.off { background: var(--zinc-700); }
 
 .rx-kbd {
