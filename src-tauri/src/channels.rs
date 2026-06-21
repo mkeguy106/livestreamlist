@@ -169,6 +169,10 @@ impl Livestream {
             // fetch failures) so the UI can render a muted "live but private"
             // row. `is_live` stays false — only public is watchable-live.
             ls.room_status = Some(live.room_status.clone());
+            // The room still has people in it — carry the viewer count so the
+            // muted row reports who's watching (Qt parity). Title/thumbnail are
+            // deliberately left unset: the stream itself isn't watchable.
+            ls.viewers = live.viewers;
         }
         ls
     }
@@ -510,8 +514,12 @@ mod tests {
             assert!(!ls.is_live, "{status} must not be watchable-live");
             assert_eq!(ls.room_status.as_deref(), Some(status));
             assert_eq!(ls.error, None, "{status} must not set error");
-            // non-public never leaks public-only fields
-            assert_eq!(ls.viewers, None);
+            // A private/away/etc. room still has people in it — surface the
+            // viewer count (Qt parity). Title/thumbnail stay hidden since the
+            // stream isn't watchable.
+            assert_eq!(ls.viewers, Some(42), "{status} should carry viewer count");
+            assert_eq!(ls.title, None, "{status} must not leak title");
+            assert_eq!(ls.thumbnail_url, None, "{status} must not leak thumbnail");
         }
     }
 

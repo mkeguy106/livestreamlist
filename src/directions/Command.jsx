@@ -403,7 +403,7 @@ export default function Command({ ctx }) {
                   {/* Viewers cluster — hidden in compact density and collapsed mode. */}
                   <div className="cmd-row-meta" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 }}>
                     <span className="rx-mono" style={{ fontSize: 10, color: 'var(--zinc-400)' }}>
-                      {ch.is_live ? formatViewers(ch.viewers) : '—'}
+                      {ch.is_live || (priv && ch.viewers != null) ? formatViewers(ch.viewers) : '—'}
                     </span>
                   </div>
                   </button>
@@ -592,6 +592,14 @@ function SelectedPane({ channel, isActiveTab, onMention, onLaunch, onOpenBrowser
             <span style={{ color: 'var(--zinc-700)' }}>·</span>
             <span className="rx-mono" style={{ fontSize: 'var(--t-11)', color: 'var(--zinc-400)' }}>
               up {formatUptime(channel.started_at)}
+            </span>
+          </>
+        )}
+        {!channel.is_live && isPrivateLive(channel) && channel.viewers != null && (
+          <>
+            <span style={{ color: 'var(--zinc-700)' }}>·</span>
+            <span className="rx-mono" style={{ fontSize: 'var(--t-11)', color: 'var(--zinc-400)' }}>
+              {formatViewers(channel.viewers)} watching
             </span>
           </>
         )}
