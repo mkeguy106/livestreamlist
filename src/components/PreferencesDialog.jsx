@@ -195,7 +195,7 @@ export default function PreferencesDialog({ open, onClose }) {
 }
 
 function AccountsTab() {
-  const { twitch, twitch_web, kick, youtube, chaturbate, login, logout, loginYoutubePaste, refresh } = useAuth();
+  const { twitch, twitch_web, login, logout, loginYoutubePaste, refresh } = useAuth();
   const { settings, patch } = usePreferences();
   const [ytLoginRunning, setYtLoginRunning] = useState(false);
   const [cbLoginRunning, setCbLoginRunning] = useState(false);
