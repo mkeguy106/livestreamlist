@@ -285,6 +285,32 @@ pub fn touch_verified() -> Result<()> {
     save(&stamp)
 }
 
+/// Keyring account holding the Chaturbate `sessionid` cookie value.
+const KEYRING_SESSION: &str = "chaturbate_session_cookie";
+
+/// Persist the `sessionid` cookie value. The follows-import spawns its own
+/// webview from the on-disk profile, but CB's `sessionid` is a session cookie
+/// WebKit never writes to the on-disk jar — so a fresh import webview is
+/// anonymous and the followed-rooms endpoint silently returns the whole public
+/// list. We capture `sessionid` whenever a live CB webview exposes it (the
+/// login window + every chat-embed page load) and inject it into the import
+/// webview so its requests authenticate.
+pub fn store_session_cookie(value: &str) -> Result<()> {
+    super::tokens::save(KEYRING_SESSION, value)
+}
+
+/// The captured `sessionid` value, if any (non-empty).
+pub fn stored_session_cookie() -> Option<String> {
+    super::tokens::load(KEYRING_SESSION)
+        .ok()
+        .flatten()
+        .filter(|s| !s.is_empty())
+}
+
+fn clear_session_cookie() {
+    let _ = super::tokens::clear(KEYRING_SESSION);
+}
+
 /// Drop only the stamp file, leaving the webview profile dir intact.
 ///
 /// Use this when the embed window may still be alive (e.g. drift
@@ -302,6 +328,7 @@ pub fn clear_stamp_only() -> Result<()> {
 
 pub fn clear() -> Result<()> {
     clear_stamp_only()?;
+    clear_session_cookie();
     // Inline the profile-dir path — calling webview_profile_dir() here would
     // create the directory (it has create_dir_all baked in) only to
     // immediately delete it.
@@ -430,6 +457,16 @@ pub async fn login_via_webview(app: AppHandle) -> Result<ChaturbateAuth> {
                     .iter()
                     .any(|c| c.name() == "sessionid" && !c.value().is_empty());
                 if signed_in {
+                    // Capture sessionid so the follows-import webview can
+                    // inject it later (it spawns anonymous otherwise).
+                    if let Some(sid) = jar
+                        .iter()
+                        .find(|c| c.name() == "sessionid" && !c.value().is_empty())
+                    {
+                        if let Err(e) = store_session_cookie(sid.value()) {
+                            log::warn!("storing CB session cookie: {e:#}");
+                        }
+                    }
                     // Build a Cookie header from the WebView's full jar
                     // and try to scrape the username before saving the
                     // stamp. Failure here is non-fatal — the stamp still

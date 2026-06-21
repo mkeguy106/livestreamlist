@@ -3,9 +3,9 @@
 //! Compares the current refresh snapshot against the previous one per-channel
 //! and fires a desktop notification for each channel that flipped
 //! offline → live. `dont_notify` channels are excluded; channels that are
-//! new to the store (no prior state) are treated as "already live" and don't
-//! fire on the first refresh so adding a channel while it's live doesn't
-//! spam a notification.
+//! new to the store (no prior state) are treated as "already known" and don't
+//! fire on the first refresh so adding or bulk-importing a channel while it's
+//! live doesn't spam a notification. See `is_go_live` for the exact rule.
 
 use parking_lot::Mutex;
 use std::collections::HashMap;
@@ -75,10 +75,8 @@ impl NotifyTracker {
             .collect();
 
         for ls in snapshot {
-            let was = prev
-                .insert(ls.unique_key.clone(), ls.is_live)
-                .unwrap_or(false);
-            if !was && ls.is_live {
+            let was = prev.insert(ls.unique_key.clone(), ls.is_live);
+            if is_go_live(was, ls.is_live) {
                 // New live transition.
                 let ch = cfg_map.get(ls.channel_id.as_str()).copied();
                 let dont_notify = ch.map(|c| c.dont_notify).unwrap_or(false);
@@ -91,6 +89,20 @@ impl NotifyTracker {
     }
 }
 
+/// Decide whether a channel just transitioned offline → live and should fire a
+/// notification. `was` is the previously-observed live state, or `None` if this
+/// channel has never been seen (freshly added or bulk-imported).
+///
+/// A `None` prior state must NOT fire: a channel new to the store is treated as
+/// "already known" so importing/adding a channel that happens to be live right
+/// now doesn't spam a notification. Only an explicit `Some(false) → true` flip
+/// counts as a go-live. (Previously this used `unwrap_or(false)`, which treated
+/// missing state as offline and fired for every currently-live channel on the
+/// first refresh after a bulk import.)
+fn is_go_live(was: Option<bool>, is_live: bool) -> bool {
+    matches!(was, Some(false)) && is_live
+}
+
 fn send_go_live<R: Runtime>(app: &tauri::AppHandle<R>, ls: &Livestream) {
     let title = format!("{} is live", ls.display_name);
     let body = match (&ls.title, &ls.game) {
@@ -101,5 +113,43 @@ fn send_go_live<R: Runtime>(app: &tauri::AppHandle<R>, ls: &Livestream) {
     };
     if let Err(e) = app.notification().builder().title(title).body(body).show() {
         log::warn!("notification failed for {}: {e:#}", ls.unique_key);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_go_live;
+
+    #[test]
+    fn offline_to_live_fires() {
+        assert!(is_go_live(Some(false), true));
+    }
+
+    #[test]
+    fn live_to_live_does_not_fire() {
+        assert!(!is_go_live(Some(true), true));
+    }
+
+    #[test]
+    fn live_to_offline_does_not_fire() {
+        assert!(!is_go_live(Some(true), false));
+    }
+
+    #[test]
+    fn offline_to_offline_does_not_fire() {
+        assert!(!is_go_live(Some(false), false));
+    }
+
+    /// Regression: a freshly added/imported channel (no prior state) that is
+    /// live right now must NOT fire. The old `unwrap_or(false)` logic fired
+    /// here, flooding notifications after a bulk follows-import.
+    #[test]
+    fn never_seen_and_live_does_not_fire() {
+        assert!(!is_go_live(None, true));
+    }
+
+    #[test]
+    fn never_seen_and_offline_does_not_fire() {
+        assert!(!is_go_live(None, false));
     }
 }

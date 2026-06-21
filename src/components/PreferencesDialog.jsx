@@ -6,6 +6,7 @@ import Tooltip from './Tooltip.jsx';
 import SidebarPositionPicker from './SidebarPositionPicker.jsx';
 import {
   importTwitchFollows,
+  importChaturbateFollows,
   listBlockedUsers,
   setUserMetadata,
   spellcheckListDicts,
@@ -132,6 +133,7 @@ function AccountsTab() {
   const { twitch, twitch_web, kick, youtube, chaturbate, login, logout, loginYoutubePaste, refresh } = useAuth();
   const { settings, patch } = usePreferences();
   const [importState, setImportState] = useState(null); // {running, result, error}
+  const [cbImportState, setCbImportState] = useState(null); // {running, result, error}
   const [ytLoginRunning, setYtLoginRunning] = useState(false);
   const [cbLoginRunning, setCbLoginRunning] = useState(false);
   const [cbError, setCbError] = useState(null);
@@ -201,6 +203,16 @@ function AccountsTab() {
     }
   };
 
+  const runCbImport = async () => {
+    setCbImportState({ running: true });
+    try {
+      const r = await importChaturbateFollows();
+      setCbImportState({ running: false, result: r });
+    } catch (e) {
+      setCbImportState({ running: false, error: String(e?.message ?? e) });
+    }
+  };
+
   const runYoutubeLogin = async () => {
     setYtError(null);
     setYtLoginRunning(true);
@@ -239,6 +251,30 @@ function AccountsTab() {
           <button type="button" className="rx-btn" onClick={() => login('twitch')}>
             Log in to Twitch
           </button>
+        )}
+      </Row>
+
+      <Row
+        label="Import Twitch follows"
+        hint="Adds every channel you follow on Twitch to this app. Existing entries are skipped."
+      >
+        <button
+          type="button"
+          className="rx-btn"
+          onClick={runImport}
+          disabled={!twitch || importState?.running}
+        >
+          {importState?.running ? 'Importing…' : 'Import now'}
+        </button>
+        {importState?.result && (
+          <div style={{ marginTop: 6, fontSize: 'var(--t-11)', color: 'var(--zinc-400)' }}>
+            Added {importState.result.added} · skipped {importState.result.skipped} · seen {importState.result.total_seen}
+          </div>
+        )}
+        {importState?.error && (
+          <div style={{ marginTop: 6, fontSize: 'var(--t-11)', color: '#f87171' }}>
+            {importState.error}
+          </div>
         )}
       </Row>
 
@@ -453,25 +489,25 @@ function AccountsTab() {
       </Row>
 
       <Row
-        label="Import Twitch follows"
-        hint="Adds every channel you follow on Twitch to this app. Existing entries are skipped."
+        label="Import Chaturbate follows"
+        hint="Adds every model you follow on Chaturbate to this app. Existing entries are skipped."
       >
         <button
           type="button"
           className="rx-btn"
-          onClick={runImport}
-          disabled={!twitch || importState?.running}
+          onClick={runCbImport}
+          disabled={!chaturbate?.signed_in || cbImportState?.running}
         >
-          {importState?.running ? 'Importing…' : 'Import now'}
+          {cbImportState?.running ? 'Importing…' : 'Import now'}
         </button>
-        {importState?.result && (
+        {cbImportState?.result && (
           <div style={{ marginTop: 6, fontSize: 'var(--t-11)', color: 'var(--zinc-400)' }}>
-            Added {importState.result.added} · skipped {importState.result.skipped} · seen {importState.result.total_seen}
+            Added {cbImportState.result.added} · skipped {cbImportState.result.skipped} · seen {cbImportState.result.total_seen}
           </div>
         )}
-        {importState?.error && (
+        {cbImportState?.error && (
           <div style={{ marginTop: 6, fontSize: 'var(--t-11)', color: '#f87171' }}>
-            {importState.error}
+            {cbImportState.error}
           </div>
         )}
       </Row>

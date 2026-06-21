@@ -280,6 +280,33 @@ struct ImportResult {
     total_seen: u32,
 }
 
+/// Insert a batch of imported channels, skipping ones already in the store,
+/// and report how many were added / skipped. Shared by the Twitch and
+/// Chaturbate follows importers.
+fn add_imported_channels(
+    store: &crate::channels::SharedStore,
+    channels: Vec<Channel>,
+) -> ImportResult {
+    let mut added = 0u32;
+    let mut skipped = 0u32;
+    let total_seen = channels.len() as u32;
+    for channel in channels {
+        if store.lock().contains(channel.platform, &channel.channel_id) {
+            skipped += 1;
+            continue;
+        }
+        match store.lock().add(channel) {
+            Ok(()) => added += 1,
+            Err(_) => skipped += 1,
+        }
+    }
+    ImportResult {
+        added,
+        skipped,
+        total_seen,
+    }
+}
+
 #[tauri::command]
 async fn import_twitch_follows(state: State<'_, AppState>) -> Result<ImportResult, String> {
     let token = auth::twitch::stored_token()
@@ -293,12 +320,9 @@ async fn import_twitch_follows(state: State<'_, AppState>) -> Result<ImportResul
             .await
             .map_err(err_string)?;
 
-    let mut added = 0u32;
-    let mut skipped = 0u32;
-    let total_seen = follows.len() as u32;
-
-    for f in follows {
-        let channel = Channel {
+    let channels = follows
+        .into_iter()
+        .map(|f| Channel {
             platform: Platform::Twitch,
             channel_id: f.broadcaster_login.clone(),
             display_name: if f.broadcaster_name.is_empty() {
@@ -307,29 +331,114 @@ async fn import_twitch_follows(state: State<'_, AppState>) -> Result<ImportResul
                 f.broadcaster_name
             },
             favorite: false,
-            dont_notify: false,
+            // Bulk-imported channels build a monitoring list, not an alert
+            // list — default to no go-live notification so importing a large
+            // follow list doesn't flood the desktop. Re-enable per channel.
+            dont_notify: true,
             auto_play: false,
             added_at: Some(Utc::now()),
+        })
+        .collect();
+
+    Ok(add_imported_channels(&state.store, channels))
+}
+
+/// Bulk-import the signed-in user's Chaturbate follows. Drives a transient,
+/// invisible logged-in Chaturbate webview that scrapes the followed-room
+/// endpoints and posts the list back via wry IPC (see `embed::build_import_child`).
+/// Linux-only — the wry IPC path doesn't exist on the macOS/Windows embed
+/// implementation yet.
+#[cfg(not(any(feature = "smoke", test)))]
+#[tauri::command]
+async fn import_chaturbate_follows(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    embeds: State<'_, Arc<embed::EmbedHost>>,
+) -> Result<ImportResult, String> {
+    if !matches!(auth::chaturbate::load(), Ok(Some(_))) {
+        return Err("Sign in to Chaturbate first".into());
+    }
+    // CB's session cookie isn't persisted to the webview profile, so the
+    // import webview can only authenticate with a captured sessionid. We grab
+    // it on login + every CB chat-embed load; if it's missing the user needs
+    // to re-establish it.
+    let session_cookie = match auth::chaturbate::stored_session_cookie() {
+        Some(s) => s,
+        None => {
+            return Err("Couldn't find your Chaturbate session. Open a Chaturbate \
+                        channel's chat once (or use Sign in again), then retry the import."
+                .into())
+        }
+    };
+
+    #[cfg(target_os = "linux")]
+    {
+        use std::time::Duration;
+        let host = embeds.inner().clone();
+        let store = state.store.clone();
+
+        if host.has(embed::CB_IMPORT_KEY) {
+            return Err("a Chaturbate import is already running".into());
+        }
+
+        let (tx, rx) = tokio::sync::oneshot::channel::<String>();
+        let host_for_build = host.clone();
+        let app_for_build = app.clone();
+        app.run_on_main_thread(move || {
+            if let Err(e) =
+                host_for_build.start_chaturbate_import(&app_for_build, session_cookie, tx)
+            {
+                log::warn!("start_chaturbate_import: {e:#}");
+                // tx dropped → rx resolves to Err below.
+            }
+        })
+        .map_err(err_string)?;
+
+        let result = tokio::time::timeout(Duration::from_secs(45), rx).await;
+
+        // Always tear down the import webview (drop → wry destroy()).
+        let host_for_teardown = host.clone();
+        let _ = app.run_on_main_thread(move || host_for_teardown.unmount(embed::CB_IMPORT_KEY));
+
+        let payload = match result {
+            Ok(Ok(s)) => s,
+            Ok(Err(_)) => return Err("Chaturbate import failed to start".into()),
+            Err(_) => return Err("Chaturbate import timed out".into()),
         };
-        if state
-            .store
-            .lock()
-            .contains(Platform::Twitch, &channel.channel_id)
-        {
-            skipped += 1;
-            continue;
-        }
-        match state.store.lock().add(channel) {
-            Ok(()) => added += 1,
-            Err(_) => skipped += 1,
-        }
+
+        let usernames = embed::parse_cb_follows(&payload).map_err(err_string)?;
+        log::info!("Chaturbate import: scraped {} followed model(s)", usernames.len());
+        let channels = usernames
+            .into_iter()
+            .map(|name| Channel {
+                platform: Platform::Chaturbate,
+                channel_id: name.clone(),
+                display_name: name,
+                favorite: false,
+                // Bulk import = monitoring list, not an alert list. CB models
+                // cycle live constantly; default to no go-live notification so
+                // importing 100+ follows doesn't flood the desktop.
+                dont_notify: true,
+                auto_play: false,
+                added_at: Some(Utc::now()),
+            })
+            .collect();
+        Ok(add_imported_channels(&store, channels))
     }
 
-    Ok(ImportResult {
-        added,
-        skipped,
-        total_seen,
-    })
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (&app, &state, &embeds, session_cookie);
+        Err("Chaturbate import is not supported on this platform yet".into())
+    }
+}
+
+#[cfg(any(feature = "smoke", test))]
+#[tauri::command]
+async fn import_chaturbate_follows(
+    _state: State<'_, AppState>,
+) -> Result<ImportResult, String> {
+    Err("smoke/test mode: Chaturbate import unavailable".into())
 }
 
 #[tauri::command]
@@ -1619,6 +1728,7 @@ macro_rules! register_handlers {
             $crate::chaturbate_login,
             $crate::chaturbate_logout,
             $crate::import_twitch_follows,
+            $crate::import_chaturbate_follows,
             $crate::spellcheck_check,
             $crate::spellcheck_suggest,
             $crate::spellcheck_add_word,
