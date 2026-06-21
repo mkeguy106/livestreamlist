@@ -115,8 +115,40 @@ export default function PreferencesDialog({ open, onClose }) {
           boxShadow: '0 24px 64px rgba(0,0,0,.7), 0 0 0 1px rgba(255,255,255,.04)',
           display: 'flex',
           overflow: 'hidden',
+          position: 'relative',
         }}
       >
+        {/* Close (top-right) */}
+        <Tooltip text="Close" align="right">
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close preferences"
+            style={{
+              position: 'absolute',
+              top: 10,
+              right: 10,
+              zIndex: 2,
+              width: 28,
+              height: 28,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              border: 'none',
+              borderRadius: 6,
+              background: 'transparent',
+              color: 'var(--zinc-400)',
+              fontSize: 15,
+              lineHeight: 1,
+              cursor: 'pointer',
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--zinc-800)'; e.currentTarget.style.color = 'var(--zinc-100)'; }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--zinc-400)'; }}
+          >
+            ✕
+          </button>
+        </Tooltip>
+
         {/* Tab rail */}
         <div
           style={{
@@ -159,15 +191,6 @@ export default function PreferencesDialog({ open, onClose }) {
               )}
             </button>
           ))}
-          <div style={{ flex: 1 }} />
-          <button
-            type="button"
-            onClick={onClose}
-            className="rx-btn rx-btn-ghost"
-            style={{ margin: '0 4px', justifyContent: 'center' }}
-          >
-            Close
-          </button>
         </div>
 
         {/* Tab content */}
@@ -431,7 +454,7 @@ function AccountsTab() {
             aria-label="Import all follows"
             onClick={importAll}
             disabled={!anyCapable || anyImportRunning}
-            style={{ flexShrink: 0 }}
+            style={{ flexShrink: 0, marginRight: 34 }}
           >
             <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--ok)' }} />
             Import all follows
