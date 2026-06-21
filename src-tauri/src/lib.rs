@@ -415,7 +415,10 @@ async fn import_chaturbate_follows(
                 channel_id: name.clone(),
                 display_name: name,
                 favorite: false,
-                dont_notify: false,
+                // Bulk import = monitoring list, not an alert list. CB models
+                // cycle live constantly; default to no go-live notification so
+                // importing 100+ follows doesn't flood the desktop.
+                dont_notify: true,
                 auto_play: false,
                 added_at: Some(Utc::now()),
             })
