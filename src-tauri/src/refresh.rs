@@ -1,6 +1,7 @@
 use anyhow::{anyhow, Result};
 use futures_util::future::join_all;
-use std::collections::HashMap;
+use futures_util::stream::{self, StreamExt};
+use std::collections::{HashMap, HashSet};
 
 use crate::channels::{Channel, Livestream, SharedStore};
 use crate::platforms::{chaturbate, kick, twitch, youtube, Platform};
@@ -11,6 +12,22 @@ use crate::platforms::{chaturbate, kick, twitch, youtube, Platform};
 /// rate-limiting an IP after a few minutes. 2 keeps the burst under
 /// what `--sleep-requests 1` is shaped to absorb.
 const YT_CONCURRENCY: usize = 2;
+
+/// Concurrency cap for the per-channel Chaturbate fallback. The old unbounded
+/// `join_all` fired one request per follow simultaneously (106 at once → an
+/// instant Cloudflare 429 that flickered every channel offline). 4-at-a-time
+/// keeps the burst small. Only used when the bulk `fetch_followed_online`
+/// path is unavailable (no session cookie) or fails.
+const CB_CONCURRENCY: usize = 4;
+
+/// Outcome of a Chaturbate refresh: definitively-determined rooms plus the set
+/// of channels we couldn't reach (rate-limited / network). The merge preserves
+/// the last-known state of `errored` channels so a transient failure never
+/// flickers a live row to offline.
+struct CbResult {
+    live: HashMap<String, chaturbate::ChaturbateLive>,
+    errored: HashSet<String>,
+}
 
 /// Refresh all channels' live status across every supported platform in
 /// parallel. Commits all results to the store under a single lock.
@@ -35,13 +52,26 @@ pub async fn refresh_all(
         }
     }
 
+    // Snapshot the current CB live state so the merge can preserve the
+    // last-known status of any channel we fail to reach this cycle (no flicker).
+    let prev_cb: HashMap<String, Livestream> = {
+        store
+            .lock()
+            .snapshot()
+            .into_iter()
+            .filter(|l| l.platform == Platform::Chaturbate)
+            .map(|l| (l.unique_key.clone(), l))
+            .collect()
+    };
+    let cb_session = crate::auth::chaturbate::stored_session_cookie();
+
     // Fire all four fetch groups in parallel
     let twitch_fut = twitch::fetch_live(&client, &twitch_logins);
     let kick_fut = fetch_kick_all(&client, &kick_slugs);
     let youtube_fut = fetch_youtube_all(&youtube_ids, youtube_cookies_browser.as_deref(), &client);
-    let cb_fut = fetch_chaturbate_all(&client, &cb_names);
+    let cb_fut = fetch_chaturbate_all(&client, &cb_names, cb_session);
 
-    let (twitch_res, kick_map, youtube_map, cb_map) =
+    let (twitch_res, kick_map, youtube_map, cb_result) =
         tokio::join!(twitch_fut, kick_fut, youtube_fut, cb_fut);
 
     let twitch_map = twitch_res.unwrap_or_else(|e| {
@@ -122,10 +152,20 @@ pub async fn refresh_all(
                     guard.upsert_livestream(ls);
                 }
                 Platform::Chaturbate => {
-                    let ls = cb_map
-                        .get(&ch.channel_id.to_ascii_lowercase())
-                        .map(|live| Livestream::from_chaturbate(ch, live))
-                        .unwrap_or_else(|| Livestream::offline_for(ch, None));
+                    let key = ch.channel_id.to_ascii_lowercase();
+                    let ls = if let Some(live) = cb_result.live.get(&key) {
+                        Livestream::from_chaturbate(ch, live)
+                    } else if cb_result.errored.contains(&key) {
+                        // Couldn't reach the channel (rate-limited / network) —
+                        // keep its last-known state instead of flickering offline.
+                        prev_cb
+                            .get(&ch.unique_key())
+                            .cloned()
+                            .unwrap_or_else(|| Livestream::offline_for(ch, None))
+                    } else {
+                        // Determined offline (absent from a successful fetch).
+                        Livestream::offline_for(ch, None)
+                    };
                     guard.upsert_livestream(ls);
                 }
             }
@@ -266,26 +306,73 @@ async fn fetch_kick_all(
     out
 }
 
+/// Two-tier Chaturbate refresh. Primary: one bulk `room-list?follow=true` call
+/// set (when a session cookie is captured) — channels absent from the result
+/// are definitively offline. Fallback (no cookie / bulk failed): per-channel
+/// `chatvideocontext` with bounded concurrency. Errors land in `errored` so the
+/// caller preserves last-known state rather than flickering offline.
 async fn fetch_chaturbate_all(
     client: &reqwest::Client,
     names: &[String],
-) -> HashMap<String, chaturbate::ChaturbateLive> {
-    let futs: Vec<_> = names
-        .iter()
-        .map(|name| async move { (name.clone(), chaturbate::fetch_live(client, name).await) })
-        .collect();
-    let results = join_all(futs).await;
-    let mut out = HashMap::new();
-    for (name, res) in results {
-        match res {
-            Ok(Some(live)) => {
-                out.insert(name, live);
+    session_cookie: Option<String>,
+) -> CbResult {
+    if names.is_empty() {
+        return CbResult {
+            live: HashMap::new(),
+            errored: HashSet::new(),
+        };
+    }
+
+    if let Some(session) = session_cookie.as_deref() {
+        match chaturbate::fetch_followed_online(client, session).await {
+            Ok(live) => {
+                log::info!(
+                    "Chaturbate bulk refresh: {} online of {} followed",
+                    live.len(),
+                    names.len()
+                );
+                return CbResult {
+                    live,
+                    errored: HashSet::new(),
+                };
             }
-            Ok(None) => {}
-            Err(e) => log::warn!("Chaturbate refresh failed for {name}: {e:#}"),
+            Err(e) => log::warn!(
+                "Chaturbate bulk refresh failed ({e:#}); falling back to per-channel"
+            ),
         }
     }
-    out
+
+    fetch_chaturbate_per_channel(client, names).await
+}
+
+/// Fallback: per-channel status with bounded concurrency (never the old
+/// unbounded fan-out that triggered 429s).
+async fn fetch_chaturbate_per_channel(client: &reqwest::Client, names: &[String]) -> CbResult {
+    let results: Vec<(String, Result<Option<chaturbate::ChaturbateLive>>)> =
+        stream::iter(names.iter().cloned())
+            .map(|name| async move {
+                let res = chaturbate::fetch_live(client, &name).await;
+                (name, res)
+            })
+            .buffer_unordered(CB_CONCURRENCY)
+            .collect()
+            .await;
+
+    let mut live = HashMap::new();
+    let mut errored = HashSet::new();
+    for (name, res) in results {
+        match res {
+            Ok(Some(room)) => {
+                live.insert(name, room);
+            }
+            Ok(None) => {} // 404 → genuinely offline
+            Err(e) => {
+                log::warn!("Chaturbate refresh failed for {name}: {e:#}");
+                errored.insert(name);
+            }
+        }
+    }
+    CbResult { live, errored }
 }
 
 /// Run yt-dlp + concurrent-list scraping in batches of YT_CONCURRENCY to
