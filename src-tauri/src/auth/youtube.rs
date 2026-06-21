@@ -527,8 +527,13 @@ fn walk_subs(
                     }
                 }
             }
-            for child in map.values() {
-                walk_subs(child, page, seen);
+            // Recurse into siblings, but not back into the channelRenderer we
+            // just extracted — its inner objects never hold another renderer,
+            // and skipping it keeps dedup from being the only correctness guard.
+            for (k, child) in map.iter() {
+                if k != "channelRenderer" {
+                    walk_subs(child, page, seen);
+                }
             }
         }
         serde_json::Value::Array(arr) => {
