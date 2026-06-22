@@ -60,6 +60,48 @@ export function formatRelative(ts) {
   return `${d}d ago`;
 }
 
+/**
+ * Format an RFC3339 / ISO timestamp as a short, unambiguous date: "21 Jun
+ * 2015". Day-first and UTC-pinned so the rendered calendar day matches the
+ * timestamp's instant regardless of the viewer's timezone. Returns "" on
+ * empty/unparseable input.
+ */
+export function formatDate(iso) {
+  if (!iso) return '';
+  const ms = Date.parse(iso);
+  if (Number.isNaN(ms)) return '';
+  return new Intl.DateTimeFormat('en-GB', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+    timeZone: 'UTC',
+  }).format(new Date(ms));
+}
+
+/**
+ * Count how many of `messages` were sent by `user`. Matches on `user.id` when
+ * both the message author and `user` have an id; otherwise falls back to a
+ * case-insensitive `login` match. Rows without an author (system rows) are
+ * skipped. Used for the user card's "session messages" stat — a snapshot of
+ * the current channel buffer.
+ */
+export function countSessionMessages(messages, user) {
+  if (!Array.isArray(messages) || !user) return 0;
+  const id = user.id;
+  const login = user.login ? user.login.toLowerCase() : null;
+  let n = 0;
+  for (const m of messages) {
+    const u = m?.user;
+    if (!u) continue;
+    if (id && u.id) {
+      if (u.id === id) n += 1;
+    } else if (login && u.login) {
+      if (u.login.toLowerCase() === login) n += 1;
+    }
+  }
+  return n;
+}
+
 // ── Module-scope DEV asserts (run once on import in dev). ──────────────────
 if (typeof import.meta !== 'undefined' && import.meta.env?.DEV) {
   // userChannelUrl links to the clicked user's channel, per platform.
@@ -81,4 +123,28 @@ if (typeof import.meta !== 'undefined' && import.meta.env?.DEV) {
   );
   console.assert(userChannelUrl('twitch', '') === null, 'userChannelUrl empty login');
   console.assert(userChannelUrl('mystery', 'x') === null, 'userChannelUrl unknown platform');
+  // formatDate — UTC-pinned short date.
+  console.assert(formatDate('2015-06-21T08:00:00Z') === '21 Jun 2015', 'formatDate basic');
+  console.assert(formatDate('') === '', 'formatDate empty');
+  console.assert(formatDate('not-a-date') === '', 'formatDate invalid');
+  // countSessionMessages — id match, login fallback, skip system rows.
+  {
+    const M = (id, login) => ({ user: { id, login } });
+    console.assert(
+      countSessionMessages([M('1', 'a'), M('1', 'a'), M('2', 'b')], { id: '1', login: 'a' }) === 2,
+      'countSessionMessages by id',
+    );
+    console.assert(
+      countSessionMessages([M(null, 'Abc'), M(null, 'abc')], { login: 'abc' }) === 2,
+      'countSessionMessages by login (case-insensitive)',
+    );
+    console.assert(
+      countSessionMessages([{}, { text: 'x' }, M('1', 'a')], { id: '1', login: 'a' }) === 1,
+      'countSessionMessages skips system rows',
+    );
+    console.assert(
+      countSessionMessages(null, { id: '1' }) === 0,
+      'countSessionMessages null messages',
+    );
+  }
 }
