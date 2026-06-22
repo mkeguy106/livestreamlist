@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import Tooltip from './Tooltip.jsx';
 import { readableColor } from '../utils/color.js';
+import { formatDate } from '../utils/format.js';
 
 /**
  * Anchored portal popover for a single chat user. Caller mounts one of these
@@ -23,6 +24,7 @@ export default function UserCard({
   onOpenHistory,
   onOpenChannel,
   onCardHover,
+  sessionMessageCount,
 }) {
   const cardRef = useRef(null);
   const [pos, setPos] = useState(null);
@@ -108,6 +110,7 @@ export default function UserCard({
         avatar={profile?.profile_image_url}
         platformLetter="t"
         badges={user.badges /* may be undefined; fall back below */}
+        broadcasterType={profile?.broadcaster_type}
       />
 
       <Divider />
@@ -124,7 +127,7 @@ export default function UserCard({
         <Stats
           loading={profileLoading}
           profile={profile}
-          sessionMessageCount={undefined /* wired by parent via prop in Task 18 */}
+          sessionMessageCount={sessionMessageCount}
         />
       )}
 
@@ -167,7 +170,7 @@ export default function UserCard({
   return createPortal(card, document.body);
 }
 
-function Header({ display, login, nameColor, avatar, platformLetter, badges = [] }) {
+function Header({ display, login, nameColor, avatar, platformLetter, badges = [], broadcasterType }) {
   return (
     <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
       <div
@@ -187,6 +190,24 @@ function Header({ display, login, nameColor, avatar, platformLetter, badges = []
         </div>
         {display.toLowerCase() !== login.toLowerCase() ? (
           <div style={{ color: 'var(--zinc-400)', fontSize: 11 }}>@{login}</div>
+        ) : null}
+        {broadcasterType === 'partner' || broadcasterType === 'affiliate' ? (
+          <span
+            style={{
+              display: 'inline-block',
+              marginTop: 4,
+              font: '600 9px var(--font-mono)',
+              letterSpacing: '.04em',
+              textTransform: 'uppercase',
+              color: 'var(--twitch)',
+              background: 'rgba(167,139,250,.12)',
+              border: '1px solid rgba(167,139,250,.22)',
+              borderRadius: 4,
+              padding: '1px 6px',
+            }}
+          >
+            {broadcasterType === 'partner' ? 'Partner' : 'Affiliate'}
+          </span>
         ) : null}
         {badges?.length ? (
           <div style={{ display: 'flex', gap: 4, marginTop: 4 }}>
@@ -214,7 +235,14 @@ function Stats({ loading, profile, sessionMessageCount }) {
     if (profile.pronouns) rows.push(<Row key="pn" label="Pronouns" value={profile.pronouns} />);
     if (profile.follower_count != null)
       rows.push(<Row key="fc" label="Followers" value={profile.follower_count.toLocaleString('de-DE')} />);
-    if (profile.created_at) rows.push(<Row key="ca" label="Account age" value={formatAge(profile.created_at)} />);
+    if (profile.created_at)
+      rows.push(
+        <Row
+          key="ca"
+          label="Account"
+          value={`${formatDate(profile.created_at)} · ${formatAge(profile.created_at)}`}
+        />,
+      );
     if (profile.following_since)
       rows.push(<Row key="fs" label="Following since" value={formatAge(profile.following_since)} />);
   }

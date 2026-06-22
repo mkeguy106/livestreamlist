@@ -1,5 +1,6 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { readableColor } from '../utils/color.js';
+import { countSessionMessages } from '../utils/format.js';
 import { useAuth } from '../hooks/useAuth.jsx';
 import { useChat } from '../hooks/useChat.js';
 import { usePreferences } from '../hooks/usePreferences.jsx';
@@ -275,16 +276,18 @@ export default function ChatView({
   };
 
   const handleOpen = useCallback(
-    (user, rect) => onUsernameOpen?.(user, rect, channelKey),
-    [onUsernameOpen, channelKey],
+    (user, rect) =>
+      onUsernameOpen?.(user, rect, channelKey, countSessionMessages(messages, user)),
+    [onUsernameOpen, channelKey, messages],
   );
   const handleContext = useCallback(
     (user, point) => onUsernameContext?.(user, point, channelKey),
     [onUsernameContext, channelKey],
   );
   const handleHover = useCallback(
-    (user, rect) => onUsernameHover?.(user, rect, channelKey),
-    [onUsernameHover, channelKey],
+    (user, rect) =>
+      onUsernameHover?.(user, rect, channelKey, user ? countSessionMessages(messages, user) : 0),
+    [onUsernameHover, channelKey, messages],
   );
 
   const startReply = useCallback((m) => {

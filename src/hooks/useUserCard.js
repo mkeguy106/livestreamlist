@@ -13,11 +13,12 @@ export function useUserCard() {
     profile: null,
     profileLoading: false,
     profileError: null,
+    sessionMessageCount: null,
   });
 
   const instanceRef = useRef(0);
 
-  const openFor = useCallback(async (user, channelKey, anchor) => {
+  const openFor = useCallback(async (user, channelKey, anchor, extras) => {
     const myInstance = ++instanceRef.current;
     setState({
       open: true,
@@ -28,6 +29,7 @@ export function useUserCard() {
       profile: null,
       profileLoading: !!user.id,
       profileError: null,
+      sessionMessageCount: extras?.sessionMessageCount ?? null,
     });
     if (!user.id) return; // anonymous: nothing to fetch
 
