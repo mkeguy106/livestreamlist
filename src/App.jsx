@@ -84,12 +84,12 @@ export default function App() {
   const lockedByClick = useRef(false);
 
   const onUsernameOpen = useCallback(
-    (user, rect, channelKey) => {
+    (user, rect, channelKey, sessionMessageCount) => {
       lockedByClick.current = true;
       // Cancel any pending hover-open / hover-close timers — the click wins.
       if (hoverTimer.current) clearTimeout(hoverTimer.current);
       if (closeTimer.current) clearTimeout(closeTimer.current);
-      cardOpenFor(user, channelKey, rect);
+      cardOpenFor(user, channelKey, rect, { sessionMessageCount });
     },
     [cardOpenFor],
   );
@@ -118,7 +118,7 @@ export default function App() {
   }, []);
 
   const onUsernameHover = useCallback(
-    (user, rect, channelKey) => {
+    (user, rect, channelKey, sessionMessageCount) => {
       if (!hoverEnabled) return;
       // While a click-opened card is showing, ignore all hover signals so the
       // card doesn't yoink to a different user when chat scrolls or the cursor
@@ -130,7 +130,7 @@ export default function App() {
         if (hoverTimer.current) clearTimeout(hoverTimer.current);
         if (closeTimer.current) clearTimeout(closeTimer.current);
         hoverTimer.current = setTimeout(() => {
-          if (overAnchor.current) cardOpenFor(user, channelKey, rect);
+          if (overAnchor.current) cardOpenFor(user, channelKey, rect, { sessionMessageCount });
         }, hoverDelay);
       } else {
         // leaving the anchor
@@ -372,6 +372,7 @@ export default function App() {
         profile={card.profile}
         profileLoading={card.profileLoading}
         profileError={card.profileError}
+        sessionMessageCount={card.sessionMessageCount}
         onClose={card.close}
         onOpenHistory={() => {
           setHistoryDlg({ open: true, channelKey: card.channelKey, user: card.user });
