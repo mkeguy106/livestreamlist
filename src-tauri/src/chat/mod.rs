@@ -6,6 +6,7 @@ mod kick;
 pub mod links;
 pub mod log_store;
 pub mod models;
+mod reconnect;
 mod twitch;
 
 pub use emotes::Emote;

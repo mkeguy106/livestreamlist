@@ -17,6 +17,7 @@ use super::models::{
     ChatStatusEvent, ChatUser, EmoteRange, ReplyInfo, SystemEvent,
 };
 use super::links::scan_links;
+use super::reconnect::{Backoff, CLEAN_RECONNECT_DELAY};
 use super::OutboundMsg;
 use crate::platforms::Platform;
 
@@ -75,27 +76,48 @@ pub struct TwitchChatConfig {
     pub last_room_state: parking_lot::Mutex<Option<ChatRoomState>>,
 }
 
-/// Run the Twitch IRC connection until dropped/aborted. Emits
-/// `chat:message` and `chat:status` events for the given channel_key.
+/// Run the Twitch IRC connection until aborted, reconnecting automatically.
+/// Emits `chat:message` and `chat:status` events for the given channel_key.
 /// Uses the auth token when present, otherwise a read-only `justinfan*` login.
+///
+/// The loop never returns on its own — Twitch periodically closes long-lived
+/// connections and sends `RECONNECT`, and transient network drops happen; in
+/// all cases we re-dial. The task is torn down only by `ChatManager::disconnect`
+/// aborting its `JoinHandle` (cancels at the next `.await`). Because the outbound
+/// `mpsc` receiver lives in `cfg` for the whole loop, the matching sender stays
+/// valid across reconnects, so `send_raw` no longer fails with "channel closed"
+/// just because a socket dropped.
 pub async fn run(mut cfg: TwitchChatConfig) {
-    emit_status(&cfg.app, &cfg.channel_key, ChatStatus::Connecting, None);
+    let mut backoff = Backoff::new();
 
-    match connect_and_read(&mut cfg).await {
-        Ok(()) => emit_status(&cfg.app, &cfg.channel_key, ChatStatus::Closed, None),
-        Err(e) => {
-            log::warn!("Twitch IRC for {} errored: {:#}", cfg.channel_login, e);
-            emit_status(
-                &cfg.app,
-                &cfg.channel_key,
-                ChatStatus::Error,
-                Some(format!("{e:#}")),
-            );
-        }
+    loop {
+        emit_status(&cfg.app, &cfg.channel_key, ChatStatus::Connecting, None);
+
+        // `connect_and_read` resets the backoff the moment the handshake
+        // completes, so any session that actually connected re-dials promptly
+        // even if it later ends in an error (network blip after an hour).
+        let delay = match connect_and_read(&mut cfg, &mut backoff).await {
+            // Clean close or a `RECONNECT` request: re-dial promptly.
+            Ok(()) => CLEAN_RECONNECT_DELAY,
+            // Connect/read error: back off so a channel that never connects
+            // (offline, invalid login, network down) doesn't hammer Twitch.
+            Err(e) => {
+                log::warn!("Twitch IRC for {} dropped: {:#}", cfg.channel_login, e);
+                backoff.next_delay()
+            }
+        };
+
+        emit_status(
+            &cfg.app,
+            &cfg.channel_key,
+            ChatStatus::Reconnecting,
+            Some(format!("reconnecting in {}s", delay.as_secs())),
+        );
+        tokio::time::sleep(delay).await;
     }
 }
 
-async fn connect_and_read(cfg: &mut TwitchChatConfig) -> Result<()> {
+async fn connect_and_read(cfg: &mut TwitchChatConfig, backoff: &mut Backoff) -> Result<()> {
     let (mut ws, _) = connect_async(IRC_URL)
         .await
         .context("connect wss://irc-ws.chat.twitch.tv")?;
@@ -127,6 +149,9 @@ async fn connect_and_read(cfg: &mut TwitchChatConfig) -> Result<()> {
     .await?;
 
     emit_status(&cfg.app, &cfg.channel_key, ChatStatus::Connected, None);
+    // Handshake done — this connection is healthy, so a later drop should
+    // reconnect from a clean 1s backoff rather than a stale grown delay.
+    backoff.reset();
 
     // Prefetch global Twitch badges in the background. Idempotent — the
     // cache skips the HTTP call if globals were already loaded by an earlier
@@ -225,14 +250,18 @@ async fn read_loop(
     ws: &mut WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>,
     mut log: Option<&mut ChatLogWriter>,
 ) -> Result<()> {
-    loop {
+    'read: loop {
         tokio::select! {
             frame = ws.next() => {
                 let Some(frame) = frame else { break };
                 match frame? {
                     WsMessage::Text(text) => {
                         for line in text.split("\r\n").filter(|l| !l.is_empty()) {
-                            handle_line(cfg, ws, log.as_deref_mut(), line).await?;
+                            // `true` means the server sent RECONNECT — close out
+                            // cleanly and let `run`'s loop re-dial.
+                            if handle_line(cfg, ws, log.as_deref_mut(), line).await? {
+                                break 'read;
+                            }
                         }
                     }
                     WsMessage::Binary(_) => {}
@@ -283,14 +312,17 @@ async fn read_loop(
     Ok(())
 }
 
+/// Handle one IRC line. Returns `Ok(true)` when the server asked us to
+/// reconnect (`RECONNECT` command), signalling the read loop to close out so
+/// `run` re-dials; `Ok(false)` otherwise.
 async fn handle_line(
     cfg: &TwitchChatConfig,
     ws: &mut WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>,
     log: Option<&mut ChatLogWriter>,
     line: &str,
-) -> Result<()> {
+) -> Result<bool> {
     let Some(msg) = irc::parse(line) else {
-        return Ok(());
+        return Ok(false);
     };
 
     match msg.command {
@@ -355,9 +387,16 @@ async fn handle_line(
         "NOTICE" => {
             // Surface lands in Phase 4b with preferences.
         }
+        "RECONNECT" => {
+            // Twitch is about to drop us for a server restart/migration. Bail
+            // out of the read loop so `run` re-dials immediately rather than
+            // waiting for the eventual socket close.
+            log::info!("Twitch sent RECONNECT for {}", cfg.channel_login);
+            return Ok(true);
+        }
         _ => {}
     }
-    Ok(())
+    Ok(false)
 }
 
 fn persist_and_emit(cfg: &TwitchChatConfig, log: Option<&mut ChatLogWriter>, msg: ChatMessage) {
