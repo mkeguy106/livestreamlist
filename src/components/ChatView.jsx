@@ -590,10 +590,11 @@ export default function ChatView({
 
 function EmptyHint({ status }) {
   const label =
-    status === 'connecting' ? 'Connecting…' :
-    status === 'connected'  ? 'Waiting for messages…' :
-    status === 'error'      ? 'Chat errored.' :
-    status === 'closed'     ? 'Chat disconnected.' :
+    status === 'connecting'   ? 'Connecting…' :
+    status === 'connected'    ? 'Waiting for messages…' :
+    status === 'reconnecting' ? 'Reconnecting…' :
+    status === 'error'        ? 'Chat errored.' :
+    status === 'closed'       ? 'Chat disconnected.' :
     '—';
   return (
     <div style={{ padding: 16, color: 'var(--zinc-600)', fontSize: 'var(--t-11)' }}>{label}</div>

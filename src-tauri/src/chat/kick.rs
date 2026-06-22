@@ -27,6 +27,7 @@ use super::emotes::EmoteCache;
 use super::links::scan_links;
 use super::log_store::ChatLogWriter;
 use super::models::{ChatBadge, ChatMessage, ChatRoomState, ChatRoomStateEvent, ChatStatus, ChatStatusEvent, ChatUser, EmoteRange, ReplyInfo};
+use super::reconnect::{Backoff, CLEAN_RECONNECT_DELAY};
 use super::OutboundMsg;
 use crate::auth;
 use crate::platforms::Platform;
@@ -53,24 +54,50 @@ struct KickChannelIds {
     room_state: ChatRoomState,
 }
 
+/// Run the Kick Pusher connection until aborted, reconnecting automatically.
+///
+/// Mirrors `twitch::run`: the loop never returns on its own — Pusher closes
+/// long-lived/idle connections and transient network drops happen; in all
+/// cases we re-dial. The task is torn down only by `ChatManager::disconnect`
+/// aborting its `JoinHandle` (cancels at the next `.await`). The outbound
+/// `mpsc` receiver lives in `cfg` for the whole loop, so the matching sender
+/// stays valid across reconnects and `send_raw` no longer fails with
+/// "channel closed" just because a socket dropped.
+///
+/// Unlike Twitch IRC, Pusher has no in-band "reconnect" command — when the
+/// server wants us to reconnect it simply closes the socket, which the read
+/// loop already treats as a clean break.
 pub async fn run(mut cfg: KickChatConfig) {
-    emit_status(&cfg.app, &cfg.channel_key, ChatStatus::Connecting, None);
+    let mut backoff = Backoff::new();
 
-    match connect_and_read(&mut cfg).await {
-        Ok(()) => emit_status(&cfg.app, &cfg.channel_key, ChatStatus::Closed, None),
-        Err(e) => {
-            log::warn!("Kick Pusher for {} errored: {:#}", cfg.channel_slug, e);
-            emit_status(
-                &cfg.app,
-                &cfg.channel_key,
-                ChatStatus::Error,
-                Some(format!("{e:#}")),
-            );
-        }
+    loop {
+        emit_status(&cfg.app, &cfg.channel_key, ChatStatus::Connecting, None);
+
+        // `connect_and_read` resets the backoff the moment the handshake
+        // completes, so any session that actually connected re-dials promptly
+        // even if it later ends in an error (network blip after an hour).
+        let delay = match connect_and_read(&mut cfg, &mut backoff).await {
+            // Clean close: re-dial promptly.
+            Ok(()) => CLEAN_RECONNECT_DELAY,
+            // Connect/read error: back off so a channel that never connects
+            // (offline, invalid slug, network down) doesn't hammer Kick.
+            Err(e) => {
+                log::warn!("Kick Pusher for {} dropped: {:#}", cfg.channel_slug, e);
+                backoff.next_delay()
+            }
+        };
+
+        emit_status(
+            &cfg.app,
+            &cfg.channel_key,
+            ChatStatus::Reconnecting,
+            Some(format!("reconnecting in {}s", delay.as_secs())),
+        );
+        tokio::time::sleep(delay).await;
     }
 }
 
-async fn connect_and_read(cfg: &mut KickChatConfig) -> Result<()> {
+async fn connect_and_read(cfg: &mut KickChatConfig, backoff: &mut Backoff) -> Result<()> {
     let ids = resolve_channel_ids(&cfg.http, &cfg.channel_slug).await?;
 
     cfg.badges.seed_kick_system_badges();
@@ -97,6 +124,9 @@ async fn connect_and_read(cfg: &mut KickChatConfig) -> Result<()> {
     ws.send(WsMessage::Text(subscribe.to_string())).await?;
 
     emit_status(&cfg.app, &cfg.channel_key, ChatStatus::Connected, None);
+    // Handshake done — this connection is healthy, so a later drop should
+    // reconnect from a clean 1s backoff rather than a stale grown delay.
+    backoff.reset();
 
     let _ = cfg.app.emit(
         &format!("chat:roomstate:{}", cfg.channel_key),
