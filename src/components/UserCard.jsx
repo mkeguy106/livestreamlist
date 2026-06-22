@@ -1,16 +1,22 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import Tooltip from './Tooltip.jsx';
 import { readableColor } from '../utils/color.js';
 import { formatDate } from '../utils/format.js';
 
 /**
- * Anchored portal popover for a single chat user. Caller mounts one of these
- * per ChatView (or per app); state comes from useUserCard.
+ * Anchored portal popover for a single chat user.
+ *
+ * Redesign (toolbar-header direction): actions (History / Channel / Block /
+ * More) live in a header toolbar beside the identity; a platform-color edge
+ * accents the card; global profile stats and your-relationship-to-the-user
+ * data sit in separate zones; nickname / note are inline-editable.
  *
  * Props:
- *   open, anchor, user, channelKey, metadata, profile, profileLoading,
- *   profileError, onClose, onOpenHistory, onOpenChannel
+ *   open, anchor, user, metadata, profile, profileLoading, profileError,
+ *   sessionMessageCount,
+ *   onClose, onOpenHistory, onOpenChannel, onCardHover,
+ *   onToggleBlocked, onEditNickname, onEditNote, onMore(point)
  */
 export default function UserCard({
   open,
@@ -24,6 +30,10 @@ export default function UserCard({
   onOpenHistory,
   onOpenChannel,
   onCardHover,
+  onToggleBlocked,
+  onEditNickname,
+  onEditNote,
+  onMore,
   sessionMessageCount,
 }) {
   const cardRef = useRef(null);
@@ -75,10 +85,12 @@ export default function UserCard({
   if (!open || !user) return null;
 
   const display = user.display_name || user.login;
-  // var(--zinc-100) when no color set; otherwise apply the same
-  // lightness floor we use in chat rows so dark Twitch colors don't
-  // vanish in the popover.
+  // var(--zinc-100) when no color set; otherwise apply the same lightness floor
+  // we use in chat rows so dark Twitch colors don't vanish in the popover.
   const nameColor = user.color ? readableColor(user.color) : 'var(--zinc-100)';
+  const blocked = !!metadata?.blocked;
+  const isSignedOut = !!profileError;
+  const accentColor = blocked ? 'var(--zinc-700)' : 'var(--twitch)';
 
   const card = (
     <div
@@ -92,198 +104,486 @@ export default function UserCard({
         left: pos?.x ?? -9999,
         top: pos?.y ?? -9999,
         zIndex: 200,
+        width: 300,
         background: 'var(--zinc-925)',
         border: '1px solid var(--zinc-800)',
         borderRadius: 'var(--r-2)',
         boxShadow: '0 12px 32px rgba(0,0,0,.6)',
-        padding: '12px 14px',
-        minWidth: 280,
-        maxWidth: 320,
+        overflow: 'hidden',
         font: 'var(--t-12) var(--font-sans)',
         color: 'var(--zinc-200)',
       }}
     >
+      {blocked ? <BlockedBanner /> : null}
+
       <Header
         display={display}
         login={user.login}
         nameColor={nameColor}
         avatar={profile?.profile_image_url}
-        platformLetter="t"
-        badges={user.badges /* may be undefined; fall back below */}
         broadcasterType={profile?.broadcaster_type}
+        blocked={blocked}
+        isSignedOut={isSignedOut}
+        accentColor={accentColor}
+        onOpenHistory={onOpenHistory}
+        onOpenChannel={onOpenChannel}
+        onToggleBlocked={onToggleBlocked}
+        onMore={onMore}
       />
 
-      <Divider />
-
-      {profileError ? (
-        <ErrorBanner
-          message={
-            profileError.includes('sign in') || profileError.includes('not signed in')
-              ? 'Sign in to Twitch in Settings to load profile data.'
-              : 'Couldn’t load profile.'
-          }
-        />
-      ) : (
-        <Stats
-          loading={profileLoading}
-          profile={profile}
-          sessionMessageCount={sessionMessageCount}
-        />
-      )}
-
-      {profile?.description ? (
+      {isSignedOut ? (
+        <SignedOutNotice message={profileError} />
+      ) : profileLoading ? (
+        <LoadingStats />
+      ) : profile ? (
         <>
-          <Divider />
-          <div style={{ font: 'var(--t-11) var(--font-sans)', color: 'var(--zinc-400)', lineHeight: 1.4 }}>
-            {profile.description}
-          </div>
+          {profile.description ? (
+            <div
+              className="uc-clamp"
+              style={{
+                padding: '0 12px 11px',
+                font: '11px var(--font-sans)',
+                color: 'var(--zinc-400)',
+                lineHeight: 1.45,
+              }}
+            >
+              {profile.description}
+            </div>
+          ) : null}
+          <StatsRow profile={profile} />
         </>
       ) : null}
 
-      {(metadata?.nickname || metadata?.note) ? (
-        <>
-          <Divider />
-          {metadata.nickname ? (
-            <div style={{ font: 'var(--t-11) var(--font-sans)', color: 'var(--zinc-300)' }}>
-              ★ Nickname: {metadata.nickname}
-            </div>
-          ) : null}
-          {metadata.note ? (
-            <div style={{ font: 'var(--t-11) var(--font-sans)', color: 'var(--zinc-300)' }}>
-              ✎ Note: {metadata.note}
-            </div>
-          ) : null}
-        </>
-      ) : null}
-
-      <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
-        <button className="rx-btn rx-btn-ghost" onClick={onOpenHistory} style={{ flex: 1 }}>
-          Chat History
-        </button>
-        <button className="rx-btn rx-btn-ghost" onClick={onOpenChannel} style={{ flex: 1 }}>
-          Open Channel
-        </button>
-      </div>
+      <RelationshipZone
+        sessionMessageCount={sessionMessageCount}
+        followingSince={profile?.following_since}
+        nickname={metadata?.nickname}
+        note={metadata?.note}
+        canEdit={!!onEditNickname}
+        onEditNickname={onEditNickname}
+        onEditNote={onEditNote}
+        onMore={onMore}
+      />
     </div>
   );
 
   return createPortal(card, document.body);
 }
 
-function Header({ display, login, nameColor, avatar, platformLetter, badges = [], broadcasterType }) {
-  return (
-    <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
-      <div
-        style={{
-          width: 44, height: 44, borderRadius: '50%', overflow: 'hidden',
-          background: 'var(--zinc-800)', flexShrink: 0,
-        }}
-      >
-        {avatar ? <img src={avatar} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : null}
-      </div>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8 }}>
-          <span style={{ color: nameColor, fontWeight: 600, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-            {display}
-          </span>
-          <span className={`rx-plat ${platformLetter}`}>{platformLetter}</span>
-        </div>
-        {display.toLowerCase() !== login.toLowerCase() ? (
-          <div style={{ color: 'var(--zinc-400)', fontSize: 11 }}>@{login}</div>
-        ) : null}
-        {broadcasterType === 'partner' || broadcasterType === 'affiliate' ? (
-          <span
-            style={{
-              display: 'inline-block',
-              marginTop: 4,
-              font: '600 9px var(--font-mono)',
-              letterSpacing: '.04em',
-              textTransform: 'uppercase',
-              color: 'var(--twitch)',
-              background: 'rgba(167,139,250,.12)',
-              border: '1px solid rgba(167,139,250,.22)',
-              borderRadius: 4,
-              padding: '1px 6px',
-            }}
-          >
-            {broadcasterType === 'partner' ? 'Partner' : 'Affiliate'}
-          </span>
-        ) : null}
-        {badges?.length ? (
-          <div style={{ display: 'flex', gap: 4, marginTop: 4 }}>
-            {badges.map(b => (
-              <Tooltip key={b.id} text={b.title}>
-                <img src={b.url} alt="" width={18} height={18} />
-              </Tooltip>
-            ))}
-          </div>
-        ) : null}
-      </div>
-    </div>
-  );
-}
-
-function Divider() {
-  return <div style={{ borderTop: 'var(--hair)', margin: '10px 0' }} />;
-}
-
-function Stats({ loading, profile, sessionMessageCount }) {
-  const rows = [];
-  if (loading) {
-    rows.push(<Skeleton key="s1" />, <Skeleton key="s2" />, <Skeleton key="s3" />);
-  } else if (profile) {
-    if (profile.pronouns) rows.push(<Row key="pn" label="Pronouns" value={profile.pronouns} />);
-    if (profile.follower_count != null)
-      rows.push(<Row key="fc" label="Followers" value={profile.follower_count.toLocaleString('de-DE')} />);
-    if (profile.created_at)
-      rows.push(
-        <Row
-          key="ca"
-          label="Account"
-          value={`${formatDate(profile.created_at)} · ${formatAge(profile.created_at)}`}
-        />,
-      );
-    if (profile.following_since)
-      rows.push(<Row key="fs" label="Following since" value={formatAge(profile.following_since)} />);
-  }
-  if (sessionMessageCount != null)
-    rows.push(<Row key="sm" label="Session msgs" value={String(sessionMessageCount)} />);
-  return <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>{rows}</div>;
-}
-
-function Row({ label, value }) {
-  return (
-    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
-      <span style={{ color: 'var(--zinc-400)' }}>{label}</span>
-      <span style={{ color: 'var(--zinc-200)' }}>{value}</span>
-    </div>
-  );
-}
-
-function Skeleton() {
+function Header({
+  display,
+  login,
+  nameColor,
+  avatar,
+  broadcasterType,
+  blocked,
+  isSignedOut,
+  accentColor,
+  onOpenHistory,
+  onOpenChannel,
+  onToggleBlocked,
+  onMore,
+}) {
+  const isPartnerOrAffiliate = broadcasterType === 'partner' || broadcasterType === 'affiliate';
   return (
     <div
       style={{
-        height: 8, borderRadius: 2, background: 'var(--zinc-800)',
-        animation: 'usercard-pulse 1.4s ease-in-out infinite',
+        display: 'flex',
+        gap: 11,
+        alignItems: 'flex-start',
+        padding: '13px 12px 11px',
+        borderLeft: `2px solid ${accentColor}`,
       }}
-    />
+    >
+      <div
+        style={{
+          width: 42,
+          height: 42,
+          borderRadius: '50%',
+          overflow: 'hidden',
+          background: 'var(--zinc-800)',
+          flexShrink: 0,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          color: 'var(--zinc-500)',
+          font: '600 16px var(--font-sans)',
+          filter: blocked ? 'grayscale(1)' : undefined,
+          opacity: blocked ? 0.6 : 1,
+        }}
+      >
+        {avatar ? (
+          <img src={avatar} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+        ) : (
+          display.charAt(0).toUpperCase()
+        )}
+      </div>
+
+      <div style={{ flex: 1, minWidth: 0, opacity: blocked ? 0.85 : 1 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span
+            style={{
+              color: blocked ? 'var(--zinc-300)' : nameColor,
+              fontWeight: 600,
+              fontSize: 13,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {display}
+          </span>
+          <span className="rx-plat t">t</span>
+          {isPartnerOrAffiliate ? (
+            <span
+              style={{
+                font: '600 8px var(--font-mono)',
+                letterSpacing: '.04em',
+                textTransform: 'uppercase',
+                color: 'var(--twitch)',
+                border: '1px solid rgba(167,139,250,.28)',
+                borderRadius: 3,
+                padding: '0 4px',
+                lineHeight: '14px',
+              }}
+            >
+              {broadcasterType === 'partner' ? 'Partner' : 'Affiliate'}
+            </span>
+          ) : null}
+        </div>
+
+        <div style={{ color: 'var(--zinc-500)', font: '11px var(--font-mono)', marginTop: 2 }}>
+          @{login}
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 8 }}>
+          <button
+            type="button"
+            className="rx-btn rx-btn-ghost"
+            onClick={onOpenHistory}
+            style={{ padding: '3px 8px', gap: 5, fontSize: 11 }}
+          >
+            <span style={{ fontSize: 11 }}>◷</span> History
+          </button>
+          {blocked ? (
+            <button
+              type="button"
+              className="rx-btn"
+              onClick={onToggleBlocked}
+              style={{ padding: '3px 9px', fontSize: 11 }}
+            >
+              Unblock
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="rx-btn rx-btn-ghost"
+              onClick={onOpenChannel}
+              style={{ padding: '3px 8px', gap: 5, fontSize: 11 }}
+            >
+              <span style={{ fontSize: 11 }}>↗</span> Channel
+            </button>
+          )}
+
+          {!blocked && !isSignedOut ? (
+            <>
+              <div style={{ flex: 1 }} />
+              <Tooltip text="Block user" align="right">
+                <button
+                  type="button"
+                  aria-label="Block user"
+                  className="uc-iconbtn"
+                  onClick={onToggleBlocked}
+                  style={{ color: 'var(--live)' }}
+                >
+                  <span style={{ fontSize: 13, lineHeight: 1 }}>⊘</span>
+                </button>
+              </Tooltip>
+              <Tooltip text="More actions" align="right">
+                <button
+                  type="button"
+                  aria-label="More actions"
+                  className="uc-iconbtn"
+                  onClick={e => onMore?.(pointFromEvent(e))}
+                >
+                  <span style={{ fontSize: 14, lineHeight: 1 }}>⋯</span>
+                </button>
+              </Tooltip>
+            </>
+          ) : null}
+        </div>
+      </div>
+    </div>
   );
 }
 
-function ErrorBanner({ message }) {
+function StatsRow({ profile }) {
+  const cells = [];
+  if (profile.follower_count != null) {
+    cells.push(
+      <Stat key="fc" label="Followers" value={profile.follower_count.toLocaleString('de-DE')} mono />,
+    );
+  }
+  if (profile.created_at) {
+    cells.push(
+      <Tooltip key="ca" text={formatDate(profile.created_at)}>
+        <Stat label="Account" value={formatAge(profile.created_at)} mono />
+      </Tooltip>,
+    );
+  }
+  if (profile.pronouns) {
+    cells.push(<Stat key="pn" label="Pronouns" value={profile.pronouns} />);
+  }
+  if (cells.length === 0) return null;
+
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 14,
+        padding: '9px 12px',
+        borderTop: 'var(--hair)',
+        borderBottom: 'var(--hair)',
+        fontVariantNumeric: 'tabular-nums',
+      }}
+    >
+      {cells.map((cell, i) => (
+        <Fragment key={i}>
+          {i > 0 ? (
+            <div style={{ width: 1, alignSelf: 'stretch', background: 'rgba(255,255,255,.06)' }} />
+          ) : null}
+          {cell}
+        </Fragment>
+      ))}
+    </div>
+  );
+}
+
+function Stat({ label, value, mono }) {
+  return (
+    <div>
+      <div
+        style={{
+          font: '9px var(--font-mono)',
+          letterSpacing: '.06em',
+          textTransform: 'uppercase',
+          color: 'var(--zinc-600)',
+        }}
+      >
+        {label}
+      </div>
+      <div
+        style={
+          mono
+            ? { font: '13px var(--font-mono)', color: 'var(--zinc-100)', marginTop: 2 }
+            : { font: '12px var(--font-sans)', color: 'var(--zinc-200)', marginTop: 3 }
+        }
+      >
+        {value}
+      </div>
+    </div>
+  );
+}
+
+function RelationshipZone({
+  sessionMessageCount,
+  followingSince,
+  nickname,
+  note,
+  canEdit,
+  onEditNickname,
+  onEditNote,
+  onMore,
+}) {
+  const summary = [];
+  if (sessionMessageCount != null) summary.push(`${sessionMessageCount} msgs`);
+  if (followingSince) summary.push(`follows ${formatAge(followingSince)}`);
+
+  const hasMeta = !!(nickname || note);
+
+  return (
+    <div style={{ background: 'rgba(255,255,255,.02)' }}>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 8,
+          padding: '8px 12px 5px',
+        }}
+      >
+        <span
+          style={{
+            font: '9px var(--font-mono)',
+            letterSpacing: '.1em',
+            textTransform: 'uppercase',
+            color: 'var(--zinc-500)',
+          }}
+        >
+          In this chat
+        </span>
+        {summary.length ? (
+          <span
+            style={{
+              font: '11px var(--font-mono)',
+              color: 'var(--zinc-400)',
+              fontVariantNumeric: 'tabular-nums',
+            }}
+          >
+            {summary.join(' · ')}
+          </span>
+        ) : null}
+      </div>
+
+      {!canEdit ? null : hasMeta ? (
+        <div
+          className="uc-editrow"
+          style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 12px 9px' }}
+        >
+          {nickname ? (
+            <button
+              type="button"
+              onClick={onEditNickname}
+              style={{
+                all: 'unset',
+                cursor: 'pointer',
+                color: 'var(--zinc-200)',
+                fontSize: 12,
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 5,
+              }}
+            >
+              <span style={{ color: 'var(--zinc-600)' }}>★</span>
+              {nickname}
+            </button>
+          ) : null}
+          {nickname && note ? <span style={{ color: 'var(--zinc-700)' }}>·</span> : null}
+          {note ? (
+            <button
+              type="button"
+              onClick={onEditNote}
+              style={{
+                all: 'unset',
+                cursor: 'pointer',
+                flex: 1,
+                minWidth: 0,
+                color: 'var(--zinc-300)',
+                font: '11px var(--font-sans)',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              <span style={{ color: 'var(--zinc-600)' }}>✎</span> {note}
+            </button>
+          ) : (
+            <div style={{ flex: 1 }} />
+          )}
+          <button
+            type="button"
+            className="rx-btn rx-btn-ghost uc-row-edit"
+            onClick={e => onMore?.(pointFromEvent(e))}
+            style={{ fontSize: 11, padding: '2px 7px' }}
+          >
+            Edit
+          </button>
+        </div>
+      ) : (
+        <div style={{ padding: '2px 12px 9px' }}>
+          <button
+            type="button"
+            className="rx-btn rx-btn-ghost"
+            onClick={e => onMore?.(pointFromEvent(e))}
+            style={{ fontSize: 11, padding: '2px 7px', gap: 5 }}
+          >
+            <span style={{ color: 'var(--zinc-600)' }}>✎</span> Add nickname or note
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function BlockedBanner() {
+  return (
+    <div
+      style={{
+        background: 'rgba(239,68,68,.08)',
+        borderBottom: '1px solid rgba(239,68,68,.28)',
+        padding: '5px 12px',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
+      }}
+    >
+      <span
+        style={{
+          color: 'var(--live)',
+          font: '600 9px var(--font-mono)',
+          letterSpacing: '.1em',
+          textTransform: 'uppercase',
+        }}
+      >
+        ⊘ Blocked
+      </span>
+      <span style={{ font: '10px var(--font-mono)', color: 'var(--zinc-500)' }}>messages hidden</span>
+    </div>
+  );
+}
+
+function SignedOutNotice({ message }) {
+  const text =
+    message && (message.includes('sign in') || message.includes('not signed in'))
+      ? 'Sign in to Twitch in Settings to load profile data.'
+      : 'Couldn’t load profile.';
   return (
     <div
       role="alert"
       style={{
-        background: 'rgba(239,68,68,.08)', border: '1px solid rgba(239,68,68,.4)',
-        borderRadius: 'var(--r-2)', padding: '6px 8px', color: 'var(--zinc-300)',
-        fontSize: 11,
+        margin: '0 12px 11px',
+        background: 'rgba(234,179,8,.07)',
+        border: '1px solid rgba(234,179,8,.3)',
+        borderRadius: 'var(--r-2)',
+        padding: '8px 10px',
+        display: 'flex',
+        gap: 8,
+        alignItems: 'flex-start',
       }}
     >
-      {message}
+      <span style={{ color: 'var(--warn)', fontSize: 12, lineHeight: 1.3 }}>⚠</span>
+      <span style={{ color: 'var(--zinc-300)', font: '11px var(--font-sans)', lineHeight: 1.45 }}>
+        {text}
+      </span>
     </div>
   );
+}
+
+function LoadingStats() {
+  const bar = (w, extra) => (
+    <div
+      style={{
+        height: 24,
+        flex: 1,
+        borderRadius: 2,
+        background: 'var(--zinc-800)',
+        animation: 'usercard-pulse 1.4s ease-in-out infinite',
+        ...extra,
+      }}
+    />
+  );
+  return (
+    <div style={{ display: 'flex', gap: 14, padding: '10px 12px', borderTop: 'var(--hair)' }}>
+      {bar()}
+      {bar()}
+    </div>
+  );
+}
+
+function pointFromEvent(e) {
+  const r = e.currentTarget.getBoundingClientRect();
+  return { x: r.left, y: r.bottom + 4 };
 }
 
 function formatAge(isoStr) {
@@ -292,7 +592,7 @@ function formatAge(isoStr) {
   const days = Math.floor(ms / (1000 * 60 * 60 * 24));
   const years = Math.floor(days / 365);
   const months = Math.floor((days % 365) / 30);
-  if (years > 0) return `${years} y ${months} mo`;
-  if (months > 0) return `${months} mo`;
-  return `${days} d`;
+  if (years > 0) return `${years}y ${months}mo`;
+  if (months > 0) return `${months}mo`;
+  return `${days}d`;
 }

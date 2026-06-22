@@ -3,6 +3,7 @@ import Command from './directions/Command.jsx';
 import Columns from './directions/Columns.jsx';
 import Focus from './directions/Focus.jsx';
 import AddChannelDialog from './components/AddChannelDialog.jsx';
+import ConfirmDialog from './components/ConfirmDialog.jsx';
 import LoginButton from './components/LoginButton.jsx';
 import NicknameDialog from './components/NicknameDialog.jsx';
 import NoteDialog from './components/NoteDialog.jsx';
@@ -104,6 +105,7 @@ export default function App() {
   const [nickDlg, setNickDlg] = useState({ open: false });
   const [noteDlg, setNoteDlg] = useState({ open: false });
   const [historyDlg, setHistoryDlg] = useState({ open: false });
+  const [confirmBlock, setConfirmBlock] = useState({ open: false, user: null });
 
   const onUsernameContext = useCallback(async (user, point, channelKey) => {
     let metadata = null;
@@ -167,6 +169,28 @@ export default function App() {
       closeTimer.current = null;
     }
   }, [cardClose]);
+
+  // Persist a block/unblock for a user, refreshing the card if it's showing them.
+  const applyBlocked = useCallback(async (user, blocked) => {
+    if (!user?.id) return;
+    try {
+      await setUserMetadata(`twitch:${user.id}`, {
+        blocked,
+        login_hint: user.login,
+        display_name_hint: user.display_name,
+      });
+    } catch (e) {
+      console.error('set_user_metadata', e);
+    }
+    if (card.open && card.user?.id === user.id) card.refreshMetadata();
+  }, [card]);
+
+  // Blocking is gated behind a confirmation so a single misclick can't hide
+  // someone; unblocking is safe and reversible, so it runs immediately.
+  const requestToggleBlocked = useCallback((user, metadata) => {
+    if (metadata?.blocked) applyBlocked(user, false);
+    else setConfirmBlock({ open: true, user });
+  }, [applyBlocked]);
 
   // Apply appearance overrides to CSS variables on the root.
   useEffect(() => {
@@ -388,6 +412,16 @@ export default function App() {
           card.close();
         }}
         onCardHover={onCardHover}
+        onToggleBlocked={() => requestToggleBlocked(card.user, card.metadata)}
+        onEditNickname={() => {
+          setNickDlg({ open: true, user: card.user, currentValue: card.metadata?.nickname || '' });
+        }}
+        onEditNote={() => {
+          setNoteDlg({ open: true, user: card.user, currentValue: card.metadata?.note || '' });
+        }}
+        onMore={(point) => {
+          setUserCtx({ open: true, point, user: card.user, metadata: card.metadata });
+        }}
       />
       <UserCardContextMenu
         open={userCtx.open}
@@ -401,20 +435,7 @@ export default function App() {
         onEditNote={() => {
           setNoteDlg({ open: true, user: userCtx.user, currentValue: userCtx.metadata?.note || '' });
         }}
-        onToggleBlocked={async () => {
-          if (!userCtx.user?.id) return;
-          const userKey = `twitch:${userCtx.user.id}`;
-          try {
-            await setUserMetadata(userKey, {
-              blocked: !userCtx.metadata?.blocked,
-              login_hint: userCtx.user.login,
-              display_name_hint: userCtx.user.display_name,
-            });
-          } catch (e) {
-            console.error('set_user_metadata', e);
-          }
-          if (card.open && card.user?.id === userCtx.user?.id) card.refreshMetadata();
-        }}
+        onToggleBlocked={() => requestToggleBlocked(userCtx.user, userCtx.metadata)}
       />
       <NicknameDialog
         open={nickDlg.open}
@@ -474,6 +495,18 @@ export default function App() {
           } catch (e) { console.error('set_user_metadata', e); }
           setNoteDlg({ open: false });
           if (card.user?.id === noteDlg.user.id) card.refreshMetadata();
+        }}
+      />
+      <ConfirmDialog
+        open={confirmBlock.open}
+        title={`Block ${confirmBlock.user?.display_name || confirmBlock.user?.login || 'this user'}?`}
+        body="Their messages will be hidden from chat. You can unblock them anytime from their user card."
+        confirmLabel="Block"
+        danger
+        onClose={() => setConfirmBlock({ open: false, user: null })}
+        onConfirm={() => {
+          applyBlocked(confirmBlock.user, true);
+          setConfirmBlock({ open: false, user: null });
         }}
       />
     </div>

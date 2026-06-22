@@ -242,6 +242,30 @@ body { background: var(--zinc-950); }
   50%      { opacity: 0.55; }
 }
 
+/* UserCard helpers (redesign — toolbar header + two zones). */
+.uc-clamp {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.uc-editrow .uc-row-edit { opacity: 0; transition: opacity 120ms ease; }
+.uc-editrow:hover .uc-row-edit { opacity: 1; }
+.uc-iconbtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--r-2);
+  color: var(--zinc-500);
+  cursor: pointer;
+  transition: all 120ms ease;
+  border: 1px solid transparent;
+  background: transparent;
+}
+.uc-iconbtn:hover { color: var(--zinc-100); background: var(--zinc-900); }
+
 /* Mention flash for Command tabs.
  *
  * 500 ms binary toggle (steps(2, end)) so the tab background snaps between
