@@ -18,7 +18,8 @@ import { useDragHandler } from './hooks/useDragRegion.js';
 import { useLivestreams } from './hooks/useLivestreams.js';
 import { usePreferences } from './hooks/usePreferences.jsx';
 import { useUserCard } from './hooks/useUserCard.js';
-import { getUserMetadata, launchStream, listenEvent, openInBrowser, removeChannel, setFavorite, setUserMetadata } from './ipc.js';
+import { getUserMetadata, launchStream, listenEvent, openInBrowser, openUrl, removeChannel, setFavorite, setUserMetadata } from './ipc.js';
+import { userChannelUrl } from './utils/format.js';
 
 const LAYOUTS = [
   { id: 'command', label: 'Command', letter: 'A', Component: Command },
@@ -377,7 +378,12 @@ export default function App() {
           card.close();
         }}
         onOpenChannel={() => {
-          if (card.channelKey) openInBrowser(card.channelKey).catch((e) => console.error('open_in_browser', e));
+          // Open the clicked user's own channel, not the channel being watched.
+          // The chatter usually isn't in our store, so build the URL from their
+          // login + the platform of the chat (the channelKey prefix).
+          const platform = card.channelKey?.split(':')[0];
+          const url = userChannelUrl(platform, card.user?.login);
+          if (url) openUrl(url).catch((e) => console.error('open_url', e));
           card.close();
         }}
         onCardHover={onCardHover}
