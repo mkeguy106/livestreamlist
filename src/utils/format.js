@@ -24,6 +24,24 @@ export function platformLetter(platform) {
 }
 
 /**
+ * Build the public channel URL for a chat user, given the platform they're
+ * chatting on and their login/handle. Used by the user card's "Open channel"
+ * action so it links to *that user's* channel, not the channel you're watching.
+ * Returns null for unknown platforms or a missing login.
+ */
+export function userChannelUrl(platform, login) {
+  if (!login) return null;
+  const handle = encodeURIComponent(login);
+  switch (platform) {
+    case 'twitch': return `https://www.twitch.tv/${handle}`;
+    case 'kick': return `https://kick.com/${handle}`;
+    case 'chaturbate': return `https://chaturbate.com/${handle}/`;
+    case 'youtube': return `https://www.youtube.com/@${handle}`;
+    default: return null;
+  }
+}
+
+/**
  * Turn an RFC3339 timestamp (or anything Date.parse() handles) into a
  * coarse relative string: "just now", "5m ago", "3h ago", "2d ago".
  * Returns the original string on parse failure.
@@ -40,4 +58,27 @@ export function formatRelative(ts) {
   if (h < 48) return `${h}h ago`;
   const d = Math.floor(h / 24);
   return `${d}d ago`;
+}
+
+// ── Module-scope DEV asserts (run once on import in dev). ──────────────────
+if (typeof import.meta !== 'undefined' && import.meta.env?.DEV) {
+  // userChannelUrl links to the clicked user's channel, per platform.
+  console.assert(
+    userChannelUrl('twitch', 'shroud') === 'https://www.twitch.tv/shroud',
+    'userChannelUrl twitch',
+  );
+  console.assert(
+    userChannelUrl('kick', 'xqc') === 'https://kick.com/xqc',
+    'userChannelUrl kick',
+  );
+  console.assert(
+    userChannelUrl('chaturbate', 'emma') === 'https://chaturbate.com/emma/',
+    'userChannelUrl chaturbate',
+  );
+  console.assert(
+    userChannelUrl('youtube', 'Ludwig') === 'https://www.youtube.com/@Ludwig',
+    'userChannelUrl youtube',
+  );
+  console.assert(userChannelUrl('twitch', '') === null, 'userChannelUrl empty login');
+  console.assert(userChannelUrl('mystery', 'x') === null, 'userChannelUrl unknown platform');
 }
