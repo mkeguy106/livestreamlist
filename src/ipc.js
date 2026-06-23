@@ -85,6 +85,7 @@ export const getUserProfile = (channelKey, userId, login) =>
 export const getUserMessages = (channelKey, userId, limit) =>
   invoke('get_user_messages', { channelKey, userId, limit });
 export const listBlockedUsers = () => invoke('list_blocked_users');
+export const listUserNicknames = () => invoke('list_user_nicknames');
 
 // Spellcheck (PR 1 — engine + IPC only; UI lands in PR 2+)
 export const spellcheckCheck = (text, language, channelEmotes) =>
@@ -471,6 +472,9 @@ async function mockInvoke(name, args) {
           updated_at: new Date().toISOString(),
         },
       ];
+    case 'list_user_nicknames':
+      // Browser-dev: no saved nicknames.
+      return [];
     case 'spellcheck_check':
       // Browser-dev: return empty (no errors found).
       return [];

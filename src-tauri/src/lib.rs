@@ -1119,6 +1119,19 @@ fn list_blocked_users(state: State<'_, AppState>) -> Vec<UserMetadata> {
     v
 }
 
+/// All metadata rows that carry a nickname. Used by the frontend to resolve
+/// nicknames into the chat author column (and update it retroactively when a
+/// nickname is set/cleared mid-session).
+#[tauri::command]
+fn list_user_nicknames(state: State<'_, AppState>) -> Vec<UserMetadata> {
+    state
+        .users
+        .snapshot()
+        .into_iter()
+        .filter(|m| m.nickname.is_some())
+        .collect()
+}
+
 #[tauri::command]
 fn list_emotes(unique_key: String, chat: State<'_, Arc<ChatManager>>) -> Vec<chat::Emote> {
     chat.list_emotes(&unique_key)
@@ -1739,6 +1752,7 @@ macro_rules! register_handlers {
             $crate::get_user_profile,
             $crate::get_user_messages,
             $crate::list_blocked_users,
+            $crate::list_user_nicknames,
             $crate::auth_status,
             $crate::twitch_login,
             $crate::twitch_logout,

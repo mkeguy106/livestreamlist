@@ -3,6 +3,7 @@ import { readableColor } from '../utils/color.js';
 import { countSessionMessages } from '../utils/format.js';
 import { useAuth } from '../hooks/useAuth.jsx';
 import { useChat } from '../hooks/useChat.js';
+import { useNicknames, resolveAuthorName } from '../hooks/useNicknames.jsx';
 import { usePreferences } from '../hooks/usePreferences.jsx';
 import { useSubAnniversary } from '../hooks/useSubAnniversary.js';
 import { useEventBanner } from '../hooks/useEventBanner.js';
@@ -85,6 +86,7 @@ export default function ChatView({
   }
 
   const { messages, status, pauseTrim, resumeTrim } = useChat(channelKey);
+  const { nicknames } = useNicknames();
   const auth = useAuth();
   const rootRef = useRef(null);
   const listRef = useRef(null);
@@ -451,6 +453,8 @@ export default function ChatView({
                 <CompactRow
                   m={m}
                   myLogin={myLogin}
+                  nicknames={nicknames}
+                  platform={platform}
                   showBadges={showBadges}
                   showModBadges={showModBadges}
                   onOpenThread={openConversation}
@@ -465,6 +469,8 @@ export default function ChatView({
                 <IrcRow
                   m={m}
                   myLogin={myLogin}
+                  nicknames={nicknames}
+                  platform={platform}
                   showBadges={showBadges}
                   showModBadges={showModBadges}
                   showTimestamps={showTimestamps}
@@ -607,6 +613,8 @@ function EmptyHint({ status }) {
 function IrcRow({
   m,
   myLogin,
+  nicknames,
+  platform,
   showBadges,
   showModBadges,
   showTimestamps,
@@ -709,7 +717,7 @@ function IrcRow({
               onUsernameHover?.(null, null);
             }}
           >
-            {m.user.display_name || m.user.login}
+            {resolveAuthorName(nicknames, platform, m.user)}
           </span>
           <span style={{ color: 'var(--zinc-600)' }}>:</span>{' '}
           <span
@@ -729,6 +737,8 @@ function IrcRow({
 function CompactRow({
   m,
   myLogin,
+  nicknames,
+  platform,
   showBadges,
   showModBadges,
   onOpenThread,
@@ -817,7 +827,7 @@ function CompactRow({
             onUsernameHover?.(null, null);
           }}
         >
-          {m.user.display_name || m.user.login}
+          {resolveAuthorName(nicknames, platform, m.user)}
         </span>
         <span style={{ color: 'var(--zinc-300)', minWidth: 0 }}>
           <EmoteText text={m.text} ranges={m.emote_ranges} links={m.link_ranges} size={18} />

@@ -1,20 +1,19 @@
 import ContextMenu from './ContextMenu';
 
 /**
- * Right-click menu for a chat username. Items: Set/Edit/Clear nickname,
- * Edit/Add note, Block/Unblock.
+ * Right-click / "more" menu for a chat username. Items: Set/Edit nickname,
+ * Add/Edit note. Blocking lives on the user card's own Block button (with
+ * own-user protection), so it's intentionally not offered here.
  *
  * Props:
  *   open, point ({ x, y }), user, metadata,
- *   onClose, onEditNickname, onEditNote, onToggleBlocked
+ *   onClose, onEditNickname, onEditNote
  */
 export default function UserCardContextMenu({
-  open, point, user, metadata,
-  onClose, onEditNickname, onEditNote, onToggleBlocked,
+  open, point, metadata,
+  onClose, onEditNickname, onEditNote,
 }) {
   if (!open || !point) return null;
-  const displayName = user?.display_name || user?.login || 'this user';
-  const blocked = !!metadata?.blocked;
 
   return (
     <ContextMenu x={point.x} y={point.y} onClose={onClose}>
@@ -23,13 +22,6 @@ export default function UserCardContextMenu({
       </ContextMenu.Item>
       <ContextMenu.Item onClick={() => { onEditNote?.(); onClose(); }}>
         {metadata?.note ? 'Edit note…' : 'Add note…'}
-      </ContextMenu.Item>
-      <ContextMenu.Separator />
-      <ContextMenu.Item
-        danger={!blocked}
-        onClick={() => { onToggleBlocked?.(); onClose(); }}
-      >
-        {blocked ? `Unblock ${displayName}` : `Block ${displayName}`}
       </ContextMenu.Item>
     </ContextMenu>
   );
