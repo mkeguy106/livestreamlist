@@ -35,6 +35,7 @@ export default function UserCard({
   onEditNote,
   onMore,
   sessionMessageCount,
+  isSelf = false,
 }) {
   const cardRef = useRef(null);
   const [pos, setPos] = useState(null);
@@ -124,6 +125,7 @@ export default function UserCard({
         broadcasterType={profile?.broadcaster_type}
         blocked={blocked}
         isSignedOut={isSignedOut}
+        isSelf={isSelf}
         accentColor={accentColor}
         onOpenHistory={onOpenHistory}
         onOpenChannel={onOpenChannel}
@@ -178,6 +180,7 @@ function Header({
   broadcasterType,
   blocked,
   isSignedOut,
+  isSelf,
   accentColor,
   onOpenHistory,
   onOpenChannel,
@@ -288,17 +291,19 @@ function Header({
           {!blocked && !isSignedOut ? (
             <>
               <div style={{ flex: 1 }} />
-              <Tooltip text="Block user" align="right">
-                <button
-                  type="button"
-                  aria-label="Block user"
-                  className="uc-iconbtn"
-                  onClick={onToggleBlocked}
-                  style={{ color: 'var(--live)' }}
-                >
-                  <span style={{ fontSize: 13, lineHeight: 1 }}>⊘</span>
-                </button>
-              </Tooltip>
+              {!isSelf ? (
+                <Tooltip text="Block user" align="right">
+                  <button
+                    type="button"
+                    aria-label="Block user"
+                    className="uc-iconbtn"
+                    onClick={onToggleBlocked}
+                    style={{ color: 'var(--live)' }}
+                  >
+                    <span style={{ fontSize: 13, lineHeight: 1 }}>⊘</span>
+                  </button>
+                </Tooltip>
+              ) : null}
               <Tooltip text="More actions" align="right">
                 <button
                   type="button"

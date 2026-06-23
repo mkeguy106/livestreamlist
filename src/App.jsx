@@ -15,9 +15,11 @@ import PreferencesDialog from './components/PreferencesDialog.jsx';
 import ResizeHandles from './components/ResizeHandles.jsx';
 import Tooltip from './components/Tooltip.jsx';
 import EmbedLayer from './components/EmbedLayer.jsx';
+import { useAuth } from './hooks/useAuth.jsx';
 import { useDragHandler } from './hooks/useDragRegion.js';
 import { useLivestreams } from './hooks/useLivestreams.js';
 import { usePreferences } from './hooks/usePreferences.jsx';
+import { useNicknames } from './hooks/useNicknames.jsx';
 import { useUserCard } from './hooks/useUserCard.js';
 import { getUserMetadata, launchStream, listenEvent, openInBrowser, openUrl, removeChannel, setFavorite, setUserMetadata } from './ipc.js';
 import { userChannelUrl } from './utils/format.js';
@@ -70,6 +72,17 @@ export default function App() {
     useLivestreams({ intervalSeconds });
   const onTitlebarMouseDown = useDragHandler();
   const card = useUserCard();
+  const { applyNickname } = useNicknames();
+  const auth = useAuth();
+
+  // The card is Twitch-only; you can't block yourself, so the Block affordance
+  // is hidden when the card's user is the logged-in account.
+  const cardIsSelf = !!(
+    (card.user?.id && auth.twitch?.user_id && card.user.id === auth.twitch.user_id) ||
+    (card.user?.login &&
+      auth.twitch?.login &&
+      card.user.login.toLowerCase() === auth.twitch.login.toLowerCase())
+  );
   // Destructure stable callbacks once so dependent useCallbacks don't
   // rebuild on every card-state change (which would cascade re-renders
   // through ctx → all three layouts → ChatView during active chat).
@@ -412,6 +425,7 @@ export default function App() {
           card.close();
         }}
         onCardHover={onCardHover}
+        isSelf={cardIsSelf}
         onToggleBlocked={() => requestToggleBlocked(card.user, card.metadata)}
         onEditNickname={() => {
           setNickDlg({ open: true, user: card.user, currentValue: card.metadata?.nickname || '' });
@@ -435,7 +449,6 @@ export default function App() {
         onEditNote={() => {
           setNoteDlg({ open: true, user: userCtx.user, currentValue: userCtx.metadata?.note || '' });
         }}
-        onToggleBlocked={() => requestToggleBlocked(userCtx.user, userCtx.metadata)}
       />
       <NicknameDialog
         open={nickDlg.open}
@@ -451,6 +464,7 @@ export default function App() {
               display_name_hint: nickDlg.user.display_name,
             });
           } catch (e) { console.error('set_user_metadata', e); }
+          applyNickname(`twitch:${nickDlg.user.id}`, v);
           setNickDlg({ open: false });
           if (card.user?.id === nickDlg.user.id) card.refreshMetadata();
         }}
@@ -463,6 +477,7 @@ export default function App() {
               display_name_hint: nickDlg.user.display_name,
             });
           } catch (e) { console.error('set_user_metadata', e); }
+          applyNickname(`twitch:${nickDlg.user.id}`, null);
           setNickDlg({ open: false });
           if (card.user?.id === nickDlg.user.id) card.refreshMetadata();
         }}

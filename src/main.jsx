@@ -4,6 +4,7 @@ import App from './App.jsx';
 import DetachedChatRoot from './components/DetachedChatRoot.jsx';
 import LoginPopupRoot from './components/LoginPopupRoot.jsx';
 import { AuthProvider } from './hooks/useAuth.jsx';
+import { NicknamesProvider } from './hooks/useNicknames.jsx';
 import { PreferencesProvider } from './hooks/usePreferences.jsx';
 import './tokens.css';
 
@@ -50,7 +51,9 @@ root.render(
   <React.StrictMode>
     <PreferencesProvider>
       <AuthProvider>
-        {content}
+        <NicknamesProvider>
+          {content}
+        </NicknamesProvider>
       </AuthProvider>
     </PreferencesProvider>
   </React.StrictMode>,
