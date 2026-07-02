@@ -606,6 +606,14 @@ Don't stop after step 4 thinking the feature is "shipped" — the roadmap mark i
 - See `package.json` for npm scripts
 - `docs/ROADMAP.md` for phase-by-phase plan
 
+## Documentation
+
+A high-level summary of this project also lives in the Obsidian vault at
+`~/GoogleDrive/obsidian/notes/Livestreamlist Rust.md`. Update it alongside
+`docs/ROADMAP.md` and this file when the project's status or architecture
+changes meaningfully — it's a snapshot for cross-project reference, not a
+substitute for the roadmap's detail.
+
 ## Out of scope (on purpose)
 
 - No backend/server — everything lives in the client; platform APIs are hit directly
