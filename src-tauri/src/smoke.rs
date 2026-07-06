@@ -45,6 +45,10 @@ pub const DENYLIST: &[&str] = &[
     "twitch_share_window_close",
     "open_in_browser",
     "open_url",
+    // Fires a real OS desktop notification + plays audio; also depends on
+    // the notification plugin, which is only registered via `.plugin(...)`
+    // in the production builder (lib.rs::run) and not in mock_builder().
+    "notify_test",
 ];
 
 // `build_smoke_app` and its tests require `tauri/test` (the MockRuntime),

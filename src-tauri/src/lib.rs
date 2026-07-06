@@ -166,6 +166,46 @@ fn set_favorite(
     Ok(touched)
 }
 
+#[tauri::command]
+fn set_channel_notify(
+    unique_key: String,
+    mute: bool,
+    state: State<'_, AppState>,
+) -> Result<bool, String> {
+    let unique_key = channels::channel_key_of(&unique_key).to_string();
+    let touched = state.store.lock().set_dont_notify(&unique_key, mute);
+    if touched {
+        channels::persist(&state.store).map_err(err_string)?;
+    }
+    Ok(touched)
+}
+
+/// Fires an immediate desktop notification (+ sound, if enabled) so the user
+/// can confirm what a go-live notification looks and sounds like. Bypasses
+/// quiet hours, the platform filter, and per-channel mute — the spec calls
+/// for the button to always demonstrate something when notifications are on
+/// — but still honors the master `enabled` switch and `sound_enabled`.
+#[tauri::command]
+fn notify_test<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    use tauri_plugin_notification::NotificationExt;
+
+    let n = state.settings.read().notifications.clone();
+    if !n.enabled {
+        return Err("notifications are disabled".into());
+    }
+    app.notification()
+        .builder()
+        .title("Test notification")
+        .body("This is what a go-live notification looks like.")
+        .show()
+        .map_err(err_string)?;
+    notify::sound::play(&n);
+    Ok(())
+}
+
 /// The full-store refresh path shared by the manual `refresh_all` IPC command
 /// and the background scheduler task. Runs the network fan-out, fires
 /// offline→live desktop notifications (suppression — disabled, muted,
@@ -1891,6 +1931,8 @@ macro_rules! register_handlers {
             $crate::clipboard_channel_url,
             $crate::remove_channel,
             $crate::set_favorite,
+            $crate::set_channel_notify,
+            $crate::notify_test,
             $crate::refresh_all,
             $crate::refresh_channel,
             $crate::launch_stream,

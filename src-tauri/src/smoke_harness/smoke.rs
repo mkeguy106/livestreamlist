@@ -336,6 +336,8 @@ fn list_handlers() -> Vec<String> {
         "clipboard_channel_url",
         "remove_channel",
         "set_favorite",
+        "set_channel_notify",
+        "notify_test",
         "refresh_all",
         "refresh_channel",
         "launch_stream",

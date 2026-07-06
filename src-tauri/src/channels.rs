@@ -326,6 +326,18 @@ impl ChannelStore {
         false
     }
 
+    /// Toggle a channel's notification mute. Pure in-memory — caller persists
+    /// after unlocking. Returns whether the channel was found and set.
+    pub fn set_dont_notify(&mut self, unique_key: &str, mute: bool) -> bool {
+        for c in &mut self.channels {
+            if c.unique_key() == unique_key {
+                c.dont_notify = mute;
+                return true;
+            }
+        }
+        false
+    }
+
     /// Update the persisted `display_name` for a channel. Used by the
     /// refresh path to backfill the friendly channel name once a
     /// platform hands it to us — e.g. a YouTube channel added via its
@@ -778,5 +790,18 @@ mod tests {
         );
         let snap = store.snapshot();
         assert_eq!(snap.len(), 2);
+    }
+
+    #[test]
+    fn set_dont_notify_toggles_and_reports_touched() {
+        let mut store = ChannelStore {
+            channels: vec![test_channel(Platform::Twitch, "somechan")],
+            livestreams: HashMap::new(),
+            youtube_miss_counts: HashMap::new(),
+        };
+        assert!(store.set_dont_notify("twitch:somechan", true));
+        assert!(store.channels().iter().any(|c| c.dont_notify));
+        assert!(store.set_dont_notify("twitch:somechan", false));
+        assert!(!store.set_dont_notify("twitch:nosuch", true));
     }
 }
