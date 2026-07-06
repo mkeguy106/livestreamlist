@@ -3,6 +3,7 @@
  */
 
 import ChatView from '../components/ChatView.jsx';
+import PlaySplitButton from '../components/PlaySplitButton.jsx';
 import SocialsBanner from '../components/SocialsBanner.jsx';
 import TitleBanner from '../components/TitleBanner.jsx';
 import Tooltip from '../components/Tooltip.jsx';
@@ -102,7 +103,7 @@ export default function Focus({ ctx }) {
           {featured ? (
             <FeaturedStream
               channel={featured}
-              onLaunch={() => launchStream(featured.unique_key)}
+              onLaunch={(quality) => launchStream(featured.unique_key, quality)}
               onOpenBrowser={() => openInBrowser(featured.unique_key)}
             />
           ) : (
@@ -234,7 +235,7 @@ function FeaturedStream({ channel, onLaunch, onOpenBrowser }) {
           <Tooltip text={channel.is_live ? 'Launch via streamlink' : 'channel offline'}>
             <button
               type="button"
-              onClick={channel.is_live ? onLaunch : undefined}
+              onClick={channel.is_live ? () => onLaunch() : undefined}
               disabled={!channel.is_live}
               style={{
                 width: 64,
@@ -257,14 +258,7 @@ function FeaturedStream({ channel, onLaunch, onOpenBrowser }) {
       </div>
 
       <div style={{ display: 'flex', gap: 8, padding: '0 16px 12px' }}>
-        <button
-          type="button"
-          className="rx-btn rx-btn-ghost"
-          disabled={!channel.is_live}
-          onClick={onLaunch}
-        >
-          Launch via streamlink
-        </button>
+        <PlaySplitButton onLaunch={onLaunch} disabled={!channel.is_live} />
         <div style={{ flex: 1 }} />
         <button type="button" className="rx-btn" onClick={onOpenBrowser}>
           Open on {channel.platform.charAt(0).toUpperCase() + channel.platform.slice(1)} ↗

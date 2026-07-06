@@ -132,7 +132,7 @@ let mockChannels = [...MOCK_CHANNELS];
 let mockAuth = { twitch: null, twitch_web: null, kick: null, chaturbate: null };
 const mockPlaying = new Set();
 let mockSettings = {
-  general: { refresh_interval_seconds: 60, notify_on_live: true, close_to_tray: false },
+  general: { refresh_interval_seconds: 60, notify_on_live: true, close_to_tray: false, default_quality: 'best' },
   appearance: { default_layout: 'command', accent_override: '', live_color_override: '' },
   chat: { timestamp_24h: true, history_replay_count: 100 },
 };
@@ -382,7 +382,7 @@ async function mockInvoke(name, args) {
       );
       return true;
     case 'launch_stream':
-      console.warn('[mock] launch_stream', args);
+      console.warn(`[mock] launch_stream ${args.uniqueKey} @ quality=${args.quality ?? '(default)'}`, args);
       mockPlaying.add(args.uniqueKey);
       mockEmit('player:state', { playing: [...mockPlaying] });
       return 0;

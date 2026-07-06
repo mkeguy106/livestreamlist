@@ -5,6 +5,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import ChatView from '../components/ChatView.jsx';
 import ContextMenu from '../components/ContextMenu.jsx';
+import PlaySplitButton from '../components/PlaySplitButton.jsx';
 import SocialsBanner from '../components/SocialsBanner.jsx';
 import TabStrip from '../components/TabStrip.jsx';
 import TitleBanner from '../components/TitleBanner.jsx';
@@ -477,7 +478,7 @@ export default function Command({ ctx }) {
                     channel={channel}
                     isActiveTab={k === activeTabKey}
                     onMention={notifyMention}
-                    onLaunch={() => launchStream(k)}
+                    onLaunch={(quality) => launchStream(k, quality)}
                     onOpenBrowser={() => openInBrowser(k)}
                     onFavorite={() => setFavorite(k, !channel.favorite)}
                     onUsernameOpen={onUsernameOpen}
@@ -605,14 +606,7 @@ function SelectedPane({ channel, isActiveTab, onMention, onLaunch, onOpenBrowser
         )}
         <div style={{ flex: 1 }} />
         <button className="rx-btn rx-btn-ghost" onClick={onOpenBrowser}>Open in browser</button>
-        <button
-          className="rx-btn rx-btn-primary"
-          disabled={!channel.is_live}
-          onClick={onLaunch}
-          style={channel.is_live ? undefined : { opacity: 0.4, cursor: 'not-allowed' }}
-        >
-          {channel.is_live ? 'Play ↗' : 'Offline'}
-        </button>
+        <PlaySplitButton onLaunch={onLaunch} disabled={!channel.is_live} />
       </div>
 
       <ChatView

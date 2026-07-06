@@ -4,6 +4,7 @@ import { usePreferences } from '../hooks/usePreferences.jsx';
 import { formatRelative } from '../utils/format.js';
 import Tooltip from './Tooltip.jsx';
 import SidebarPositionPicker from './SidebarPositionPicker.jsx';
+import { QUALITY_OPTIONS } from './PlaySplitButton.jsx';
 import {
   importTwitchFollows,
   importYoutubeSubscriptions,
@@ -877,6 +878,26 @@ function GeneralTab({ settings, patch }) {
           />
           <span style={{ color: 'var(--zinc-500)', fontSize: 'var(--t-11)' }}>seconds</span>
         </div>
+      </Row>
+
+      <Row
+        label="Default stream quality"
+        hint="Quality passed to streamlink when you press Play. Streamlink falls back to the nearest available quality. Override per-launch from the ▾ next to a channel's Play button."
+      >
+        <select
+          className="rx-input"
+          value={g.default_quality ?? 'best'}
+          onChange={(e) =>
+            patch((prev) => ({ ...prev, general: { ...prev.general, default_quality: e.target.value } }))
+          }
+          style={{ width: 160 }}
+        >
+          {QUALITY_OPTIONS.map((q) => (
+            <option key={q.value} value={q.value}>
+              {q.label}
+            </option>
+          ))}
+        </select>
       </Row>
 
       <Row
