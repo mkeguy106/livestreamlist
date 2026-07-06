@@ -45,6 +45,9 @@ pub enum CallbackResult {
         access_token: String,
         scope: Option<String>,
         token_type: Option<String>,
+        /// CSRF `state` echoed back by the provider in the fragment. The
+        /// caller compares it against the value it generated.
+        state: Option<String>,
     },
     /// Code flow — `?code=...&state=...` in the query string at /callback.
     Code { code: String, state: Option<String> },
@@ -158,6 +161,7 @@ fn handle_conn(mut stream: TcpStream) -> Result<Option<CallbackResult>> {
             access_token: token,
             scope: q.get("scope").cloned(),
             token_type: q.get("token_type").cloned(),
+            state: q.get("state").cloned(),
         }));
     }
 

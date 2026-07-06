@@ -423,15 +423,19 @@ fn build_chat_message(cfg: &KickChatConfig, parsed: &Value) -> Option<ChatMessag
 fn extract_kick_emotes(content: &str) -> (String, Vec<EmoteRange>) {
     let mut out = String::with_capacity(content.len());
     let mut ranges: Vec<EmoteRange> = Vec::new();
-    let bytes = content.as_bytes();
+    // `i` always sits on a UTF-8 char boundary: emote markers are pure ASCII
+    // (the `]` we skip past is 1 byte) and otherwise we advance by whole chars.
     let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'[' && bytes[i..].starts_with(b"[emote:") {
+    while i < content.len() {
+        let rest_at_i = &content[i..];
+        if let Some(body_and_rest) = rest_at_i.strip_prefix("[emote:") {
             // Parse `[emote:ID:NAME]`
-            let rest = &content[i + 7..];
-            if let Some(end_rel) = rest.find(']') {
-                let body = &rest[..end_rel];
+            if let Some(end_rel) = body_and_rest.find(']') {
+                let body = &body_and_rest[..end_rel];
                 if let Some((id, name)) = body.split_once(':') {
+                    // `out` is built from correct UTF-8 slices, so its current
+                    // length is the emote name's start byte offset — the same
+                    // byte-offset convention EmoteRange uses everywhere else.
                     let start_byte = out.len();
                     out.push_str(name);
                     let end_byte = out.len();
@@ -449,9 +453,14 @@ fn extract_kick_emotes(content: &str) -> (String, Vec<EmoteRange>) {
                 }
             }
         }
-        // Regular byte → copy as-is
-        out.push(bytes[i] as char);
-        i += 1;
+        // Copy the next whole UTF-8 char verbatim — never a raw byte, which
+        // would mangle multibyte chars (emoji, accents, CJK) into mojibake.
+        let ch = rest_at_i
+            .chars()
+            .next()
+            .expect("i < content.len() guarantees at least one char");
+        out.push(ch);
+        i += ch.len_utf8();
     }
     (out, ranges)
 }
@@ -763,5 +772,39 @@ mod tests {
         });
         let info = extract_kick_reply(&payload).expect("should parse numeric id");
         assert_eq!(info.parent_id, "12345");
+    }
+
+    #[test]
+    fn extract_kick_emotes_preserves_non_ascii_text() {
+        // Multibyte chars (accents, emoji, CJK) must round-trip intact, and the
+        // emote's byte range must still slice back to the emote name. EmoteRange
+        // is byte-offset based (models.rs) and EmoteText.jsx slices ChatMessage.text
+        // with a TextEncoder using those byte offsets.
+        let (out, ranges) = extract_kick_emotes("héllo 😀 [emote:123:pog] wörld");
+        assert_eq!(out, "héllo 😀 pog wörld");
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(ranges[0].name, "pog");
+        assert_eq!(
+            ranges[0].url_1x,
+            "https://files.kick.com/emotes/123/fullsize"
+        );
+        // The stored byte range must slice back to exactly the emote name.
+        assert_eq!(&out[ranges[0].start..ranges[0].end], "pog");
+    }
+
+    #[test]
+    fn extract_kick_emotes_multiple_with_cjk() {
+        let (out, ranges) = extract_kick_emotes("[emote:1:a]世界[emote:2:b]");
+        assert_eq!(out, "a世界b");
+        assert_eq!(ranges.len(), 2);
+        assert_eq!(&out[ranges[0].start..ranges[0].end], "a");
+        assert_eq!(&out[ranges[1].start..ranges[1].end], "b");
+    }
+
+    #[test]
+    fn extract_kick_emotes_plain_text_no_emotes() {
+        let (out, ranges) = extract_kick_emotes("just café talk");
+        assert_eq!(out, "just café talk");
+        assert!(ranges.is_empty());
     }
 }
