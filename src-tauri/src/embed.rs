@@ -586,8 +586,8 @@ pub(crate) mod build_other {
     use anyhow::{Context, Result};
     use std::path::PathBuf;
     use tauri::utils::config::Color;
-    use tauri::webview::{PageLoadEvent, Webview, WebviewBuilder, WebviewUrl};
-    use tauri::{AppHandle, Manager, PhysicalPosition, PhysicalSize};
+    use tauri::webview::{PageLoadEvent, Webview, WebviewBuilder};
+    use tauri::{AppHandle, Manager, PhysicalPosition, PhysicalSize, WebviewUrl};
 
     pub(crate) struct BuildSpec {
         pub label: String,

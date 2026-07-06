@@ -52,16 +52,22 @@ impl LoginPopupManager {
         // `set_size`, which is exactly what breaks dynamic content-fit.
         // Borderless + skip_taskbar means the user can't drag-resize
         // anyway, so the flag only matters for IPC-driven resizes.
-        let win = WebviewWindowBuilder::new(app, "login-popup", url)
+        let builder = WebviewWindowBuilder::new(app, "login-popup", url)
             .title("Accounts")
             .decorations(false)
             .resizable(true)
             .skip_taskbar(true)
             .focused(true)
             .visible(false)
-            .background_color(zinc_950)
-            .transient_for(&main)?
-            .build()?;
+            .background_color(zinc_950);
+        // `transient_for` is Linux/GTK-only; `parent` is the portable
+        // equivalent (set_transient_for on Linux, owner/child window on
+        // Windows/macOS).
+        #[cfg(target_os = "linux")]
+        let builder = builder.transient_for(&main)?;
+        #[cfg(not(target_os = "linux"))]
+        let builder = builder.parent(&main)?;
+        let win = builder.build()?;
 
         // KDE compositor effects + stacking. `DropdownMenu` is the GTK
         // window type for a menu spawned by clicking a toolbar button —

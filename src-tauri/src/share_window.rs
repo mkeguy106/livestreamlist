@@ -138,9 +138,21 @@ pub fn open(
         builder = builder.initialization_script(build_cookie_injection_script(token));
     }
     if let Some(main) = main.as_ref() {
-        builder = builder
-            .transient_for(main)
-            .context("transient_for(main) on share popout window")?;
+        // `transient_for` is Linux/GTK-only; `parent` is the portable
+        // equivalent that maps to set_transient_for on Linux and owner/child
+        // window semantics on Windows/macOS.
+        #[cfg(target_os = "linux")]
+        {
+            builder = builder
+                .transient_for(main)
+                .context("transient_for(main) on share popout window")?;
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            builder = builder
+                .parent(main)
+                .context("parent(main) on share popout window")?;
+        }
     }
     let window = builder.build().context("opening share popout window")?;
 

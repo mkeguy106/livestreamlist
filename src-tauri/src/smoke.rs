@@ -1,7 +1,7 @@
 //! Smoke-test harness module. Provides `build_smoke_app()` which constructs
 //! a `tauri::App<MockRuntime>` with the production `generate_handler!` block
 //! and the runtime-agnostic subset of `AppState`, against an isolated config
-//! dir. Used by the `smoke` binary in `src/bin/smoke.rs` and tested in this
+//! dir. Used by the `smoke` binary in `src/smoke_harness/smoke.rs` and tested in this
 //! module.
 
 /// Names of `#[tauri::command]` functions that produce real-world side

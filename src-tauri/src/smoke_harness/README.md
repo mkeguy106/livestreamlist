@@ -75,12 +75,12 @@ In JSONL mode, the response also echoes back the optional `id` field.
 
 The full design is in `docs/superpowers/specs/2026-05-02-ipc-smoke-harness-design.md`.
 The dispatch surface lives in `src-tauri/src/smoke.rs` (build_smoke_app,
-DENYLIST) and `src-tauri/src/bin/smoke.rs` (CLI loop, envelope formatting).
+DENYLIST) and `src-tauri/src/smoke_harness/smoke.rs` (CLI loop, envelope formatting).
 
 Adding a new `#[tauri::command]`:
 1. Add the function to `lib.rs` as usual.
 2. Add the function name to `register_handlers!` in `lib.rs`.
-3. Add the function name to `list_handlers()` in `src/bin/smoke.rs`.
+3. Add the function name to `list_handlers()` in `src/smoke_harness/smoke.rs`.
 4. If the command has real-world side effects, add it to `DENYLIST` in `smoke.rs`.
 
 The drift test in `tests/smoke_binary.rs` will fail if `list_handlers()` and `register_handlers!()` have different counts (catches added/removed commands; does not catch typos or renamed commands).

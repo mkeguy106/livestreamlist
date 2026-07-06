@@ -243,9 +243,21 @@ pub async fn login_via_webview(
             }
         });
         if let Some(main) = main.as_ref() {
-            builder = builder
-                .transient_for(main)
-                .context("transient_for(main) on Twitch web login window")?;
+            // `transient_for` is Linux/GTK-only; `parent` is the portable
+            // equivalent (owner window on Windows, child window on macOS,
+            // set_transient_for on Linux).
+            #[cfg(target_os = "linux")]
+            {
+                builder = builder
+                    .transient_for(main)
+                    .context("transient_for(main) on Twitch web login window")?;
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                builder = builder
+                    .parent(main)
+                    .context("parent(main) on Twitch web login window")?;
+            }
         }
         builder.build().context("opening Twitch web login window")?
     };

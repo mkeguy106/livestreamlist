@@ -38,6 +38,17 @@ tempfile = { version = "3", optional = true }
 tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
 futures-util = { version = "0.3", default-features = false, features = ["std", "sink"] }
 hunspell-rs = "0.4"
+# hunspell-rs pulls in hunspell-sys with a hermetic `bundled` C++ build, but
+# with hunspell-sys's default features OFF — which drops `bindgen/runtime`.
+# Without runtime, clang-sys resolves libclang at link time via
+# `@rpath/libclang.dylib`; on macOS CI runners that path isn't on the dyld
+# search list and the hunspell-sys build script aborts with SIGABRT
+# ("Library not loaded: @rpath/libclang.dylib"). Depending on hunspell-sys
+# directly with its default features re-enables `bindgen/runtime`, so bindgen
+# dlopens libclang at build time instead (clang-sys runtime discovery searches
+# LIBCLANG_PATH, `xcode-select` toolchain, and the standard Xcode/LLVM dirs) —
+# fixing macOS without touching CI, and unifying to the same bundled build.
+hunspell-sys = { version = "0.3", features = ["bundled"] }
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
 lru = "0.12"
 base64 = "0.22"
@@ -51,9 +62,15 @@ rookie = "0.5"
 [features]
 smoke = ["tauri/test", "dep:tempfile"]
 
+# The smoke harness lives outside src/bin/ on purpose: tauri-cli's bundler
+# unconditionally read_dir's src-tauri/src/bin/ and treats every file's stem
+# as a binary to package (ignoring required-features and even non-.rs files),
+# which made deb/rpm/appimage bundling fail trying to copy a nonexistent
+# `smoke`/`README` from target/release/. Keeping it here excludes it from that
+# scan while `--bin smoke` still works (it targets the bin name, not the path).
 [[bin]]
 name = "smoke"
-path = "src/bin/smoke.rs"
+path = "src/smoke_harness/smoke.rs"
 required-features = ["smoke"]
 
 [target.'cfg(unix)'.dependencies]
