@@ -29,13 +29,63 @@ pub struct MisspelledRange {
     pub word: String,
 }
 
+/// Process-global lock serializing libhunspell instance construction and
+/// destruction.
+///
+/// hunspell 1.7.0 (what Ubuntu 22.04 ships) keeps a shared global
+/// case-conversion table (`utf_tbl` in `csutil.cxx`) refcounted by a
+/// non-atomic counter with no lock: every `Hunspell_create` increments it
+/// and every `Hunspell_destroy` decrements it, freeing the table at zero.
+/// Concurrent create/destroy of *separate* instances can lose increments,
+/// after which the table is freed while instances are still alive and the
+/// next `check()`/`suggest()` dereferences the dangling/nulled pointer →
+/// SIGSEGV. Upstream fixed this after 1.7.0 by making the table a
+/// compile-time constant ("Related: #727 make the full utf_tbl available
+/// at compile time"), which is why newer-hunspell hosts (Arch, 1.7.2)
+/// never crash while Ubuntu 22.04 CI segfaulted when the test harness
+/// built and dropped `SpellChecker`s on parallel test threads.
+///
+/// Serializing create + destroy keeps the refcount exact, which is
+/// sufficient: `check`/`suggest` only *read* the table, and an exact
+/// count guarantees the table is never freed while any instance lives.
+static HUNSPELL_LIFECYCLE: Mutex<()> = Mutex::new(());
+
+/// RAII wrapper around `hunspell_rs::Hunspell` that routes construction
+/// and destruction through `HUNSPELL_LIFECYCLE` (see above). Everything
+/// else delegates. The inner `Option` is `Some` for the wrapper's whole
+/// life; it exists only so `Drop` can run `Hunspell_destroy` under the
+/// lock.
+struct HunspellDict(Option<hunspell_rs::Hunspell>);
+
+impl HunspellDict {
+    fn new(aff: &str, dic: &str) -> Self {
+        let _guard = HUNSPELL_LIFECYCLE.lock();
+        Self(Some(hunspell_rs::Hunspell::new(aff, dic)))
+    }
+
+    fn check(&self, word: &str) -> hunspell_rs::CheckResult {
+        self.0.as_ref().expect("hunspell instance alive").check(word)
+    }
+
+    fn suggest(&self, word: &str) -> Vec<String> {
+        self.0.as_ref().expect("hunspell instance alive").suggest(word)
+    }
+}
+
+impl Drop for HunspellDict {
+    fn drop(&mut self) {
+        let _guard = HUNSPELL_LIFECYCLE.lock();
+        self.0.take(); // Hunspell_destroy runs here, under the lock
+    }
+}
+
 /// App-wide spellcheck state. Held in `Arc<SpellChecker>` via
 /// `tauri::Manager::manage`. Per-language `Hunspell` instances are
 /// loaded lazily on first use.
 pub struct SpellChecker {
     /// language code (`"en_US"`) → loaded Hunspell instance.
     /// Lazy: populated on first `check`/`suggest` for that language.
-    by_lang: Mutex<HashMap<String, Arc<Mutex<hunspell_rs::Hunspell>>>>,
+    by_lang: Mutex<HashMap<String, Arc<Mutex<HunspellDict>>>>,
     /// All dicts discovered + bundled, for `list_dicts` and lazy load.
     available: Vec<DictInfo>,
     personal: RwLock<PersonalDict>,
@@ -43,9 +93,12 @@ pub struct SpellChecker {
 
 // SAFETY: `hunspell_rs::Hunspell` wraps a `*mut hunspell_sys::Hunhandle`
 // that is not marked Send/Sync by the upstream crate. Every `Hunspell`
-// instance is held behind `Arc<parking_lot::Mutex<Hunspell>>` in `by_lang`;
-// all access serializes on that Mutex, so no two threads can touch the
-// raw pointer concurrently. The impls are therefore sound.
+// instance (via `HunspellDict`) is held behind
+// `Arc<parking_lot::Mutex<HunspellDict>>` in `by_lang`; all access
+// serializes on that Mutex, so no two threads can touch the raw pointer
+// concurrently. Cross-instance global state inside libhunspell itself
+// (the `utf_tbl` refcount) is protected by `HUNSPELL_LIFECYCLE` around
+// construction and destruction. The impls are therefore sound.
 //
 // Lock ordering across the type: `check()` acquires `by_lang` (briefly,
 // inside `dict_for`), then the per-lang `Mutex<Hunspell>`, then
@@ -86,7 +139,7 @@ impl SpellChecker {
     /// and synchronous. The current callers (`check`, `suggest`) follow this
     /// contract — both lock the dict and complete all work before any future
     /// `.await`.
-    fn dict_for(&self, code: &str) -> Option<Arc<Mutex<hunspell_rs::Hunspell>>> {
+    fn dict_for(&self, code: &str) -> Option<Arc<Mutex<HunspellDict>>> {
         let mut map = self.by_lang.lock();
         if let Some(d) = map.get(code) {
             return Some(d.clone());
@@ -94,7 +147,7 @@ impl SpellChecker {
         let info = self.available.iter().find(|d| d.code == code)?;
         let aff = info.aff_path.to_string_lossy().to_string();
         let dic = info.aff_path.with_extension("dic").to_string_lossy().to_string();
-        let h = hunspell_rs::Hunspell::new(&aff, &dic);
+        let h = HunspellDict::new(&aff, &dic);
         let arc = Arc::new(Mutex::new(h));
         map.insert(code.to_string(), arc.clone());
         Some(arc)
