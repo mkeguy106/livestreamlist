@@ -100,7 +100,7 @@ src-tauri/                   # Rust backend
     ├── channels.rs          # Channel, Livestream, ChannelStore (disk + in-memory)
     ├── platforms/
     │   ├── mod.rs           # Platform enum + URL autodetect parser (unit-tested)
-    │   └── twitch.rs        # GraphQL live-status client (batched ≤ 35 / request)
+    │   └── twitch.rs        # GraphQL live-status client (batched ≤ 35 / request; chunks awaited serially, not in parallel)
     ├── refresh.rs           # Orchestrates refresh_all across platforms
     ├── spellcheck/
     │   ├── mod.rs           # SpellChecker — per-language Hunspell cache, personal dict
@@ -186,11 +186,11 @@ Events are strictly one-way (Rust → UI). UI never emits events; it calls invok
 - `Channel` — persisted: platform, channel_id, display_name, favorite, dont_notify, auto_play, added_at
 - `Livestream` — transient: live/off, title, game, viewers, started_at, thumbnail_url, last_checked, error
 - `unique_key` = `"{platform}:{channel_id}"` (the identifier used everywhere: storage, IPC, event topics, React keys)
-- `ChannelStore` is held in `Arc<Mutex<…>>` (parking_lot) — no async locks; the store is memory-fast
+- `ChannelStore` is held in `Arc<Mutex<…>>` (parking_lot) — no async locks; the store is memory-fast. **Caveat**: the mutating methods (`add` / `remove` / etc.) call `self.save()` — a synchronous `atomic_write` to `channels.json` — while the parking_lot lock is still held (callers do `store.lock().add(…)`). So a channel mutation currently does blocking disk I/O under the lock. Fine at current scale (rare, small file), but a known perf item if writes get hot or the file grows.
 
 ### Chat architecture
 
-`ChatManager` owns an `Arc<EmoteCache>` + a `Mutex<HashMap<unique_key, JoinHandle>>`. One task per connected channel. Abort is idempotent.
+`ChatManager` owns an `Arc<EmoteCache>` + a `Mutex<HashMap<unique_key, JoinHandle>>`. One **tracked** task per connected channel (the IRC/WebSocket read loop); abort is idempotent. Note that `connect` also fire-and-forgets several **short-lived untracked** tasks — the 3rd-party emote loaders (`emote_loader::load_twitch_for_channel`) and badge prefetch — via `async_runtime::spawn`. These are not stored in the HashMap and are therefore **not aborted by `disconnect`**; they simply run to completion (they're one-shot network fetches that populate the shared caches).
 
 Per-channel flow:
 1. Frontend calls `chat_connect(uniqueKey)` when `ChatView` mounts
@@ -227,7 +227,7 @@ The pass-through bit is critical: without `set_overlay_pass_through(&fixed, true
 - `EmbedKey` = the same `unique_key` flowing through chat IPC (with the optional YT `:video_id` suffix from the multi-stream scraper).
 
 **Construction (Linux)** — `build_linux::build_child`:
-- Per-platform `data_directory` via `wry::WebContext::new(Some(profile_dir))` then `WebViewBuilder::new_with_web_context(ctx)`. `wry 0.54` moved data_directory off the builder onto WebContext — this is non-obvious. The `WebContext` is `Box::leak`'d for the lifetime of the main window (the on-disk profile dir is the persistence; the in-memory WebContext leaking is a small constant per mount).
+- Per-platform `data_directory` via `wry::WebContext::new(Some(profile_dir))` then `WebViewBuilder::new_with_web_context(ctx)`. `wry 0.54` moved data_directory off the builder onto WebContext — this is non-obvious. The `WebContext` is `Box::leak`'d (embed.rs:429, 509) — this is a **known per-mount leak**: a fresh `WebContext` leaks on every `mount()` call and is never reclaimed, so memory grows proportional to the number of mounts per session. The on-disk profile dir is the real persistence; proper WebContext ownership is deferred (TODO). Acceptable for now because mounts-per-session is small, but it should be fixed if embeds churn heavily.
 - `with_visible(false)` on the builder; the on_page_load handler shows on `PageLoadEvent::Finished`. Same dark-first-paint discipline as the rest of the app (PR #70 lesson).
 - `with_background_color((9, 9, 11, 255))` — zinc-950, so any in-flight repaint stays dark.
 - `WebViewBuilderExtUnix::build_gtk(&fixed)` is the Linux-only build path. Tauri's own `add_child` is broken on Linux (it parents into `default_vbox()`, a `gtk::Box`, which ignores `set_position`/`set_size` — see [tauri#9611](https://github.com/tauri-apps/tauri/issues/9611)) so we go around it.
@@ -280,12 +280,12 @@ After every Chaturbate embed `PageLoadEvent::Finished`, read the `sessionid` coo
 - Login popups (`auth/youtube.rs::login_via_webview`, `auth/chaturbate.rs::login_via_webview`) use the same `data_directory` as the embeds → cookies persist on disk and the embed picks them up automatically.
 - Logout (`auth::*::clear()`) calls `EmbedHost::unmount_platform(platform)` first, THEN `remove_dir_all(profile_dir)`. This ordering matters — wiping the dir while an embed is still loading against it crashes WebKit. The Chaturbate flow has a `clear_stamp_only()` variant for the auth-drift case where the embed is mid-load and we just want to flip the stamp without touching the profile dir.
 
-**Multi-embed**: the HashMap-keyed model means N concurrent embeds is a first-class feature, not a workaround. The Columns layout shows one embed per visible YT/CB column, all rendering simultaneously. The pre-rewrite single-`Option<CurrentEmbed>` ceiling is gone.
+**Multi-embed**: the HashMap-keyed model means N concurrent embeds is a first-class feature, not a workaround. Once the Columns redesign lands it will show one embed per visible YT/CB column, all rendering simultaneously (Columns is currently stubbed — see "The three layouts"). The pre-rewrite single-`Option<CurrentEmbed>` ceiling is gone.
 
 ### The three layouts
 
 - **Command** — selected-channel workflow. Sidebar rail shows all channels (live first, then offline alpha). Main pane shows the selected channel's header + chat.
-- **Columns** — parallel-monitoring workflow. One compact column per **live** channel, each with its own chat. "Add column" opens the add-channel dialog.
+- **Columns** — parallel-monitoring workflow. **Currently a stub** (`src/directions/Columns.jsx`): the previous TweetDeck-style live-column layout is disabled pending the Phase 6 redesign, so this view renders no channels and mounts no chat tasks — it only keeps the layout switcher functional (an "Add channel" button + a "redesign in progress" chiclet). The description below is the intended shape once the redesign lands: one compact column per **live** channel, each with its own chat.
 - **Focus** — single-stream reader mode. Tab strip of all channels across the top; split 60/40 with video placeholder / chat.
 
 All three share the same data hook (`useLivestreams`). Each has its own chat binding: Command/Focus use one `ChatView` for the selected/featured channel; Columns mounts one `ChatView` per visible column.

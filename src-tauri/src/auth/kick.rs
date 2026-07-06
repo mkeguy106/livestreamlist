@@ -41,10 +41,6 @@ struct TokenResponse {
     access_token: String,
     #[serde(default)]
     refresh_token: Option<String>,
-    #[serde(default)]
-    expires_in: Option<i64>,
-    #[serde(default)]
-    token_type: Option<String>,
 }
 
 pub async fn login(http: &reqwest::Client) -> Result<KickIdentity> {
@@ -118,13 +114,6 @@ pub fn logout() -> Result<()> {
 
 pub fn stored_access_token() -> Result<Option<String>> {
     tokens::load(KEYRING_ACCESS)
-}
-
-pub fn stored_identity() -> Option<KickIdentity> {
-    tokens::load(KEYRING_IDENTITY)
-        .ok()
-        .flatten()
-        .and_then(|raw| serde_json::from_str(&raw).ok())
 }
 
 /// Try to refresh the Kick token using the stored refresh token. Returns the

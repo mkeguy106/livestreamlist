@@ -9,7 +9,6 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Scope {
     Global,
@@ -18,19 +17,14 @@ pub enum Scope {
 
 #[derive(Debug, Clone)]
 pub struct BadgeUrl {
-    #[allow(dead_code)]
     pub url: String,
-    #[allow(dead_code)]
     pub title: String,
 }
 
 #[derive(Default)]
 pub struct BadgeCache {
-    #[allow(dead_code)]
     inner: Mutex<HashMap<(Platform, Scope, String), BadgeUrl>>,
-    #[allow(dead_code)]
     loaded_globals: Mutex<HashMap<Platform, bool>>,
-    #[allow(dead_code)]
     loaded_channels: Mutex<HashMap<(Platform, String), bool>>,
 }
 

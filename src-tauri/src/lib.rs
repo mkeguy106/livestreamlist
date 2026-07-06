@@ -599,7 +599,7 @@ async fn chat_detach<R: tauri::Runtime>(app: tauri::AppHandle<R>, unique_key: St
     );
     let url = WebviewUrl::App(path.into());
 
-    let mut builder = tauri::WebviewWindowBuilder::new(&app, &label, url)
+    let builder = tauri::WebviewWindowBuilder::new(&app, &label, url)
         .title(format!("Chat — {unique_key}"))
         .inner_size(460.0, 700.0)
         .min_inner_size(320.0, 480.0)

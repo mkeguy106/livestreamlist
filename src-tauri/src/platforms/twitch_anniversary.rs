@@ -97,9 +97,6 @@ impl Cache {
         self.inner.lock().insert(channel_login.to_string(), (Instant::now(), status, value));
     }
 
-    pub fn clear(&self) {
-        self.inner.lock().clear();
-    }
 }
 
 impl Default for Cache {
@@ -502,15 +499,6 @@ mod tests {
         let got = c.get("test");
         assert!(got.is_some(), "entry exists");
         assert!(got.unwrap().1.is_none(), "but value is None");
-    }
-
-    #[test]
-    fn cache_clear_removes_entry() {
-        let c = Cache::new();
-        c.set("test", CookieStatus::Ok, Some(make_info()));
-        assert!(c.get("test").is_some());
-        c.clear();
-        assert!(c.get("test").is_none());
     }
 
     #[test]

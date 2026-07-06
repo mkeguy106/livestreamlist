@@ -55,10 +55,6 @@ impl EmoteCache {
         Arc::new(Self::default())
     }
 
-    pub fn set_globals(&self, map: HashMap<String, Emote>) {
-        *self.globals.write() = map;
-    }
-
     /// Fold new entries into globals without dropping what's already there.
     /// Later sources (user emotes, Twitch globals after 3rd-party) win on
     /// name collision — they're called later in `load_twitch_for_channel`.
@@ -71,10 +67,6 @@ impl EmoteCache {
 
     pub fn set_channel(&self, channel_key: &str, map: HashMap<String, Emote>) {
         self.channels.write().insert(channel_key.to_string(), map);
-    }
-
-    pub fn clear_channel(&self, channel_key: &str) {
-        self.channels.write().remove(channel_key);
     }
 
     /// Replace the user-emote layer wholesale. Stamps the load time so
@@ -405,7 +397,7 @@ mod tests {
                 animated: false,
             },
         );
-        cache.set_globals(m);
+        cache.merge_globals(m);
         let hits = cache.scan_message("k", "yo Kappa world", &[]);
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].name, "Kappa");
@@ -471,7 +463,7 @@ mod tests {
         let cache = EmoteCache::default();
         let mut g = HashMap::new();
         g.insert("Bar".to_string(), Emote { url_1x: "global".into(), ..emote("Bar") });
-        cache.set_globals(g);
+        cache.merge_globals(g);
         let mut u = HashMap::new();
         u.insert("Bar".to_string(), Emote { url_1x: "user".into(), ..emote("Bar") });
         cache.set_user_emotes(u);

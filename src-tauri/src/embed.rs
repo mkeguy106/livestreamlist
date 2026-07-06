@@ -79,10 +79,6 @@ impl EmbedHost {
     pub fn has(&self, key: &str) -> bool {
         self.inner.lock().children.contains_key(key)
     }
-
-    pub fn keys(&self) -> Vec<EmbedKey> {
-        self.inner.lock().children.keys().cloned().collect()
-    }
 }
 
 impl ChildEmbed {
@@ -152,24 +148,6 @@ impl ChildEmbed {
         Ok(())
     }
 
-    pub(crate) fn eval(&self, js: &str) -> anyhow::Result<()> {
-        #[cfg(target_os = "linux")]
-        {
-            self.inner
-                .0
-                .evaluate_script(js)
-                .map_err(|e| anyhow::anyhow!("evaluate_script: {e}"))?;
-        }
-        #[cfg(not(target_os = "linux"))]
-        {
-            self.inner
-                .0
-                .eval(js)
-                .map_err(|e| anyhow::anyhow!("eval: {e}"))?;
-        }
-        Ok(())
-    }
-
     #[allow(dead_code)] // exposed for future callers; Chaturbate auth-drift uses
                         // its own platform-specific helpers (verify_chaturbate_auth_*)
                         // since they need the raw WebView reference, not just cookies.
@@ -225,16 +203,6 @@ impl EmbedHost {
         let mut g = self.inner.lock();
         g.children.retain(|_, c| c.platform != platform);
     }
-
-    pub fn keys_for_platform(&self, platform: Platform) -> Vec<EmbedKey> {
-        self.inner
-            .lock()
-            .children
-            .iter()
-            .filter(|(_, c)| c.platform == platform)
-            .map(|(k, _)| k.clone())
-            .collect()
-    }
 }
 
 /// Set `_NET_WM_BYPASS_COMPOSITOR=1` on the X11 window so KWin skips ALL
@@ -284,7 +252,6 @@ pub(crate) fn set_bypass_compositor(gdk_win: &gtk::gdk::Window) {
 
 #[cfg(target_os = "linux")]
 pub(crate) mod linux {
-    use super::*;
     use anyhow::Context;
     use gtk::prelude::*;
     use gtk::{Box as GtkBox, Fixed, Overlay};
@@ -1163,7 +1130,6 @@ mod tests {
     fn host_starts_empty() {
         let host = EmbedHost::new();
         assert!(!host.has("youtube:UC123"));
-        assert!(host.keys().is_empty());
     }
 
     #[test]
@@ -1194,17 +1160,6 @@ mod tests {
         assert!(!host.has("youtube:UC1"));
         assert!(!host.has("youtube:UC2"));
         assert!(host.has("chaturbate:bob"));
-    }
-
-    #[test]
-    fn keys_for_platform_filters() {
-        let host = EmbedHost::new();
-        host.insert_fake("youtube:UC1", Platform::Youtube);
-        host.insert_fake("chaturbate:bob", Platform::Chaturbate);
-        let yt = host.keys_for_platform(Platform::Youtube);
-        let cb = host.keys_for_platform(Platform::Chaturbate);
-        assert_eq!(yt, vec!["youtube:UC1".to_string()]);
-        assert_eq!(cb, vec!["chaturbate:bob".to_string()]);
     }
 
     #[test]
