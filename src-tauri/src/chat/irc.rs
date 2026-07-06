@@ -10,7 +10,6 @@ pub struct IrcMessage<'a> {
     pub tags: HashMap<String, String>,
     pub prefix: Option<&'a str>,
     pub command: &'a str,
-    pub params: Vec<&'a str>,
     pub trailing: Option<&'a str>,
 }
 
@@ -49,13 +48,11 @@ pub fn parse(line: &str) -> Option<IrcMessage<'_>> {
 
     let mut parts = command_and_params.split_ascii_whitespace();
     let command = parts.next()?;
-    let params: Vec<&str> = parts.collect();
 
     Some(IrcMessage {
         tags,
         prefix,
         command,
-        params,
         trailing,
     })
 }
@@ -120,7 +117,6 @@ mod tests {
         let line = "@badge-info=;badges=;color=#FF0000;display-name=Foo;emotes=25:0-4;id=abc;room-id=1;tmi-sent-ts=1700000000000;user-id=2 :foo!foo@foo.tmi.twitch.tv PRIVMSG #shroud :Kappa hello world";
         let m = parse(line).unwrap();
         assert_eq!(m.command, "PRIVMSG");
-        assert_eq!(m.params, vec!["#shroud"]);
         assert_eq!(m.trailing, Some("Kappa hello world"));
         assert_eq!(m.tags.get("display-name").unwrap(), "Foo");
         assert_eq!(m.tags.get("color").unwrap(), "#FF0000");

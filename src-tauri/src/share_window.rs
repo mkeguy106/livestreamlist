@@ -12,7 +12,6 @@
 //! Window lifecycle:
 //! - `open(login)` — focus existing if any, else build new + register
 //! - `close(login)` — drop from registry, close the window
-//! - `close_all()` — used when user toggles the feature off
 //!
 //! Window label is `share-resub-{channel_login}` (not `unique_key` —
 //! Tauri labels disallow `:`).
@@ -158,15 +157,6 @@ pub fn close(app: &AppHandle, channel_login: &str, state: &ShareWindowState) {
     // Window might have been closed by user (Tauri removes from manager
     // but our HashMap doesn't auto-clear). Best-effort lookup + close.
     if let Some(w) = app.get_webview_window(&label) {
-        let _ = w.close();
-    }
-}
-
-/// Close every registered popout. Used when the user toggles the
-/// sub-anniversary feature off, or on Twitch web logout.
-pub fn close_all(state: &ShareWindowState) {
-    let windows: Vec<WebviewWindow> = state.inner.lock().drain().map(|(_, w)| w).collect();
-    for w in windows {
         let _ = w.close();
     }
 }

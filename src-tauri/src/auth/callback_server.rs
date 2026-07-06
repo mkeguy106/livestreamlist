@@ -41,10 +41,8 @@ pub fn redirect_uri(port: u16) -> String {
 #[derive(Debug, Clone)]
 pub enum CallbackResult {
     /// Implicit flow — token in URL fragment, sent to /token via JS POST.
-    Token {
+Token {
         access_token: String,
-        scope: Option<String>,
-        token_type: Option<String>,
         /// CSRF `state` echoed back by the provider in the fragment. The
         /// caller compares it against the value it generated.
         state: Option<String>,
@@ -159,8 +157,6 @@ fn handle_conn(mut stream: TcpStream) -> Result<Option<CallbackResult>> {
             .ok_or_else(|| anyhow!("/token POST missing access_token"))?;
         return Ok(Some(CallbackResult::Token {
             access_token: token,
-            scope: q.get("scope").cloned(),
-            token_type: q.get("token_type").cloned(),
             state: q.get("state").cloned(),
         }));
     }
