@@ -61,7 +61,21 @@ pub async fn login(client: &reqwest::Client) -> Result<TwitchIdentity> {
         .context("OAuth callback server closed before completing")?;
 
     let token = match result {
-        CallbackResult::Token { access_token, .. } => access_token,
+        CallbackResult::Token {
+            access_token,
+            state: returned_state,
+            ..
+        } => {
+            // Verify the CSRF `state` echoed back matches the one we generated.
+            // Twitch's implicit grant returns `state` in the URL fragment; the
+            // bounce page POSTs the whole fragment back, so a genuine callback
+            // always carries it. A mismatch (or absence) means the response
+            // didn't originate from the request we started.
+            if returned_state.as_deref() != Some(state.as_str()) {
+                anyhow::bail!("Twitch OAuth state mismatch — possible CSRF");
+            }
+            access_token
+        }
         CallbackResult::Code { .. } => {
             anyhow::bail!("Twitch returned a code; expected a token (implicit flow)")
         }
@@ -157,13 +171,19 @@ async fn validate(client: &reqwest::Client, token: &str) -> Result<TwitchIdentit
     })
 }
 
+/// Cryptographically-random CSRF `state` token, hex-encoded. Uses the OS
+/// CSPRNG (via `rand::thread_rng`) — the previous SystemTime-nanos derivation
+/// was predictable and defeated the CSRF protection.
 fn random_state() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let t = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    format!("{t:x}")
+    use rand::RngCore;
+    let mut bytes = [0u8; 16];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        use std::fmt::Write;
+        let _ = write!(out, "{b:02x}");
+    }
+    out
 }
 
 fn url_encode(s: &str) -> String {
@@ -183,4 +203,26 @@ fn url_encode(s: &str) -> String {
 #[allow(dead_code)]
 fn _keep_anyhow() -> anyhow::Error {
     anyhow!("placeholder")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn random_state_is_unpredictable_and_well_formed() {
+        let a = random_state();
+        let b = random_state();
+        // Two consecutive states must differ (a SystemTime-nanos derivation
+        // could collide or be guessable; a CSPRNG effectively never repeats).
+        assert_ne!(a, b, "consecutive states must differ");
+        // 16 random bytes hex-encoded → 32 lowercase hex chars.
+        assert_eq!(a.len(), 32);
+        assert_eq!(b.len(), 32);
+        assert!(
+            a.chars()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
+            "state must be lowercase hex, got {a:?}"
+        );
+    }
 }
