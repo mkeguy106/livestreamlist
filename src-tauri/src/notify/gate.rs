@@ -7,7 +7,6 @@ use crate::platforms::Platform;
 use crate::settings::NotificationSettings;
 
 #[derive(Debug, PartialEq, Eq)]
-#[allow(dead_code)]
 pub enum DenyReason {
     Disabled,
     ChannelMuted,
@@ -16,7 +15,6 @@ pub enum DenyReason {
 }
 
 /// Evaluation order: Disabled → ChannelMuted → PlatformFiltered → QuietHours.
-#[allow(dead_code)]
 pub fn should_notify(
     s: &NotificationSettings,
     platform: Platform,

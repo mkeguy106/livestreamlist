@@ -6,8 +6,6 @@ use crate::settings::NotificationSettings;
 static DEFAULT_SOUND: &[u8] = include_bytes!("../../sounds/notify.ogg");
 
 /// Honors `sound_enabled`; resolves custom file vs bundled default.
-// consumed by the go-live path wired in a later commit; allow removed there
-#[allow(dead_code)]
 pub fn play(settings: &NotificationSettings) {
     if !settings.sound_enabled {
         return;
@@ -18,11 +16,9 @@ pub fn play(settings: &NotificationSettings) {
 /// Play `custom_path` if non-empty and readable, else the bundled default.
 /// Detached thread: rodio's OutputStream must outlive playback and must not
 /// block the caller (refresh loop / IPC).
-// consumed by the go-live path wired in a later commit; allow removed there
-#[allow(dead_code)]
 pub fn play_path_or_default(custom_path: &str) {
     let custom = custom_path.trim().to_string();
-    std::thread::Builder::new()
+    let spawned = std::thread::Builder::new()
         .name("notify-sound".into())
         .spawn(move || {
             let bytes: std::borrow::Cow<'static, [u8]> = if custom.is_empty() {
@@ -41,8 +37,10 @@ pub fn play_path_or_default(custom_path: &str) {
             if let Err(e) = play_bytes(&bytes) {
                 log::warn!("notification sound playback failed: {e:#}");
             }
-        })
-        .ok();
+        });
+    if let Err(e) = spawned {
+        log::warn!("notify sound thread spawn failed: {e}");
+    }
 }
 
 fn play_bytes(bytes: &[u8]) -> anyhow::Result<()> {

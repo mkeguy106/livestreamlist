@@ -168,33 +168,31 @@ fn set_favorite(
 
 /// The full-store refresh path shared by the manual `refresh_all` IPC command
 /// and the background scheduler task. Runs the network fan-out, fires
-/// offline→live desktop notifications (or just advances the tracker when
-/// notifications are off), updates the tray tooltip, and **pushes the fresh
-/// snapshot to the frontend via the `livestreams:updated` event** so every
-/// refresh path — manual, scheduled, or tray-triggered — results in exactly one
-/// push. Returns the snapshot for callers that also want it as a value.
+/// offline→live desktop notifications (suppression — disabled, muted,
+/// platform-filtered, quiet hours — is entirely the gate's call now), updates
+/// the tray tooltip, and **pushes the fresh snapshot to the frontend via the
+/// `livestreams:updated` event** so every refresh path — manual, scheduled, or
+/// tray-triggered — results in exactly one push. Returns the snapshot for
+/// callers that also want it as a value.
 async fn perform_refresh_all<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     store: SharedStore,
     client: reqwest::Client,
     notifier: Arc<NotifyTracker>,
     yt_browser: Option<String>,
-    notify_enabled: bool,
+    notification_settings: crate::settings::NotificationSettings,
 ) -> Result<Vec<Livestream>, String> {
     let snapshot = refresh::refresh_all(Arc::clone(&store), client, yt_browser)
         .await
         .map_err(err_string)?;
 
     // Fire desktop notifications for offline→live transitions, and update
-    // the tray tooltip with the new counts.
+    // the tray tooltip with the new counts. `detect_and_notify` always
+    // advances the tracker's `prev` map regardless of the gate's verdict, so
+    // there's no separate seed-without-notifying branch needed when
+    // notifications are disabled — the gate's `Disabled` arm handles that.
     let channels = store.lock().channels().to_vec();
-    if notify_enabled {
-        notifier.detect_and_notify(app, &channels, &snapshot);
-    } else {
-        // Still advance the tracker so re-enabling doesn't retro-fire every
-        // currently-live channel.
-        notifier.seed(&snapshot);
-    }
+    notifier.detect_and_notify(app, &channels, &snapshot, &notification_settings);
     let live = snapshot.iter().filter(|l| l.is_live).count();
     tray::update_tooltip(app, live, snapshot.len());
 
@@ -213,17 +211,25 @@ async fn refresh_all<R: tauri::Runtime>(
     let store = Arc::clone(&state.store);
     let client = state.http.clone();
     let notifier = Arc::clone(&state.notifier);
-    let yt_browser = state
-        .settings
-        .read()
-        .general
-        .youtube_cookies_browser
-        .clone();
-    let notify_enabled = state.settings.read().general.notify_on_live;
+    let (yt_browser, notification_settings) = {
+        let settings = state.settings.read();
+        (
+            settings.general.youtube_cookies_browser.clone(),
+            settings.notifications.clone(),
+        )
+    };
     // Manual refresh always runs — wait out any in-flight scheduler cycle
     // rather than skipping, so pressing R never no-ops.
     let _guard = state.refresh_lock.lock().await;
-    perform_refresh_all(&app, store, client, notifier, yt_browser, notify_enabled).await
+    perform_refresh_all(
+        &app,
+        store,
+        client,
+        notifier,
+        yt_browser,
+        notification_settings,
+    )
+    .await
 }
 
 /// Refresh a single channel's live status. Called immediately after a
@@ -1033,13 +1039,13 @@ fn spawn_refresh_scheduler<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
         loop {
             // Re-read settings each cycle so live interval / notify / cookie
             // changes are honored without a restart.
-            let (interval_secs, notify_enabled, yt_browser) = {
+            let (interval_secs, notification_settings, yt_browser) = {
                 let state = app.state::<AppState>();
-                let g = &state.settings.read().general;
+                let settings = state.settings.read();
                 (
-                    clamp_refresh_interval(g.refresh_interval_seconds),
-                    g.notify_on_live,
-                    g.youtube_cookies_browser.clone(),
+                    clamp_refresh_interval(settings.general.refresh_interval_seconds),
+                    settings.notifications.clone(),
+                    settings.general.youtube_cookies_browser.clone(),
                 )
             };
 
@@ -1068,7 +1074,7 @@ fn spawn_refresh_scheduler<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
                         client,
                         notifier,
                         yt_browser,
-                        notify_enabled,
+                        notification_settings,
                     )
                     .await
                     {
