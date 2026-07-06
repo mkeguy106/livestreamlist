@@ -891,7 +891,7 @@ function GeneralTab({ settings, patch }) {
 
       <Row
         label="Close to tray"
-        hint="Clicking the window close button hides the app to the tray instead of quitting. (Wired in Phase 4b-2.)"
+        hint="Clicking the window close button hides the app to the tray instead of quitting. Quit from the tray menu to exit."
       >
         <Toggle
           checked={g.close_to_tray}
