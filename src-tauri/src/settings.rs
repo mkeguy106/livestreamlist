@@ -19,6 +19,8 @@ pub struct Settings {
     pub appearance: AppearanceSettings,
     #[serde(default)]
     pub chat: ChatSettings,
+    #[serde(default)]
+    pub notifications: NotificationSettings,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -239,8 +241,94 @@ impl Default for ChatSettings {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlatformFilter {
+    #[serde(default = "default_true")]
+    pub twitch: bool,
+    #[serde(default = "default_true")]
+    pub youtube: bool,
+    #[serde(default = "default_true")]
+    pub kick: bool,
+    #[serde(default = "default_true")]
+    pub chaturbate: bool,
+}
+
+impl Default for PlatformFilter {
+    fn default() -> Self {
+        Self {
+            twitch: true,
+            youtube: true,
+            kick: true,
+            chaturbate: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NotificationSettings {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_true")]
+    pub sound_enabled: bool,
+    #[serde(default)]
+    pub custom_sound_path: String,
+    #[serde(default)]
+    pub platform_filter: PlatformFilter,
+    #[serde(default)]
+    pub quiet_hours_enabled: bool,
+    #[serde(default = "default_quiet_start")]
+    pub quiet_start: String,
+    #[serde(default = "default_quiet_end")]
+    pub quiet_end: String,
+}
+
+fn default_quiet_start() -> String {
+    "23:00".into()
+}
+
+fn default_quiet_end() -> String {
+    "08:00".into()
+}
+
+impl Default for NotificationSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            sound_enabled: true,
+            custom_sound_path: String::new(),
+            platform_filter: PlatformFilter::default(),
+            quiet_hours_enabled: false,
+            quiet_start: default_quiet_start(),
+            quiet_end: default_quiet_end(),
+        }
+    }
+}
+
 /// Shared in-memory handle. Clone cheaply, read/write under the RwLock.
 pub type SharedSettings = Arc<RwLock<Settings>>;
+
+impl Settings {
+    /// Parse settings JSON applying one-time migrations. Public for tests.
+    pub fn from_json_with_migrations(json: &str) -> Result<Settings, serde_json::Error> {
+        let raw: serde_json::Value = serde_json::from_str(json)?;
+        let has_notifications_block = raw.get("notifications").is_some();
+        let legacy_notify_on_live = raw
+            .get("general")
+            .and_then(|g| g.get("notify_on_live"))
+            .and_then(|v| v.as_bool());
+        let mut s: Settings = serde_json::from_value(raw)?;
+        // Migration: absorb general.notify_on_live into notifications.enabled
+        // when the new block is absent. The legacy field stays tolerated on
+        // GeneralSettings so old JSON parses; it is no longer written as the
+        // source of truth.
+        if !has_notifications_block {
+            if let Some(legacy) = legacy_notify_on_live {
+                s.notifications.enabled = legacy;
+            }
+        }
+        Ok(s)
+    }
+}
 
 pub fn load() -> Result<Settings> {
     let path = config::settings_path()?;
@@ -251,7 +339,7 @@ pub fn load() -> Result<Settings> {
     if bytes.is_empty() {
         return Ok(Settings::default());
     }
-    let s = serde_json::from_slice::<Settings>(&bytes)
+    let s = Settings::from_json_with_migrations(&String::from_utf8_lossy(&bytes))
         .with_context(|| format!("parsing {}", path.display()))?;
     Ok(s)
 }
@@ -265,6 +353,54 @@ pub fn save(settings: &Settings) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn notification_settings_defaults_when_missing() {
+        let s: Settings = serde_json::from_str("{}").unwrap();
+        let n = &s.notifications;
+        assert!(n.enabled);
+        assert!(n.sound_enabled);
+        assert_eq!(n.custom_sound_path, "");
+        assert!(n.platform_filter.twitch);
+        assert!(n.platform_filter.youtube);
+        assert!(n.platform_filter.kick);
+        assert!(n.platform_filter.chaturbate);
+        assert!(!n.quiet_hours_enabled);
+        assert_eq!(n.quiet_start, "23:00");
+        assert_eq!(n.quiet_end, "08:00");
+    }
+
+    #[test]
+    fn notification_settings_round_trip() {
+        let mut s = Settings::default();
+        s.notifications.enabled = false;
+        s.notifications.custom_sound_path = "/tmp/ding.ogg".into();
+        s.notifications.platform_filter.kick = false;
+        s.notifications.quiet_hours_enabled = true;
+        let json = serde_json::to_string(&s).unwrap();
+        let back: Settings = serde_json::from_str(&json).unwrap();
+        assert!(!back.notifications.enabled);
+        assert_eq!(back.notifications.custom_sound_path, "/tmp/ding.ogg");
+        assert!(!back.notifications.platform_filter.kick);
+        assert!(back.notifications.quiet_hours_enabled);
+    }
+
+    /// Old configs carry `general.notify_on_live`; a missing `notifications`
+    /// block must seed `enabled` from it exactly once at load.
+    #[test]
+    fn migrates_notify_on_live_false_into_enabled() {
+        let json = r#"{"general":{"refresh_interval_seconds":60,"notify_on_live":false,"close_to_tray":false}}"#;
+        let s = Settings::from_json_with_migrations(json).unwrap();
+        assert!(!s.notifications.enabled);
+    }
+
+    /// If the `notifications` block IS present, it wins over the legacy field.
+    #[test]
+    fn present_notifications_block_beats_legacy_field() {
+        let json = r#"{"general":{"refresh_interval_seconds":60,"notify_on_live":false,"close_to_tray":false},"notifications":{"enabled":true}}"#;
+        let s = Settings::from_json_with_migrations(json).unwrap();
+        assert!(s.notifications.enabled);
+    }
 
     #[test]
     fn chat_settings_defaults_visibility_toggles_true() {

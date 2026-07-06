@@ -58,6 +58,18 @@ rand = "0.8"
 regex = "1"
 urlencoding = "2.1.3"
 rookie = "0.5"
+# The brief's symphonia-only feature list (`symphonia-vorbis`, etc.,
+# default-features = false) compiles cleanly but is functionally broken for
+# our bundled .ogg: rodio's `symphonia-vorbis` feature maps only to
+# `symphonia/vorbis` (the Vorbis codec), not `symphonia/ogg` (the OGG
+# container demuxer) — the two are separate symphonia features and rodio
+# doesn't wire ogg-support alongside vorbis. Decoding failed with
+# `IoError("end of stream")` on every .ogg (reproduced standalone outside
+# this crate, including on a plain 1s single-tone clip, to rule out anything
+# specific to our generated file). Falling back to the brief's documented
+# fallback: default features, which pulls in `lewton` (pure-Rust Ogg Vorbis)
+# instead of symphonia for vorbis and decodes the bundled sound correctly.
+rodio = "0.20"
 
 [features]
 smoke = ["tauri/test", "dep:tempfile"]

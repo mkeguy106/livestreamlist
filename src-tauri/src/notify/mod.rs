@@ -7,6 +7,9 @@
 //! fire on the first refresh so adding or bulk-importing a channel while it's
 //! live doesn't spam a notification. See `is_go_live` for the exact rule.
 
+pub mod gate;
+pub mod sound;
+
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use tauri::Runtime;
@@ -28,18 +31,6 @@ impl NotifyTracker {
         Self::default()
     }
 
-    /// Advance the tracker without emitting. Used when notifications are
-    /// disabled so toggling them back on doesn't retro-fire every currently
-    /// live channel.
-    pub fn seed(&self, snapshot: &[Livestream]) {
-        *self.seeded.lock() = true;
-        let mut prev = self.prev.lock();
-        prev.clear();
-        for ls in snapshot {
-            prev.insert(ls.unique_key.clone(), ls.is_live);
-        }
-    }
-
     /// Pre-seed a single channel as if it had been observed in a prior
     /// snapshot. Used when a channel is freshly added and its initial live
     /// status is fetched eagerly — without this, the next `refresh_all`
@@ -52,12 +43,17 @@ impl NotifyTracker {
 
     /// Note: `channels` drives the `dont_notify` lookup; snapshot supplies
     /// the transient live state. Caller supplies both so we don't need to
-    /// hold the store lock.
+    /// hold the store lock. `settings` is consulted per-transition via
+    /// `gate::should_notify`, which now owns every suppression rule
+    /// (disabled/muted/platform-filtered/quiet-hours) — the tracker always
+    /// advances `prev` regardless of the gate's verdict, so callers no longer
+    /// need a separate seed-without-notifying path when notifications are off.
     pub fn detect_and_notify<R: Runtime>(
         &self,
         app: &tauri::AppHandle<R>,
         channels: &[Channel],
         snapshot: &[Livestream],
+        settings: &crate::settings::NotificationSettings,
     ) {
         let mut prev = self.prev.lock();
 
@@ -74,16 +70,19 @@ impl NotifyTracker {
             .map(|c| (c.channel_id.as_str(), c))
             .collect();
 
+        let now = chrono::Local::now().time();
         for ls in snapshot {
             let was = prev.insert(ls.unique_key.clone(), ls.is_live);
             if is_go_live(was, ls.is_live) {
                 // New live transition.
                 let ch = cfg_map.get(ls.channel_id.as_str()).copied();
                 let dont_notify = ch.map(|c| c.dont_notify).unwrap_or(false);
-                if dont_notify {
-                    continue;
+                match crate::notify::gate::should_notify(settings, ls.platform, dont_notify, now) {
+                    Ok(()) => send_go_live(app, ls, settings),
+                    Err(reason) => {
+                        log::debug!("go-live for {} suppressed: {reason:?}", ls.unique_key)
+                    }
                 }
-                send_go_live(app, ls);
             }
         }
     }
@@ -103,7 +102,11 @@ fn is_go_live(was: Option<bool>, is_live: bool) -> bool {
     matches!(was, Some(false)) && is_live
 }
 
-fn send_go_live<R: Runtime>(app: &tauri::AppHandle<R>, ls: &Livestream) {
+fn send_go_live<R: Runtime>(
+    app: &tauri::AppHandle<R>,
+    ls: &Livestream,
+    settings: &crate::settings::NotificationSettings,
+) {
     let title = format!("{} is live", ls.display_name);
     let body = match (&ls.title, &ls.game) {
         (Some(t), Some(g)) => format!("{t} · {g}"),
@@ -111,8 +114,9 @@ fn send_go_live<R: Runtime>(app: &tauri::AppHandle<R>, ls: &Livestream) {
         (None, Some(g)) => g.clone(),
         (None, None) => ls.platform.as_str().to_string(),
     };
-    if let Err(e) = app.notification().builder().title(title).body(body).show() {
-        log::warn!("notification failed for {}: {e:#}", ls.unique_key);
+    match app.notification().builder().title(title).body(body).show() {
+        Ok(()) => crate::notify::sound::play(settings),
+        Err(e) => log::warn!("notification failed for {}: {e:#}", ls.unique_key),
     }
 }
 
