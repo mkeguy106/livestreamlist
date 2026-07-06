@@ -15,15 +15,45 @@ const HARD_BUFFER_CAP = 5000;
  * Tracks Twitch-style moderation events (CLEARCHAT / CLEARMSG) — matched
  * messages are flagged with `hidden: true` so the UI can grey or remove them
  * without re-fetching the buffer.
+ *
+ * Options:
+ *   - `active` (default true) — when false (e.g. a hidden Command tab), the
+ *     IRC connection stays live and the buffer keeps filling + trimming, but
+ *     React `messages` state is NOT updated per message (skips the re-render
+ *     churn of an invisible pane). When `active` flips back to true, the
+ *     buffered messages are flushed to state once.
+ *   - `onMessage(payload)` — fired for every NEW (deduped) incoming message
+ *     regardless of `active`, so consumers that must react per message even
+ *     while frozen (mention flashes on inactive tabs) don't depend on the
+ *     `messages` state updating. Read via a ref, so its identity may change
+ *     freely without re-subscribing.
  */
-export function useChat(channelKey) {
+export function useChat(channelKey, { active = true, onMessage } = {}) {
   const [messages, setMessages] = useState([]);
   const [status, setStatus] = useState('idle');
   const bufferRef = useRef([]);
   const pausedRef = useRef(false);
+  // Latest `active` / `onMessage`, read by the long-lived listener closure.
+  // Assigned unconditionally every render so neither goes stale.
+  const activeRef = useRef(active);
+  activeRef.current = active;
+  const onMessageRef = useRef(onMessage);
+  onMessageRef.current = onMessage;
+  // True when the buffer has changes not yet pushed to `messages` state
+  // because we were inactive. Drives the flush-on-reactivate effect below.
+  const dirtyRef = useRef(false);
+
+  // Flush the buffer to state when a frozen tab becomes visible again.
+  useEffect(() => {
+    if (active && dirtyRef.current) {
+      dirtyRef.current = false;
+      setMessages(bufferRef.current);
+    }
+  }, [active]);
 
   useEffect(() => {
     bufferRef.current = [];
+    dirtyRef.current = false;
     setMessages([]);
     if (!channelKey) {
       setStatus('idle');
@@ -36,6 +66,19 @@ export function useChat(channelKey) {
     let cancelled = false;
 
     setStatus('connecting');
+
+    // Push a new buffer state. While active, mirror it into React state; while
+    // inactive (hidden tab), only update the buffer + mark it dirty so the
+    // flush-on-reactivate effect can catch up when the tab becomes visible.
+    const commit = (next) => {
+      bufferRef.current = next;
+      if (cancelled) return;
+      if (activeRef.current) {
+        setMessages(next);
+      } else {
+        dirtyRef.current = true;
+      }
+    };
 
     const applyMod = (event) => {
       const { kind, target_login, target_msg_id } = event || {};
@@ -57,8 +100,7 @@ export function useChat(channelKey) {
       } else {
         return;
       }
-      bufferRef.current = next;
-      if (!cancelled) setMessages(next);
+      commit(next);
     };
 
     (async () => {
@@ -76,8 +118,7 @@ export function useChat(channelKey) {
             if (m?.id) seen.add(m.id);
             deduped.push(m);
           }
-          bufferRef.current = deduped;
-          setMessages(deduped);
+          commit(deduped);
         }
       } catch (e) {
         console.warn('replay_chat_history', e);
@@ -109,8 +150,10 @@ export function useChat(channelKey) {
           // memory stays bounded.
           next.splice(0, next.length - HARD_BUFFER_CAP);
         }
-        bufferRef.current = next;
-        setMessages(next);
+        // Notify per-message consumers (mention flash) even while frozen —
+        // this fires before the active/inactive branch inside commit().
+        onMessageRef.current?.(payload);
+        commit(next);
       });
       // If cleanup already ran while we were awaiting listenEvent, the
       // outer cleanup closure has already fired (with unMsg still null

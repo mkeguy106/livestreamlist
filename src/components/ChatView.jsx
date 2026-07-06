@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { readableColor } from '../utils/color.js';
 import { countSessionMessages } from '../utils/format.js';
 import { useAuth } from '../hooks/useAuth.jsx';
@@ -85,7 +85,6 @@ export default function ChatView({
     );
   }
 
-  const { messages, status, pauseTrim, resumeTrim } = useChat(channelKey);
   const { nicknames } = useNicknames();
   const auth = useAuth();
   const rootRef = useRef(null);
@@ -112,26 +111,44 @@ export default function ChatView({
 
   // Fire onMention for inactive tabs when a new message contains @<myLogin>.
   // Active tabs don't fire — the per-row highlight in this ChatView is the
-  // signal here. A dep on `messages.length` would silently miss mentions
-  // on busy channels: once the buffer hits useChat's BUFFER_SIZE (250),
-  // every new message displaces an old one and length stays pinned, so the
-  // effect wouldn't re-run. Instead, dep on the messages array itself and
-  // gate firing through a last-fired-id ref so we still produce at most
-  // one onMention call per actual incoming message.
+  // signal here. This runs off useChat's per-message `onMessage` callback
+  // rather than a `messages`-state effect: when a Command tab is inactive we
+  // now FREEZE its React state (Fix 2) — `messages` no longer updates while
+  // hidden — but the buffer + this callback still fire per message, so mention
+  // flashes on inactive tabs keep working. The last-fired-id ref makes it at
+  // most one call per actual incoming message.
   const lastFiredMentionRef = useRef(null);
-  useEffect(() => {
-    if (!onMention) return;
-    if (isActiveTab) return;
-    if (!myLogin) return;
-    if (messages.length === 0) return;
-    const latest = messages[messages.length - 1];
-    if (!latest || !latest.id) return;
-    if (latest.id === lastFiredMentionRef.current) return;
-    lastFiredMentionRef.current = latest.id;
-    if (mentionsLogin(latest.text, myLogin)) {
-      onMention(channelKey, latest);
-    }
-  }, [messages, isActiveTab, onMention, channelKey, myLogin]);
+  const handleIncomingMessage = useCallback(
+    (payload) => {
+      if (isActiveTab) return;
+      if (!onMention) return;
+      if (!myLogin) return;
+      if (!payload?.id) return;
+      if (payload.id === lastFiredMentionRef.current) return;
+      lastFiredMentionRef.current = payload.id;
+      if (mentionsLogin(payload.text, myLogin)) {
+        onMention(channelKey, payload);
+      }
+    },
+    [isActiveTab, onMention, myLogin, channelKey],
+  );
+
+  // `active: isActiveTab` — inactive Command tabs keep the IRC connection and
+  // keep buffering, but skip the per-message setMessages churn until they
+  // become visible again (then useChat flushes the buffer once). Focus/other
+  // callers omit `active` → defaults true → unaffected.
+  const { messages, status, pauseTrim, resumeTrim } = useChat(channelKey, {
+    active: isActiveTab,
+    onMessage: handleIncomingMessage,
+  });
+
+  // Latest `messages` for event handlers that need to count session messages
+  // at CLICK/HOVER time (not render time). Assigned unconditionally every
+  // render so the ref never goes stale — this lets handleOpen/handleHover be
+  // stable useCallbacks (no `messages` dep), which is what makes the memoized
+  // rows actually skip re-render on each incoming message.
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
 
   const { settings } = usePreferences();
   const c = settings?.chat || {};
@@ -272,15 +289,15 @@ export default function ChatView({
     setFindQuery('');
   }, []);
 
-  const openConversation = (userA, userB) => {
+  const openConversation = useCallback((userA, userB) => {
     if (!userA || !userB || userA === userB) return;
     setConversation({ a: userA, b: userB });
-  };
+  }, []);
 
   const handleOpen = useCallback(
     (user, rect) =>
-      onUsernameOpen?.(user, rect, channelKey, countSessionMessages(messages, user)),
-    [onUsernameOpen, channelKey, messages],
+      onUsernameOpen?.(user, rect, channelKey, countSessionMessages(messagesRef.current, user)),
+    [onUsernameOpen, channelKey],
   );
   const handleContext = useCallback(
     (user, point) => onUsernameContext?.(user, point, channelKey),
@@ -288,8 +305,8 @@ export default function ChatView({
   );
   const handleHover = useCallback(
     (user, rect) =>
-      onUsernameHover?.(user, rect, channelKey, user ? countSessionMessages(messages, user) : 0),
-    [onUsernameHover, channelKey, messages],
+      onUsernameHover?.(user, rect, channelKey, user ? countSessionMessages(messagesRef.current, user) : 0),
+    [onUsernameHover, channelKey],
   );
 
   const startReply = useCallback((m) => {
@@ -610,7 +627,13 @@ function EmptyHint({ status }) {
   );
 }
 
-function IrcRow({
+// React.memo — on busy channels useChat replaces `messages` several times a
+// second; without memo, ChatView re-maps and every row's body re-renders
+// (EmoteText byte-slicing, badges, tooltips) even though only the appended
+// row is new. All props below are stable per message (the parent hoists the
+// handlers to stable identities and reads `messages` via a ref at call time),
+// so an incoming message re-renders only the newly-appended row.
+const IrcRow = memo(function IrcRow({
   m,
   myLogin,
   nicknames,
@@ -732,9 +755,9 @@ function IrcRow({
       </div>
     </div>
   );
-}
+});
 
-function CompactRow({
+const CompactRow = memo(function CompactRow({
   m,
   myLogin,
   nicknames,
@@ -835,7 +858,7 @@ function CompactRow({
       </div>
     </div>
   );
-}
+});
 
 function ReplyContextRow({ reply, compact = false, onClick }) {
   return (
@@ -1033,7 +1056,7 @@ function BackfillSeparator() {
   );
 }
 
-function SystemRow({ m, variant }) {
+const SystemRow = memo(function SystemRow({ m, variant }) {
   const compact = variant === 'compact';
   const primary = m.system?.text?.trim() || '';
   const hasPayload = m.text && m.text.trim().length > 0;
@@ -1083,7 +1106,7 @@ function SystemRow({ m, variant }) {
       )}
     </div>
   );
-}
+});
 
 function formatTime(iso, is24h = true) {
   if (!iso) return '';
