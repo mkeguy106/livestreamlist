@@ -301,8 +301,10 @@ export default function App() {
     selectedKey,
     setSelectedKey,
     openAddDialog: () => setAddOpen(true),
-    launchStream: (key, quality = 'best') =>
-      launchStream(key, quality).catch((e) => console.error('launch_stream', e)),
+    launchStream: (key, quality) =>
+      launchStream(key, quality ?? settings?.general?.default_quality ?? 'best').catch((e) =>
+        console.error('launch_stream', e),
+      ),
     openInBrowser: (key) =>
       openInBrowser(key).catch((e) => console.error('open_in_browser', e)),
     removeChannel: (key) =>
@@ -314,7 +316,7 @@ export default function App() {
     onUsernameOpen,
     onUsernameContext,
     onUsernameHover,
-  }), [livestreams, loading, error, refresh, dropLivestream, selectedKey, onUsernameOpen, onUsernameContext, onUsernameHover]);
+  }), [livestreams, loading, error, refresh, dropLivestream, selectedKey, settings?.general?.default_quality, onUsernameOpen, onUsernameContext, onUsernameHover]);
 
   const current = LAYOUTS.find((l) => l.id === layoutId) ?? LAYOUTS[0];
   const Layout = current.Component;

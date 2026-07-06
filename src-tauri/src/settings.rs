@@ -41,6 +41,12 @@ pub struct GeneralSettings {
     /// to anonymous. See `auth::youtube` for detection + consumption.
     #[serde(default)]
     pub youtube_cookies_browser: Option<String>,
+    /// Default streamlink quality string passed to `launch_stream` when the
+    /// user doesn't pick a per-launch override. One of `best` / `1080p60` /
+    /// `1080p` / `720p60` / `720p` / `480p` / `360p` / `160p` / `audio_only`
+    /// / `worst`. Streamlink falls back to the nearest available quality.
+    #[serde(default = "default_quality")]
+    pub default_quality: String,
 }
 
 impl Default for GeneralSettings {
@@ -50,8 +56,13 @@ impl Default for GeneralSettings {
             notify_on_live: true,
             close_to_tray: false,
             youtube_cookies_browser: None,
+            default_quality: default_quality(),
         }
     }
+}
+
+fn default_quality() -> String {
+    "best".into()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -274,6 +285,29 @@ mod tests {
             s.chat.show_timestamps,
             "show_timestamps default should be true"
         );
+    }
+
+    #[test]
+    fn general_defaults_when_fields_missing() {
+        // Old settings.json that predates `default_quality` must still load,
+        // with the new field taking its serde default of "best".
+        let json = br#"{"general":{"refresh_interval_seconds":60,"notify_on_live":true,"close_to_tray":false}}"#;
+        let s: Settings = serde_json::from_slice(json).expect("parse");
+        assert_eq!(s.general.default_quality, "best");
+    }
+
+    #[test]
+    fn general_quality_round_trips() {
+        let g = GeneralSettings {
+            refresh_interval_seconds: 90,
+            notify_on_live: false,
+            close_to_tray: true,
+            youtube_cookies_browser: None,
+            default_quality: "720p".to_string(),
+        };
+        let json = serde_json::to_string(&g).unwrap();
+        let back: GeneralSettings = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.default_quality, "720p");
     }
 
     #[test]
