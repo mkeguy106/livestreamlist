@@ -1,9 +1,44 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::sync::OnceLock;
+use std::time::{Duration, Instant};
 
 const CHANNEL_URL: &str = "https://kick.com/api/v2/channels";
+
+/// When Kick answers with HTTP 429, refreshes within this window are skipped so
+/// we don't keep hammering a rate-limited endpoint at every 60 s poll tick.
+/// Mirrors the YouTube/Twitch cooldown pattern (5 min).
+const RATE_LIMIT_COOLDOWN: Duration = Duration::from_secs(5 * 60);
+
+static RATE_LIMITED_UNTIL: OnceLock<Mutex<Option<Instant>>> = OnceLock::new();
+
+fn rate_limit_state() -> &'static Mutex<Option<Instant>> {
+    RATE_LIMITED_UNTIL.get_or_init(|| Mutex::new(None))
+}
+
+/// Pure cooldown gate: is `now` before the recorded `deadline`? Extracted so
+/// the time-based logic is unit-testable without touching the global state.
+fn cooldown_active(deadline: Option<Instant>, now: Instant) -> bool {
+    deadline.map(|d| now < d).unwrap_or(false)
+}
+
+/// True when a previous fetch tripped Kick's rate-limit and the cooldown is
+/// still in effect. `refresh.rs` checks this to skip the Kick fan-out and reuse
+/// cached live status instead of piling more 429s on top.
+pub fn is_rate_limited() -> bool {
+    cooldown_active(*rate_limit_state().lock(), Instant::now())
+}
+
+fn mark_rate_limited() {
+    *rate_limit_state().lock() = Some(Instant::now() + RATE_LIMIT_COOLDOWN);
+    log::warn!(
+        "Kick rate-limit (429) detected — pausing Kick refreshes for {} min",
+        RATE_LIMIT_COOLDOWN.as_secs() / 60
+    );
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KickLive {
@@ -39,6 +74,9 @@ pub async fn fetch_live(client: &reqwest::Client, slug: &str) -> Result<Option<K
         return Ok(None);
     }
     if !resp.status().is_success() {
+        if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            mark_rate_limited();
+        }
         anyhow::bail!(
             "Kick API {}: {}",
             resp.status(),
@@ -139,6 +177,23 @@ fn parse_kick_time(s: &str) -> Option<DateTime<Utc>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cooldown_inactive_when_no_deadline() {
+        assert!(!cooldown_active(None, Instant::now()));
+    }
+
+    #[test]
+    fn cooldown_active_before_deadline() {
+        let now = Instant::now();
+        assert!(cooldown_active(Some(now + Duration::from_secs(60)), now));
+    }
+
+    #[test]
+    fn cooldown_inactive_after_deadline() {
+        let now = Instant::now();
+        assert!(!cooldown_active(Some(now - Duration::from_secs(1)), now));
+    }
 
     #[test]
     fn parses_ytstyle_timestamps() {

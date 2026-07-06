@@ -65,9 +65,37 @@ pub async fn refresh_all(
     };
     let cb_session = crate::auth::chaturbate::stored_session_cookie();
 
+    // Rate-limit cooldowns: if a platform tripped a 429 recently, skip its
+    // fan-out this cycle and leave its channels on their last-known live state
+    // (matches the YouTube cooldown's intent — don't pile requests on a
+    // throttled endpoint). The commit loop below reuses the cached snapshot for
+    // these platforms by short-circuiting their branches.
+    let twitch_cooldown = twitch::is_rate_limited();
+    let kick_cooldown = kick::is_rate_limited();
+
     // Fire all four fetch groups in parallel
-    let twitch_fut = twitch::fetch_live(&client, &twitch_logins);
-    let kick_fut = fetch_kick_all(&client, &kick_slugs);
+    let twitch_fut = async {
+        if twitch_cooldown {
+            log::warn!(
+                "Twitch refresh skipped — rate-limit cooldown active ({} channels)",
+                twitch_logins.len()
+            );
+            Ok(HashMap::new())
+        } else {
+            twitch::fetch_live(&client, &twitch_logins).await
+        }
+    };
+    let kick_fut = async {
+        if kick_cooldown {
+            log::warn!(
+                "Kick refresh skipped — rate-limit cooldown active ({} channels)",
+                kick_slugs.len()
+            );
+            HashMap::new()
+        } else {
+            fetch_kick_all(&client, &kick_slugs).await
+        }
+    };
     let youtube_fut = fetch_youtube_all(&youtube_ids, youtube_cookies_browser.as_deref(), &client);
     let cb_fut = fetch_chaturbate_all(&client, &cb_names, cb_session);
 
@@ -79,6 +107,10 @@ pub async fn refresh_all(
         HashMap::new()
     });
 
+    // Track whether the refresh backfilled any persisted display_name so we
+    // can write channels.json ONCE after the commit block — never under the
+    // store lock.
+    let mut names_changed = false;
     {
         let mut guard = store.lock();
         for ch in &channels {
@@ -99,15 +131,11 @@ pub async fn refresh_all(
                         .map(|y| y.display_name.as_str())
                         .filter(|s| !s.is_empty());
                     if let Some(name) = yt_name {
-                        if name != ch.display_name && youtube::is_uc_id(&ch.display_name) {
-                            if let Err(e) = guard
-                                .update_channel_display_name(&ch.unique_key(), name)
-                            {
-                                log::warn!(
-                                    "backfill YT display_name for {}: {e:#}",
-                                    ch.unique_key()
-                                );
-                            }
+                        if name != ch.display_name
+                            && youtube::is_uc_id(&ch.display_name)
+                            && guard.update_channel_display_name(&ch.unique_key(), name)
+                        {
+                            names_changed = true;
                         }
                     }
                     let resolved_name = yt_name
@@ -134,6 +162,12 @@ pub async fn refresh_all(
                     guard.replace_livestreams_for_channel(&ch.unique_key(), streams);
                 }
                 Platform::Twitch => {
+                    // In cooldown: leave the cached livestream in place (don't
+                    // overwrite with a "not found" placeholder built from the
+                    // empty map).
+                    if twitch_cooldown {
+                        continue;
+                    }
                     let ls = twitch_map
                         .get(&ch.channel_id.to_ascii_lowercase())
                         .map(|live| Livestream::from_twitch(ch, live))
@@ -145,6 +179,11 @@ pub async fn refresh_all(
                     guard.upsert_livestream(ls);
                 }
                 Platform::Kick => {
+                    // In cooldown: keep the cached livestream instead of
+                    // flickering the channel offline off the empty map.
+                    if kick_cooldown {
+                        continue;
+                    }
                     let ls = kick_map
                         .get(&ch.channel_id.to_ascii_lowercase())
                         .map(|live| Livestream::from_kick(ch, live))
@@ -169,6 +208,14 @@ pub async fn refresh_all(
                     guard.upsert_livestream(ls);
                 }
             }
+        }
+    }
+
+    // Persist off-lock: the guard above has dropped, so the blocking
+    // atomic_write to channels.json runs without holding the store Mutex.
+    if names_changed {
+        if let Err(e) = crate::channels::persist(&store) {
+            log::warn!("persist backfilled display_names: {e:#}");
         }
     }
 
@@ -238,14 +285,17 @@ pub async fn refresh_one(
             let yt_name = Some(live.display_name.as_str()).filter(|s| !s.is_empty());
             if let Some(name) = yt_name {
                 if name != channel.display_name && youtube::is_uc_id(&channel.display_name) {
-                    if let Err(e) = store
+                    let changed = store
                         .lock()
-                        .update_channel_display_name(&channel.unique_key(), name)
-                    {
-                        log::warn!(
-                            "backfill YT display_name for {}: {e:#}",
-                            channel.unique_key()
-                        );
+                        .update_channel_display_name(&channel.unique_key(), name);
+                    if changed {
+                        // Persist off-lock (the guard above dropped at the `;`).
+                        if let Err(e) = crate::channels::persist(&store) {
+                            log::warn!(
+                                "backfill YT display_name for {}: {e:#}",
+                                channel.unique_key()
+                            );
+                        }
                     }
                 }
             }

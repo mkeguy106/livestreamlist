@@ -125,18 +125,19 @@ fn add_channel_from_input(input: String, state: State<'_, AppState>) -> Result<C
         auto_play: false,
         added_at: Some(Utc::now()),
     };
-    state
-        .store
-        .lock()
-        .add(channel.clone())
-        .map_err(err_string)?;
+    state.store.lock().add(channel.clone()).map_err(err_string)?;
+    channels::persist(&state.store).map_err(err_string)?;
     Ok(channel)
 }
 
 #[tauri::command]
 fn remove_channel(unique_key: String, state: State<'_, AppState>) -> Result<bool, String> {
     let unique_key = channels::channel_key_of(&unique_key).to_string();
-    state.store.lock().remove(&unique_key).map_err(err_string)
+    let removed = state.store.lock().remove(&unique_key);
+    if removed {
+        channels::persist(&state.store).map_err(err_string)?;
+    }
+    Ok(removed)
 }
 
 #[tauri::command]
@@ -146,11 +147,11 @@ fn set_favorite(
     state: State<'_, AppState>,
 ) -> Result<bool, String> {
     let unique_key = channels::channel_key_of(&unique_key).to_string();
-    state
-        .store
-        .lock()
-        .set_favorite(&unique_key, favorite)
-        .map_err(err_string)
+    let touched = state.store.lock().set_favorite(&unique_key, favorite);
+    if touched {
+        channels::persist(&state.store).map_err(err_string)?;
+    }
+    Ok(touched)
 }
 
 #[tauri::command]
@@ -287,22 +288,19 @@ fn add_imported_channels(
     store: &crate::channels::SharedStore,
     channels: Vec<Channel>,
 ) -> ImportResult {
-    let mut added = 0u32;
-    let mut skipped = 0u32;
     let total_seen = channels.len() as u32;
-    for channel in channels {
-        if store.lock().contains(channel.platform, &channel.channel_id) {
-            skipped += 1;
-            continue;
-        }
-        match store.lock().add(channel) {
-            Ok(()) => added += 1,
-            Err(_) => skipped += 1,
+    // Insert the whole batch under one lock acquisition, then persist once.
+    // The old per-channel `contains` + `add` (save-per-add) loop rewrote
+    // channels.json on every insert — O(n) file writes on a 100+ follow import.
+    let added = store.lock().add_many(channels) as u32;
+    if added > 0 {
+        if let Err(e) = crate::channels::persist(store) {
+            log::warn!("persist after bulk import failed: {e:#}");
         }
     }
     ImportResult {
         added,
-        skipped,
+        skipped: total_seen - added,
         total_seen,
     }
 }
