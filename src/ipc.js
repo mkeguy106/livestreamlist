@@ -223,10 +223,19 @@ function stopMockChat(uniqueKey) {
 async function mockInvoke(name, args) {
   switch (name) {
     case 'list_livestreams':
-    case 'refresh_all':
       return mockSnapshot();
+    case 'refresh_all': {
+      // Mirror the Rust backend: the refresh pushes a full snapshot via
+      // `livestreams:updated` (in addition to returning it), so the hook's
+      // event path is exercised in browser-dev too.
+      const snap = mockSnapshot();
+      mockEmit('livestreams:updated', snap);
+      return snap;
+    }
     case 'refresh_channel': {
       const key = args.uniqueKey;
+      // Backend emits the FULL snapshot on single-channel refresh as well.
+      mockEmit('livestreams:updated', mockSnapshot());
       return mockSnapshot().filter(
         (ls) => ls.unique_key === key || ls.unique_key.startsWith(`${key}:`),
       );

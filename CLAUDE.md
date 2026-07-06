@@ -162,6 +162,7 @@ The Rust side emits events that React subscribes to via `listenEvent(name, handl
 
 | Topic | Payload | Emitter |
 |---|---|---|
+| `livestreams:updated` | `Vec<Livestream>` (full snapshot, same shape as the `refresh_all` return) | `lib.rs::perform_refresh_all` (background scheduler + manual `refresh_all`) and the tail of `refresh_channel`; consumed by `useLivestreams` |
 | `chat:message:{uniqueKey}` | `ChatMessage` | `chat/twitch.rs` per PRIVMSG |
 | `chat:status:{uniqueKey}` | `ChatStatusEvent` | `chat/twitch.rs` on connect/disconnect/error |
 | `chat:auth:chaturbate` | `{ signed_in, reason }` | `embed.rs::handle_chaturbate_auth_outcome` on every CB embed page-load — broadcasts auth-drift status |
@@ -176,7 +177,7 @@ Events are strictly one-way (Rust → UI). UI never emits events; it calls invok
 0. `ChannelStore::load()` reads `~/.config/livestreamlist/channels.json` into memory.
 1. `App` mounts → `useLivestreams` invokes `list_livestreams` (instant cache), then `refresh_all` (network).
 2. `refresh_all` runs each platform client in parallel (currently only Twitch GraphQL), merges into the store's `livestreams` map, returns a fresh snapshot.
-3. `useLivestreams` re-polls `refresh_all` every 60 s.
+3. The refresh **loop lives in Rust**: `lib.rs::spawn_refresh_scheduler` (started in `setup()` via `tauri::async_runtime::spawn`) loops `perform_refresh_all` → sleep `settings.general.refresh_interval_seconds` (re-read each cycle so Preferences changes apply without restart; clamped to a 10 s floor via `clamp_refresh_interval`). Every full-store refresh path — the scheduler, the manual `refresh_all` IPC, and the tail of `refresh_channel` — emits `livestreams:updated` with the snapshot. `useLivestreams` no longer polls; it seeds from `list_livestreams`, kicks off one `refresh_all` on mount, exposes a manual `refresh()`, and subscribes to `livestreams:updated`, funneling every snapshot through the pure `mergeSnapshots(prev, next)` helper (`src/utils/mergeSnapshots.js`) which reuses row/array references for unchanged channels so the Command sidebar doesn't re-sort/reconcile when nothing displayed changed. The scheduler and manual refresh share a `tokio::sync::Mutex` (`AppState::refresh_lock`): manual `lock().await`s (always runs, waits out an in-flight cycle), the scheduler `try_lock()`s (skips its tick when a refresh is already running). Tray "Refresh now" emits `tray:refresh-requested` → `App.jsx` calls `refresh()` → one `livestreams:updated` emit.
 4. When a layout mounts `ChatView channelKey={k}`, `useChat(k)` invokes `chat_connect` and subscribes to `chat:message:{k}`.
 5. `ChatManager::connect` spawns a task. `twitch::run` opens a WebSocket, sends `CAP REQ + NICK justinfan… + JOIN #…`, reads frames, parses IRC, emits events per PRIVMSG.
 6. `EmoteCache` has globals loaded on app start (7TV + BTTV + FFZ); Twitch emote IDs come from the IRC `emotes=` tag and map directly to Twitch CDN URLs.
