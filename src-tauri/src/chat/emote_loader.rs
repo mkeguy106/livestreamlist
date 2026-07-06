@@ -43,8 +43,13 @@ pub async fn load_twitch_for_channel(
 ) {
     let mut per_channel: HashMap<String, Emote> = HashMap::new();
 
+    // Whether we saw a Twitch token — drives the deferred user-emote refresh
+    // at the end of this task (see below).
+    let mut had_token = false;
+
     // Twitch APIs need a bearer token. Anonymous connections skip them all.
     if let Some(token) = auth::twitch::stored_token().ok().flatten() {
+        had_token = true;
         // Globals are layered into the cache-wide globals map so they apply
         // to every Twitch channel, not just this one.
         if let Ok(globals) = twitch::fetch_global_emotes(&http, &token).await {
@@ -56,17 +61,6 @@ pub async fn load_twitch_for_channel(
         } else {
             log::debug!("twitch global emotes fetch failed");
         }
-
-        // User-emote set is loaded out-of-band (app start + login + stale
-        // refresh). Fire a stale check here so 30+ min sessions catch
-        // newly-purchased subs without restart. Detached so the channel-
-        // specific load doesn't block on the (slow, paginated) user fetch.
-        let cache_for_user = Arc::clone(&cache);
-        let http_for_user = http.clone();
-        let app_for_user = app.clone();
-        tauri::async_runtime::spawn(async move {
-            refresh_twitch_user_emotes_if_stale(http_for_user, cache_for_user, app_for_user).await;
-        });
 
         // Channel emotes need the broadcaster id, not the login.
         if let Ok(Some(user_id)) = twitch::resolve_user_id(&http, &token, &channel_login).await {
@@ -111,6 +105,18 @@ pub async fn load_twitch_for_channel(
     );
     cache.set_channel(&channel_key, per_channel);
     let _ = app.emit("chat:emotes_loaded", ());
+
+    // User-emote set (subs, followers, bits, Turbo, Prime) is loaded
+    // out-of-band (app start + login + stale refresh). Run a stale check
+    // here so 30+ min sessions catch newly-purchased subs without restart.
+    // Deferred to the end — after the channel-specific emotes are already
+    // set and emitted — so the picker isn't blocked on this (slow,
+    // paginated) fetch. Kept within THIS task (rather than a detached
+    // spawn) so `ChatManager::disconnect` aborting the loader also cancels
+    // it; the reset is a no-op when the cache is fresh.
+    if had_token {
+        refresh_twitch_user_emotes_if_stale(http, cache, app).await;
+    }
 }
 
 /// Unconditionally fetch the logged-in user's personal Twitch emote set

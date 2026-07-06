@@ -93,15 +93,22 @@ pub async fn login(http: &reqwest::Client) -> Result<KickIdentity> {
     let token_resp = exchange_code(http, &code, &verifier, &redirect_uri).await?;
     tokens::save(KEYRING_ACCESS, &token_resp.access_token)?;
     if let Some(rt) = &token_resp.refresh_token {
-        tokens::save(KEYRING_REFRESH, rt).ok();
+        // Non-fatal: without the refresh token the session still works until
+        // the access token expires, at which point the user must re-auth.
+        // Warn so a silently-lost refresh token is diagnosable.
+        if let Err(e) = tokens::save(KEYRING_REFRESH, rt) {
+            log::warn!("saving Kick refresh token failed (re-login needed on expiry): {e:#}");
+        }
     }
 
     let identity = fetch_identity(http, &token_resp.access_token).await?;
+    // Propagate identity-save failure so login doesn't silently succeed
+    // without a persisted account (the chip would render empty next launch).
     tokens::save(
         KEYRING_IDENTITY,
-        &serde_json::to_string(&identity).unwrap_or_default(),
+        &serde_json::to_string(&identity).context("serialising Kick identity")?,
     )
-    .ok();
+    .context("saving Kick identity")?;
     Ok(identity)
 }
 
@@ -155,11 +162,15 @@ pub async fn status(http: &reqwest::Client) -> Result<Option<KickIdentity>> {
     };
     match fetch_identity(http, &token).await {
         Ok(id) => {
-            tokens::save(
-                KEYRING_IDENTITY,
-                &serde_json::to_string(&id).unwrap_or_default(),
-            )
-            .ok();
+            // Opportunistic re-cache of the validated identity; not the login
+            // flow, so a failure here mustn't fail status() — but warn so it's
+            // not silent (next launch re-validates and re-caches anyway).
+            if let Err(e) = serde_json::to_string(&id)
+                .map_err(anyhow::Error::from)
+                .and_then(|json| tokens::save(KEYRING_IDENTITY, &json))
+            {
+                log::warn!("re-caching Kick identity failed: {e:#}");
+            }
             Ok(Some(id))
         }
         Err(_) => {
@@ -167,11 +178,12 @@ pub async fn status(http: &reqwest::Client) -> Result<Option<KickIdentity>> {
             match refresh(http).await {
                 Ok(Some(new_token)) => {
                     let id = fetch_identity(http, &new_token).await?;
-                    tokens::save(
-                        KEYRING_IDENTITY,
-                        &serde_json::to_string(&id).unwrap_or_default(),
-                    )
-                    .ok();
+                    if let Err(e) = serde_json::to_string(&id)
+                        .map_err(anyhow::Error::from)
+                        .and_then(|json| tokens::save(KEYRING_IDENTITY, &json))
+                    {
+                        log::warn!("re-caching Kick identity after refresh failed: {e:#}");
+                    }
                     Ok(Some(id))
                 }
                 _ => {

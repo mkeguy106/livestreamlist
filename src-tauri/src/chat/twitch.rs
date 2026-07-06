@@ -74,6 +74,10 @@ pub struct TwitchChatConfig {
     pub own_display_name: parking_lot::Mutex<Option<String>>,
     /// Latest parsed ROOMSTATE from IRC; used for emit-on-change logic.
     pub last_room_state: parking_lot::Mutex<Option<ChatRoomState>>,
+    /// Tracker for the badge-prefetch tasks this connection spawns in-task
+    /// (global on connect, per-channel on ROOMSTATE). Shared with the
+    /// `ConnectionHandle` so `ChatManager::disconnect` aborts them.
+    pub aux: crate::chat::AuxTasks,
 }
 
 /// Run the Twitch IRC connection until aborted, reconnecting automatically.
@@ -159,9 +163,9 @@ async fn connect_and_read(cfg: &mut TwitchChatConfig, backoff: &mut Backoff) -> 
     {
         let cache = Arc::clone(&cfg.badges);
         let http = cfg.http.clone();
-        tauri::async_runtime::spawn(async move {
+        cfg.aux.push(tauri::async_runtime::spawn(async move {
             cache.ensure_twitch_global(&http).await;
-        });
+        }));
     }
 
     let mut log = ChatLogWriter::open(Platform::Twitch, &cfg.channel_login).ok();
@@ -359,9 +363,9 @@ async fn handle_line(
                     *cfg.room_id.lock() = Some(rid.clone());
                     let cache = Arc::clone(&cfg.badges);
                     let http = cfg.http.clone();
-                    tauri::async_runtime::spawn(async move {
+                    cfg.aux.push(tauri::async_runtime::spawn(async move {
                         cache.ensure_twitch_channel(&http, &rid).await;
-                    });
+                    }));
                 }
             }
             let prior = cfg.last_room_state.lock().clone().unwrap_or_default();

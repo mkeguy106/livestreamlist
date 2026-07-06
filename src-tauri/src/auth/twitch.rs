@@ -89,11 +89,14 @@ pub async fn login(client: &reqwest::Client) -> Result<TwitchIdentity> {
 
     let identity = validate(client, &token).await?;
     tokens::save(KEYRING_TOKEN, &token).context("saving twitch token")?;
+    // Propagate identity-save failure: if this is silently dropped, login
+    // "succeeds" but the next launch has no identity, so `stored_auth_pair`
+    // returns None and chat silently connects as an anonymous justinfan user.
     tokens::save(
         "twitch_identity",
-        &serde_json::to_string(&identity).unwrap_or_default(),
+        &serde_json::to_string(&identity).context("serialising twitch identity")?,
     )
-    .ok();
+    .context("saving twitch identity")?;
     Ok(identity)
 }
 

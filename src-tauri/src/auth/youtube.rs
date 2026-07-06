@@ -101,7 +101,12 @@ pub fn load() -> Result<Option<YouTubeCookies>> {
 }
 
 pub fn clear() -> Result<()> {
-    tokens::clear(KEYRING_ENTRY).ok();
+    // Propagate cookie-entry failure: if the keyring clear fails, logout
+    // silently "succeeds" while the cookies survive to the next launch.
+    // Mirrors the asymmetric pattern in twitch/kick logout — primary entry
+    // propagated, derived entry best-effort (stale user-info is harmless
+    // without cookies and self-corrects on the next login).
+    tokens::clear(KEYRING_ENTRY)?;
     tokens::clear(USER_INFO_ENTRY).ok();
     if let Ok(path) = cookies_path() {
         if path.exists() {
