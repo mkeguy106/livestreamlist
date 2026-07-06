@@ -257,10 +257,9 @@ pub fn load() -> Result<Option<ChaturbateAuth>> {
     if !path.exists() {
         return Ok(None);
     }
-    let bytes = std::fs::read(&path)
-        .with_context(|| format!("reading {}", path.display()))?;
-    let stamp: ChaturbateAuth = serde_json::from_slice(&bytes)
-        .context("parsing Chaturbate stamp file")?;
+    let bytes = std::fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
+    let stamp: ChaturbateAuth =
+        serde_json::from_slice(&bytes).context("parsing Chaturbate stamp file")?;
     Ok(Some(stamp))
 }
 
@@ -421,7 +420,10 @@ pub async fn login_via_webview(app: AppHandle) -> Result<ChaturbateAuth> {
     // listeners, which is fine — both invocations' atomics get flipped.
     let closed_for_event = closed.clone();
     window.on_window_event(move |event| {
-        if matches!(event, WindowEvent::Destroyed | WindowEvent::CloseRequested { .. }) {
+        if matches!(
+            event,
+            WindowEvent::Destroyed | WindowEvent::CloseRequested { .. }
+        ) {
             closed_for_event.store(true, Ordering::Relaxed);
         }
     });
@@ -434,9 +436,7 @@ pub async fn login_via_webview(app: AppHandle) -> Result<ChaturbateAuth> {
         // webview the WebKit-side handler may never reply, blocking the
         // whole poll loop indefinitely — which is exactly what made the
         // JS busy state stick on user-cancel before this fix.
-        if closed.load(Ordering::Relaxed)
-            || app.get_webview_window(LOGIN_WINDOW_LABEL).is_none()
-        {
+        if closed.load(Ordering::Relaxed) || app.get_webview_window(LOGIN_WINDOW_LABEL).is_none() {
             // Window closed. Two reasons we might still want to return Ok:
             // a concurrent invocation already wrote a fresher stamp, or
             // the user signed in via another tab/path that bumped the
@@ -512,9 +512,7 @@ pub async fn login_via_webview(app: AppHandle) -> Result<ChaturbateAuth> {
 
         // Re-check close after the (possibly slow) cookies_for_url call,
         // so we bail this iteration instead of waiting another POLL tick.
-        if closed.load(Ordering::Relaxed)
-            || app.get_webview_window(LOGIN_WINDOW_LABEL).is_none()
-        {
+        if closed.load(Ordering::Relaxed) || app.get_webview_window(LOGIN_WINDOW_LABEL).is_none() {
             if let Ok(Some(stamp)) = load() {
                 if Some(stamp.logged_in_at) != initial_logged_in_at {
                     return Ok(stamp);
@@ -541,7 +539,9 @@ mod tests {
     fn round_trip_serialises_rfc3339() {
         let stamp = ChaturbateAuth {
             logged_in_at: chrono::Utc.with_ymd_and_hms(2026, 4, 25, 10, 0, 0).unwrap(),
-            last_verified_at: chrono::Utc.with_ymd_and_hms(2026, 4, 25, 11, 30, 0).unwrap(),
+            last_verified_at: chrono::Utc
+                .with_ymd_and_hms(2026, 4, 25, 11, 30, 0)
+                .unwrap(),
             username: None,
         };
         let json = serde_json::to_string(&stamp).unwrap();

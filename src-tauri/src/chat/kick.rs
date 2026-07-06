@@ -26,7 +26,10 @@ use super::badges::classify_mod_kick;
 use super::emotes::EmoteCache;
 use super::links::scan_links;
 use super::log_store::ChatLogWriter;
-use super::models::{ChatBadge, ChatMessage, ChatRoomState, ChatRoomStateEvent, ChatStatus, ChatStatusEvent, ChatUser, EmoteRange, ReplyInfo};
+use super::models::{
+    ChatBadge, ChatMessage, ChatRoomState, ChatRoomStateEvent, ChatStatus, ChatStatusEvent,
+    ChatUser, EmoteRange, ReplyInfo,
+};
 use super::reconnect::{Backoff, CLEAN_RECONNECT_DELAY};
 use super::OutboundMsg;
 use crate::auth;
@@ -274,9 +277,11 @@ async fn handle_pusher_line(
 fn extract_kick_reply(payload: &serde_json::Value) -> Option<ReplyInfo> {
     let original = payload.pointer("/metadata/original_message")?;
     // id is sometimes a string, sometimes a number — accept both.
-    let parent_id = original
-        .get("id")
-        .and_then(|v| v.as_str().map(|s| s.to_string()).or_else(|| v.as_u64().map(|n| n.to_string())))?;
+    let parent_id = original.get("id").and_then(|v| {
+        v.as_str()
+            .map(|s| s.to_string())
+            .or_else(|| v.as_u64().map(|n| n.to_string()))
+    })?;
     let parent_text = original
         .get("content")
         .and_then(|v| v.as_str())

@@ -133,7 +133,11 @@ fn add_channel_from_input(input: String, state: State<'_, AppState>) -> Result<C
         auto_play: false,
         added_at: Some(Utc::now()),
     };
-    state.store.lock().add(channel.clone()).map_err(err_string)?;
+    state
+        .store
+        .lock()
+        .add(channel.clone())
+        .map_err(err_string)?;
     channels::persist(&state.store).map_err(err_string)?;
     Ok(channel)
 }
@@ -471,7 +475,10 @@ async fn import_chaturbate_follows(
         };
 
         let usernames = embed::parse_cb_follows(&payload).map_err(err_string)?;
-        log::info!("Chaturbate import: scraped {} followed model(s)", usernames.len());
+        log::info!(
+            "Chaturbate import: scraped {} followed model(s)",
+            usernames.len()
+        );
         let channels = usernames
             .into_iter()
             .map(|name| Channel {
@@ -499,9 +506,7 @@ async fn import_chaturbate_follows(
 
 #[cfg(any(feature = "smoke", test))]
 #[tauri::command]
-async fn import_chaturbate_follows(
-    _state: State<'_, AppState>,
-) -> Result<ImportResult, String> {
+async fn import_chaturbate_follows(_state: State<'_, AppState>) -> Result<ImportResult, String> {
     Err("smoke/test mode: Chaturbate import unavailable".into())
 }
 
@@ -614,7 +619,10 @@ fn chat_open_in_browser<R: tauri::Runtime>(
 }
 
 #[tauri::command]
-async fn chat_detach<R: tauri::Runtime>(app: tauri::AppHandle<R>, unique_key: String) -> Result<(), String> {
+async fn chat_detach<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    unique_key: String,
+) -> Result<(), String> {
     use tauri::WebviewUrl;
 
     let label = format!("chat-detach-{}", slugify(&unique_key));
@@ -640,7 +648,7 @@ async fn chat_detach<R: tauri::Runtime>(app: tauri::AppHandle<R>, unique_key: St
         .min_inner_size(320.0, 480.0)
         .decorations(false)
         .resizable(true)
-        .visible(false)              // dark-first-paint discipline (PR #70 lesson)
+        .visible(false) // dark-first-paint discipline (PR #70 lesson)
         .background_color(tauri::webview::Color(0x09, 0x09, 0x0b, 0xff));
 
     // No transient_for(&main) — the detached chat is a peer top-level window,
@@ -667,7 +675,10 @@ async fn chat_detach<R: tauri::Runtime>(app: tauri::AppHandle<R>, unique_key: St
 }
 
 #[tauri::command]
-async fn chat_reattach<R: tauri::Runtime>(app: tauri::AppHandle<R>, unique_key: String) -> Result<(), String> {
+async fn chat_reattach<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    unique_key: String,
+) -> Result<(), String> {
     // Emit redock first so main has the channel back in tabKeys before the
     // window's :closed event fires (the :closed handler is idempotent and
     // tolerates either ordering).
@@ -681,7 +692,10 @@ async fn chat_reattach<R: tauri::Runtime>(app: tauri::AppHandle<R>, unique_key: 
 }
 
 #[tauri::command]
-async fn chat_focus_detached<R: tauri::Runtime>(app: tauri::AppHandle<R>, unique_key: String) -> Result<(), String> {
+async fn chat_focus_detached<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    unique_key: String,
+) -> Result<(), String> {
     let label = format!("chat-detach-{}", slugify(&unique_key));
     if let Some(window) = app.get_webview_window(&label) {
         let _ = window.show();
@@ -757,7 +771,9 @@ mod chat_detach_tests {
         let label = format!("chat-detach-{slug}");
         assert_eq!(label, "chat-detach-twitch-shroud");
         // Tauri labels must match ^[a-zA-Z0-9 _-]+$ — verify our slug does.
-        assert!(label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == ' '));
+        assert!(label
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == ' '));
     }
 
     #[test]
@@ -960,7 +976,10 @@ fn broadcast_auth_changed<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
 /// keyring on success, and emits `auth:changed` so the login chiclet
 /// dropdown updates without the user re-opening it. Fire-and-forget;
 /// every failure path logs and swallows.
-fn spawn_youtube_user_info_refresh<R: tauri::Runtime>(app: &tauri::AppHandle<R>, http: reqwest::Client) {
+fn spawn_youtube_user_info_refresh<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    http: reqwest::Client,
+) {
     let app_for_task = app.clone();
     tauri::async_runtime::spawn(async move {
         match auth::youtube::fetch_user_info(&http).await {
@@ -1464,7 +1483,10 @@ async fn twitch_anniversary_check<R: tauri::Runtime>(
     // Setting check
     let enabled = state.settings.read().chat.show_sub_anniversary_banner;
     if !enabled {
-        return Ok(CheckResult { info: None, cookie_status: CookieStatus::Ok });
+        return Ok(CheckResult {
+            info: None,
+            cookie_status: CookieStatus::Ok,
+        });
     }
 
     // Resolve channel — may have :video_id suffix from YT multi-stream;
@@ -1479,11 +1501,17 @@ async fn twitch_anniversary_check<R: tauri::Runtime>(
         .cloned();
 
     let Some(channel) = channel else {
-        return Ok(CheckResult { info: None, cookie_status: CookieStatus::Ok });
+        return Ok(CheckResult {
+            info: None,
+            cookie_status: CookieStatus::Ok,
+        });
     };
 
     if channel.platform != Platform::Twitch {
-        return Ok(CheckResult { info: None, cookie_status: CookieStatus::Ok });
+        return Ok(CheckResult {
+            info: None,
+            cookie_status: CookieStatus::Ok,
+        });
     }
 
     let mut result = platforms::twitch_anniversary::check(
@@ -1517,7 +1545,9 @@ fn twitch_anniversary_dismiss(
 ) -> Result<(), String> {
     {
         let mut s = state.settings.write();
-        s.chat.dismissed_sub_anniversaries.insert(unique_key, renews_at);
+        s.chat
+            .dismissed_sub_anniversaries
+            .insert(unique_key, renews_at);
     }
     let snapshot = state.settings.read().clone();
     settings::save(&snapshot).map_err(err_string)?;
@@ -1669,7 +1699,10 @@ fn youtube_login_paste<R: tauri::Runtime>(
 }
 
 #[tauri::command]
-fn youtube_logout<R: tauri::Runtime>(app: tauri::AppHandle<R>, state: State<'_, AppState>) -> Result<(), String> {
+fn youtube_logout<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
     auth::youtube::clear().map_err(err_string)?;
     clear_youtube_browser_pref(&state);
     broadcast_auth_changed(&app);
@@ -1688,9 +1721,7 @@ async fn chaturbate_login(app: tauri::AppHandle) -> Result<bool, String> {
 
 #[cfg(feature = "smoke")]
 #[tauri::command]
-async fn chaturbate_login<R: tauri::Runtime>(
-    _app: tauri::AppHandle<R>,
-) -> Result<bool, String> {
+async fn chaturbate_login<R: tauri::Runtime>(_app: tauri::AppHandle<R>) -> Result<bool, String> {
     Err("smoke mode: command in DENYLIST".into())
 }
 
@@ -2072,8 +2103,7 @@ pub fn run() {
                                 identity.login
                             );
                             use tauri::Emitter;
-                            let _ = app_handle
-                                .emit("twitch:web_status_changed", Some(identity));
+                            let _ = app_handle.emit("twitch:web_status_changed", Some(identity));
                             broadcast_auth_changed(&app_handle);
                         }
                         Err(e) => {

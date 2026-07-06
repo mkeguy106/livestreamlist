@@ -41,7 +41,9 @@ pub fn tokenize(text: &str, channel_emotes: &[String]) -> Vec<TokenRange> {
         while i < bytes.len() && bytes[i].is_ascii_whitespace() {
             i += 1;
         }
-        if i >= bytes.len() { break; }
+        if i >= bytes.len() {
+            break;
+        }
 
         let token_start = i;
         // A token runs until whitespace. We then trim outer punctuation
@@ -63,7 +65,9 @@ pub fn tokenize(text: &str, channel_emotes: &[String]) -> Vec<TokenRange> {
         let trimmed = raw
             .trim_start_matches(trim_chars)
             .trim_end_matches(|c: char| trim_chars.contains(&c) || c == '.');
-        if trimmed.is_empty() { continue; }
+        if trimmed.is_empty() {
+            continue;
+        }
         let inner_start_offset = raw.find(trimmed).unwrap_or(0);
         let start = token_start + inner_start_offset;
         let end = start + trimmed.len();
@@ -114,7 +118,9 @@ fn is_url(token: &str) -> bool {
         let after_tld = after_dot.split('/').next().unwrap_or(after_dot);
         let tld_ok = after_tld.len() >= 2 && after_tld.chars().all(|c| c.is_ascii_alphabetic());
         let before_ok = !before.is_empty()
-            && before.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.');
+            && before
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.');
         if tld_ok && before_ok {
             return true;
         }
@@ -134,7 +140,9 @@ fn is_colon_emote(token: &str) -> bool {
 fn is_all_caps_shorthand(token: &str) -> bool {
     // Byte-len is sufficient: any non-ASCII char would also fail the
     // is_ascii_uppercase test below, so the function returns false either way.
-    if token.len() < 3 { return false; }
+    if token.len() < 3 {
+        return false;
+    }
     token.chars().all(|c| c.is_ascii_uppercase())
 }
 
@@ -149,7 +157,9 @@ mod tests {
             .map(|t| (t.class, leak_str(t.text)))
             .collect()
     }
-    fn leak_str(s: String) -> &'static str { Box::leak(s.into_boxed_str()) }
+    fn leak_str(s: String) -> &'static str {
+        Box::leak(s.into_boxed_str())
+    }
 
     #[test]
     fn plain_words() {
@@ -177,9 +187,13 @@ mod tests {
     fn urls_are_skipped() {
         // Both schemed and bare URLs.
         let r = classes("watch https://twitch.tv/shroud now", &[]);
-        assert!(r.iter().any(|(c, t)| *c == TokenClass::Url && *t == "https://twitch.tv/shroud"));
+        assert!(r
+            .iter()
+            .any(|(c, t)| *c == TokenClass::Url && *t == "https://twitch.tv/shroud"));
         let r = classes("twitch.tv/shroud is live", &[]);
-        assert!(r.iter().any(|(c, t)| *c == TokenClass::Url && *t == "twitch.tv/shroud"));
+        assert!(r
+            .iter()
+            .any(|(c, t)| *c == TokenClass::Url && *t == "twitch.tv/shroud"));
     }
 
     #[test]
@@ -192,14 +206,20 @@ mod tests {
     #[test]
     fn colon_form_emote() {
         let r = classes("hello :Kappa: world", &[]);
-        assert!(r.iter().any(|(c, t)| *c == TokenClass::Emote && *t == ":Kappa:"));
+        assert!(r
+            .iter()
+            .any(|(c, t)| *c == TokenClass::Emote && *t == ":Kappa:"));
     }
 
     #[test]
     fn all_caps_shorthand() {
         let r = classes("LOL that was great LMAO", &[]);
-        assert!(r.iter().any(|(c, t)| *c == TokenClass::AllCaps && *t == "LOL"));
-        assert!(r.iter().any(|(c, t)| *c == TokenClass::AllCaps && *t == "LMAO"));
+        assert!(r
+            .iter()
+            .any(|(c, t)| *c == TokenClass::AllCaps && *t == "LOL"));
+        assert!(r
+            .iter()
+            .any(|(c, t)| *c == TokenClass::AllCaps && *t == "LMAO"));
     }
 
     #[test]
@@ -238,7 +258,11 @@ mod tests {
         // Trailing/leading punctuation must be stripped; the word inside
         // is what's tokenized.
         let r = classes("(hello), 'world'!", &[]);
-        let words: Vec<&str> = r.iter().filter(|(c, _)| *c == TokenClass::Word).map(|(_, t)| *t).collect();
+        let words: Vec<&str> = r
+            .iter()
+            .filter(|(c, _)| *c == TokenClass::Word)
+            .map(|(_, t)| *t)
+            .collect();
         assert_eq!(words, vec!["hello", "world"]);
     }
 
@@ -248,7 +272,11 @@ mod tests {
         // `.` was excluded from the trim set, blocking the quote from being
         // stripped from the right.
         let r = classes("\"my front meat\".", &[]);
-        let words: Vec<&str> = r.iter().filter(|(c, _)| *c == TokenClass::Word).map(|(_, t)| *t).collect();
+        let words: Vec<&str> = r
+            .iter()
+            .filter(|(c, _)| *c == TokenClass::Word)
+            .map(|(_, t)| *t)
+            .collect();
         assert_eq!(words, vec!["my", "front", "meat"]);
     }
 
@@ -256,7 +284,11 @@ mod tests {
     fn trailing_period_stripped_from_plain_words() {
         // Sentence-ending period must not be part of the tokenized word.
         let r = classes("hello world.", &[]);
-        let words: Vec<&str> = r.iter().filter(|(c, _)| *c == TokenClass::Word).map(|(_, t)| *t).collect();
+        let words: Vec<&str> = r
+            .iter()
+            .filter(|(c, _)| *c == TokenClass::Word)
+            .map(|(_, t)| *t)
+            .collect();
         assert_eq!(words, vec!["hello", "world"]);
     }
 
@@ -265,7 +297,9 @@ mod tests {
         // A URL at the end of a sentence must still be classified as a URL
         // after the trailing period is stripped.
         let r = classes("watch twitch.tv/shroud.", &[]);
-        assert!(r.iter().any(|(c, t)| *c == TokenClass::Url && *t == "twitch.tv/shroud"));
+        assert!(r
+            .iter()
+            .any(|(c, t)| *c == TokenClass::Url && *t == "twitch.tv/shroud"));
     }
 
     #[test]

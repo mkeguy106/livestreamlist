@@ -88,9 +88,7 @@ fn monitor_to_rect(m: &tauri::Monitor) -> Rect {
 }
 
 fn current_window_rect(window: &tauri::WebviewWindow) -> Result<Rect> {
-    let pos: PhysicalPosition<i32> = window
-        .outer_position()
-        .context("reading outer_position")?;
+    let pos: PhysicalPosition<i32> = window.outer_position().context("reading outer_position")?;
     let size: PhysicalSize<u32> = window.outer_size().context("reading outer_size")?;
     Ok(Rect {
         x: pos.x,
@@ -315,7 +313,12 @@ mod tests {
 
     #[test]
     fn fully_inside_single_monitor_is_reachable() {
-        let win = Rect { x: 100, y: 100, w: 1280, h: 800 };
+        let win = Rect {
+            x: 100,
+            y: 100,
+            w: 1280,
+            h: 800,
+        };
         let monitors = vec![mon(0, 0, 1920, 1080)];
         assert!(is_titlebar_reachable(win, &monitors));
     }
@@ -323,32 +326,49 @@ mod tests {
     #[test]
     fn partly_off_right_edge_is_reachable() {
         // titlebar straddles right edge of single monitor
-        let win = Rect { x: 1800, y: 100, w: 1280, h: 800 };
+        let win = Rect {
+            x: 1800,
+            y: 100,
+            w: 1280,
+            h: 800,
+        };
         let monitors = vec![mon(0, 0, 1920, 1080)];
         assert!(is_titlebar_reachable(win, &monitors));
     }
 
     #[test]
     fn entirely_above_top_is_unreachable() {
-        let win = Rect { x: 100, y: -200, w: 1280, h: 800 };
+        let win = Rect {
+            x: 100,
+            y: -200,
+            w: 1280,
+            h: 800,
+        };
         let monitors = vec![mon(0, 0, 1920, 1080)];
         assert!(!is_titlebar_reachable(win, &monitors));
     }
 
     #[test]
     fn straddling_dual_monitor_seam_is_reachable() {
-        let win = Rect { x: 1800, y: 100, w: 1280, h: 800 };
-        let monitors = vec![
-            mon(0, 0, 1920, 1080),
-            mon(1920, 0, 1920, 1080),
-        ];
+        let win = Rect {
+            x: 1800,
+            y: 100,
+            w: 1280,
+            h: 800,
+        };
+        let monitors = vec![mon(0, 0, 1920, 1080), mon(1920, 0, 1920, 1080)];
         assert!(is_titlebar_reachable(win, &monitors));
     }
 
     #[test]
     fn unplugged_secondary_monitor_leaves_window_unreachable() {
         // Window was on the second monitor; only first monitor remains.
-        let win = Rect { x: 2400, y: 100, w: 1280, h: 800 };
+        let win = Rect {
+            x: 2400,
+            y: 100,
+            w: 1280,
+            h: 800,
+        };
         let monitors = vec![mon(0, 0, 1920, 1080)];
         assert!(!is_titlebar_reachable(win, &monitors));
     }
@@ -356,17 +376,24 @@ mod tests {
     #[test]
     fn vertical_dual_monitor_layout_below_seam_is_reachable() {
         // Primary on top (1920x1080), secondary stacked below.
-        let win = Rect { x: 100, y: 1100, w: 1280, h: 800 };
-        let monitors = vec![
-            mon(0, 0, 1920, 1080),
-            mon(0, 1080, 1920, 1080),
-        ];
+        let win = Rect {
+            x: 100,
+            y: 1100,
+            w: 1280,
+            h: 800,
+        };
+        let monitors = vec![mon(0, 0, 1920, 1080), mon(0, 1080, 1920, 1080)];
         assert!(is_titlebar_reachable(win, &monitors));
     }
 
     #[test]
     fn empty_monitor_list_is_unreachable() {
-        let win = Rect { x: 0, y: 0, w: 1280, h: 800 };
+        let win = Rect {
+            x: 0,
+            y: 0,
+            w: 1280,
+            h: 800,
+        };
         assert!(!is_titlebar_reachable(win, &[]));
     }
 

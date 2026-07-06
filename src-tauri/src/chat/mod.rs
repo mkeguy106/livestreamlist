@@ -41,7 +41,11 @@ pub struct OutboundReply {
 /// reply target, and a oneshot for the platform task to report success/failure
 /// back to the IPC caller. Keeps the composer's error row honest — a silent
 /// REST 4xx on the Kick side no longer looks like a successful send.
-pub type OutboundMsg = (String, Option<OutboundReply>, oneshot::Sender<Result<(), String>>);
+pub type OutboundMsg = (
+    String,
+    Option<OutboundReply>,
+    oneshot::Sender<Result<(), String>>,
+);
 
 pub struct ChatManager {
     app: AppHandle,
@@ -214,9 +218,14 @@ impl ChatManager {
                 let task = async_runtime::spawn(async move {
                     twitch::run(cfg).await;
                 });
-                self.connections
-                    .lock()
-                    .insert(unique_key, ConnectionHandle { task, outbound: tx, aux });
+                self.connections.lock().insert(
+                    unique_key,
+                    ConnectionHandle {
+                        task,
+                        outbound: tx,
+                        aux,
+                    },
+                );
             }
             Platform::Kick => {
                 let (tx, rx) = mpsc::unbounded_channel::<OutboundMsg>();

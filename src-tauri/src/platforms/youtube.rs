@@ -137,9 +137,7 @@ pub async fn fetch_live(
             fetch_primary_via_ytdlp(channel_id, cookies_browser).await?
         }
         Err(e) => {
-            log::warn!(
-                "YT /live scrape failed for {channel_id}: {e:#}; falling back to yt-dlp"
-            );
+            log::warn!("YT /live scrape failed for {channel_id}: {e:#}; falling back to yt-dlp");
             fetch_primary_via_ytdlp(channel_id, cookies_browser).await?
         }
     };
@@ -252,10 +250,7 @@ async fn fetch_primary_via_scrape(
     }
     let resp = req.send().await.with_context(|| format!("GET {url}"))?;
     if !resp.status().is_success() {
-        log::debug!(
-            "YT /live scrape: {channel_id}: HTTP {}",
-            resp.status()
-        );
+        log::debug!("YT /live scrape: {channel_id}: HTTP {}", resp.status());
         return Ok(None);
     }
     let html = resp.text().await.context("reading /live body")?;
@@ -426,8 +421,10 @@ fn extract_initial_data(html: &str, var_name: &str) -> Option<Value> {
     let start_marker_var = format!("var {var_name} = ");
     let start_marker_window = format!("window[\"{var_name}\"] = ");
     let candidates = [
-        html.find(&start_marker_var).map(|i| i + start_marker_var.len()),
-        html.find(&start_marker_window).map(|i| i + start_marker_window.len()),
+        html.find(&start_marker_var)
+            .map(|i| i + start_marker_var.len()),
+        html.find(&start_marker_window)
+            .map(|i| i + start_marker_window.len()),
     ];
     let json_start = candidates.iter().filter_map(|x| *x).next()?;
     let bytes = html[json_start..].as_bytes();
@@ -535,7 +532,9 @@ fn parse_streams_page(initial_data: &Value) -> Vec<String> {
 
     for tab in tabs {
         let contents = tab.pointer("/tabRenderer/content/richGridRenderer/contents");
-        let Some(contents) = contents.and_then(|v| v.as_array()) else { continue };
+        let Some(contents) = contents.and_then(|v| v.as_array()) else {
+            continue;
+        };
         for item in contents {
             let renderer = item.pointer("/richItemRenderer/content/videoRenderer");
             let Some(renderer) = renderer else { continue };

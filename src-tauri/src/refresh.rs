@@ -278,9 +278,12 @@ pub async fn refresh_one(
             if youtube::is_rate_limited() {
                 return Err(anyhow!("YouTube rate-limit cooldown active"));
             }
-            let live =
-                youtube::fetch_live(&channel.channel_id, youtube_cookies_browser.as_deref(), &client)
-                    .await?;
+            let live = youtube::fetch_live(
+                &channel.channel_id,
+                youtube_cookies_browser.as_deref(),
+                &client,
+            )
+            .await?;
 
             let yt_name = Some(live.display_name.as_str()).filter(|s| !s.is_empty());
             if let Some(name) = yt_name {
@@ -386,9 +389,9 @@ async fn fetch_chaturbate_all(
                     errored: HashSet::new(),
                 };
             }
-            Err(e) => log::warn!(
-                "Chaturbate bulk refresh failed ({e:#}); falling back to per-channel"
-            ),
+            Err(e) => {
+                log::warn!("Chaturbate bulk refresh failed ({e:#}); falling back to per-channel")
+            }
         }
     }
 
@@ -447,7 +450,10 @@ async fn fetch_youtube_all(
         let futs: Vec<_> = chunk
             .iter()
             .map(|id| async move {
-                (id.clone(), youtube::fetch_live(id, cookies_browser, http).await)
+                (
+                    id.clone(),
+                    youtube::fetch_live(id, cookies_browser, http).await,
+                )
             })
             .collect();
         let results = join_all(futs).await;

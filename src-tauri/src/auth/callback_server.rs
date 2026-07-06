@@ -41,7 +41,7 @@ pub fn redirect_uri(port: u16) -> String {
 #[derive(Debug, Clone)]
 pub enum CallbackResult {
     /// Implicit flow — token in URL fragment, sent to /token via JS POST.
-Token {
+    Token {
         access_token: String,
         /// CSRF `state` echoed back by the provider in the fragment. The
         /// caller compares it against the value it generated.

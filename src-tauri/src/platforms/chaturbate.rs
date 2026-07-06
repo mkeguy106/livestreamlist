@@ -100,10 +100,15 @@ pub async fn fetch_followed_online(
             .and_then(|v| v.as_array())
             .cloned()
             .unwrap_or_default();
-        let total = data.get("total_count").and_then(|v| v.as_i64()).unwrap_or(0);
+        let total = data
+            .get("total_count")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
 
         if first_page && bulk_looks_anonymous(&rooms, total) {
-            anyhow::bail!("Chaturbate roomlist returned the anonymous public list — session invalid");
+            anyhow::bail!(
+                "Chaturbate roomlist returned the anonymous public list — session invalid"
+            );
         }
         first_page = false;
 
@@ -166,10 +171,7 @@ fn parse_bulk_room(row: &Value) -> Option<ChaturbateLive> {
         .or_else(|| row.get("subject"))
         .and_then(|v| v.as_str())
         .map(String::from);
-    let thumbnail_url = row
-        .get("img")
-        .and_then(|v| v.as_str())
-        .map(String::from);
+    let thumbnail_url = row.get("img").and_then(|v| v.as_str()).map(String::from);
     Some(ChaturbateLive {
         username: username.clone(),
         display_name: username,
@@ -247,7 +249,10 @@ mod tests {
             "room_title": "GOAL: squirt [120 tokens remaining] #teen"
         });
         let live = parse(&root, "modelx");
-        assert_eq!(live.title.as_deref(), Some("GOAL: squirt [120 tokens remaining] #teen"));
+        assert_eq!(
+            live.title.as_deref(),
+            Some("GOAL: squirt [120 tokens remaining] #teen")
+        );
         assert_eq!(live.viewers, Some(42));
         assert_eq!(live.room_status, "public");
     }

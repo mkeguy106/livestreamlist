@@ -20,7 +20,9 @@ struct PersonalDictFile {
     words: Vec<String>,
 }
 
-fn default_version() -> u32 { SCHEMA_VERSION }
+fn default_version() -> u32 {
+    SCHEMA_VERSION
+}
 
 #[derive(Debug, Clone, Default)]
 pub struct PersonalDict {
@@ -62,9 +64,13 @@ impl PersonalDict {
     }
 
     #[cfg(test)]
-    pub fn len(&self) -> usize { self.set.len() }
+    pub fn len(&self) -> usize {
+        self.set.len()
+    }
     #[cfg(test)]
-    pub fn is_empty(&self) -> bool { self.set.is_empty() }
+    pub fn is_empty(&self) -> bool {
+        self.set.is_empty()
+    }
 
     fn save(&self) -> Result<()> {
         let mut words: Vec<String> = self.set.iter().cloned().collect();
@@ -73,8 +79,7 @@ impl PersonalDict {
             version: SCHEMA_VERSION,
             words,
         };
-        let json = serde_json::to_string_pretty(&file)
-            .context("serializing personal dict")?;
+        let json = serde_json::to_string_pretty(&file).context("serializing personal dict")?;
         if let Some(parent) = self.path.parent() {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("creating dir {:?}", parent))?;
@@ -138,10 +143,7 @@ mod tests {
     fn load_existing_file() {
         let td = TempDir::new().unwrap();
         let p = tmp(&td);
-        std::fs::write(
-            &p,
-            r#"{"version":1,"words":["alpha","BETA","Gamma"]}"#,
-        ).unwrap();
+        std::fs::write(&p, r#"{"version":1,"words":["alpha","BETA","Gamma"]}"#).unwrap();
         let d = PersonalDict::load(p);
         assert_eq!(d.len(), 3);
         assert!(d.contains("alpha"));
@@ -163,6 +165,9 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(20));
         d.add("hello").unwrap();
         let mtime2 = std::fs::metadata(&p).unwrap().modified().unwrap();
-        assert_eq!(mtime1, mtime2, "second add should not have rewritten the file");
+        assert_eq!(
+            mtime1, mtime2,
+            "second add should not have rewritten the file"
+        );
     }
 }

@@ -74,7 +74,10 @@ fn main() {
         .collect();
 
     if positional.len() != 0 && positional.len() != 2 {
-        eprintln!("expected 0 (JSONL stream) or 2 (single-shot) positional args; got {}", positional.len());
+        eprintln!(
+            "expected 0 (JSONL stream) or 2 (single-shot) positional args; got {}",
+            positional.len()
+        );
         eprintln!("run with --help for usage.");
         std::process::exit(2);
     }
@@ -125,7 +128,11 @@ fn main() {
 
     let envelope = dispatch_one(&webview, positional[0], positional[1], allow_side_effects);
     println!("{}", serde_json::to_string(&envelope).unwrap());
-    std::process::exit(if envelope["ok"].as_bool().unwrap_or(false) { 0 } else { 1 });
+    std::process::exit(if envelope["ok"].as_bool().unwrap_or(false) {
+        0
+    } else {
+        1
+    });
 }
 
 /// Run one command and return its envelope as a serde_json::Value.
@@ -221,7 +228,8 @@ fn dispatch_one(
             "duration_ms": duration_ms,
         }),
         Err(err_value) => {
-            let msg = err_value.as_str()
+            let msg = err_value
+                .as_str()
                 .map(String::from)
                 .unwrap_or_else(|| err_value.to_string());
             // Tauri's argument-deserialization errors are stably formatted as
@@ -322,26 +330,67 @@ fn panic_message(panic: &Box<dyn std::any::Any + Send>) -> String {
 /// to runtime introspection.
 fn list_handlers() -> Vec<String> {
     [
-        "list_livestreams", "list_channels", "add_channel_from_input",
-        "clipboard_channel_url", "remove_channel", "set_favorite",
-        "refresh_all", "refresh_channel", "launch_stream", "stop_stream", "list_playing",
-        "open_in_browser", "open_url", "list_socials",
-        "chat_connect", "chat_disconnect", "chat_send", "chat_open_in_browser",
-        "chat_detach", "chat_reattach", "chat_focus_detached",
-        "embed_mount", "embed_bounds", "embed_unmount", "embed_set_visible",
-        "login_popup_open", "login_popup_close", "login_popup_resize",
-        "list_emotes", "replay_chat_history",
-        "get_settings", "update_settings",
-        "get_user_metadata", "set_user_metadata", "get_user_profile",
-        "get_user_messages", "list_blocked_users",
+        "list_livestreams",
+        "list_channels",
+        "add_channel_from_input",
+        "clipboard_channel_url",
+        "remove_channel",
+        "set_favorite",
+        "refresh_all",
+        "refresh_channel",
+        "launch_stream",
+        "stop_stream",
+        "list_playing",
+        "open_in_browser",
+        "open_url",
+        "list_socials",
+        "chat_connect",
+        "chat_disconnect",
+        "chat_send",
+        "chat_open_in_browser",
+        "chat_detach",
+        "chat_reattach",
+        "chat_focus_detached",
+        "embed_mount",
+        "embed_bounds",
+        "embed_unmount",
+        "embed_set_visible",
+        "login_popup_open",
+        "login_popup_close",
+        "login_popup_resize",
+        "list_emotes",
+        "replay_chat_history",
+        "get_settings",
+        "update_settings",
+        "get_user_metadata",
+        "set_user_metadata",
+        "get_user_profile",
+        "get_user_messages",
+        "list_blocked_users",
         "auth_status",
-        "twitch_login", "twitch_logout", "twitch_web_login", "twitch_web_clear",
-        "twitch_anniversary_check", "twitch_anniversary_dismiss",
-        "twitch_share_resub_open", "twitch_share_window_close",
-        "kick_login", "kick_logout",
-        "youtube_login", "youtube_login_paste", "youtube_logout", "youtube_detect_browsers",
-        "chaturbate_login", "chaturbate_logout",
+        "twitch_login",
+        "twitch_logout",
+        "twitch_web_login",
+        "twitch_web_clear",
+        "twitch_anniversary_check",
+        "twitch_anniversary_dismiss",
+        "twitch_share_resub_open",
+        "twitch_share_window_close",
+        "kick_login",
+        "kick_logout",
+        "youtube_login",
+        "youtube_login_paste",
+        "youtube_logout",
+        "youtube_detect_browsers",
+        "chaturbate_login",
+        "chaturbate_logout",
         "import_twitch_follows",
-        "spellcheck_check", "spellcheck_suggest", "spellcheck_add_word", "spellcheck_list_dicts",
-    ].iter().map(|s| s.to_string()).collect()
+        "spellcheck_check",
+        "spellcheck_suggest",
+        "spellcheck_add_word",
+        "spellcheck_list_dicts",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect()
 }

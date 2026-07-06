@@ -192,7 +192,10 @@ pub async fn fetch_user_info(http: &reqwest::Client) -> Result<Option<YouTubeUse
         return Ok(None);
     }
 
-    let html = resp.text().await.context("reading youtube.com/account body")?;
+    let html = resp
+        .text()
+        .await
+        .context("reading youtube.com/account body")?;
     let parsed = parse_handle_from_html(&html);
     if parsed.is_none() {
         log::warn!(
@@ -265,38 +268,62 @@ fn browser_table() -> Vec<(&'static str, &'static str, Vec<PathBuf>)> {
     };
 
     vec![
-        ("chrome",   "Google Chrome",
-            chromium_paths("google-chrome").into_iter()
+        (
+            "chrome",
+            "Google Chrome",
+            chromium_paths("google-chrome")
+                .into_iter()
                 .chain([config.join("Google/Chrome"), local.join("Google/Chrome")])
-                .collect()),
-        ("brave",    "Brave",
-            chromium_paths("BraveSoftware/Brave-Browser")),
-        ("chromium", "Chromium",
-            chromium_paths("chromium")),
-        ("edge",     "Microsoft Edge",
-            chromium_paths("microsoft-edge").into_iter()
+                .collect(),
+        ),
+        (
+            "brave",
+            "Brave",
+            chromium_paths("BraveSoftware/Brave-Browser"),
+        ),
+        ("chromium", "Chromium", chromium_paths("chromium")),
+        (
+            "edge",
+            "Microsoft Edge",
+            chromium_paths("microsoft-edge")
+                .into_iter()
                 .chain([config.join("Microsoft/Edge"), local.join("Microsoft/Edge")])
-                .collect()),
-        ("opera",    "Opera",
-            chromium_paths("opera").into_iter()
+                .collect(),
+        ),
+        (
+            "opera",
+            "Opera",
+            chromium_paths("opera")
+                .into_iter()
                 .chain([config.join("Opera Software/Opera Stable")])
-                .collect()),
-        ("vivaldi",  "Vivaldi",
-            chromium_paths("vivaldi").into_iter()
+                .collect(),
+        ),
+        (
+            "vivaldi",
+            "Vivaldi",
+            chromium_paths("vivaldi")
+                .into_iter()
                 .chain([config.join("Vivaldi")])
-                .collect()),
-        ("firefox",  "Firefox",
+                .collect(),
+        ),
+        (
+            "firefox",
+            "Firefox",
             vec![
                 home.join(".mozilla/firefox"),
                 home.join("Library/Application Support/Firefox"),
                 home.join("AppData/Roaming/Mozilla/Firefox"),
                 local.join("Mozilla/Firefox"),
-            ]),
-        ("librewolf", "LibreWolf",
+            ],
+        ),
+        (
+            "librewolf",
+            "LibreWolf",
             vec![
                 home.join(".librewolf"),
                 home.join("Library/Application Support/LibreWolf"),
-            ]),
+            ],
+        ),
     ]
 }
 
@@ -799,10 +826,9 @@ mod tests {
 
     #[test]
     fn parse_subscriptions_skips_renderer_without_id() {
-        let v: serde_json::Value = serde_json::from_str(
-            r#"{"channelRenderer":{"title":{"simpleText":"No Id"}}}"#,
-        )
-        .unwrap();
+        let v: serde_json::Value =
+            serde_json::from_str(r#"{"channelRenderer":{"title":{"simpleText":"No Id"}}}"#)
+                .unwrap();
         assert!(parse_subscriptions(&v).channels.is_empty());
     }
 }

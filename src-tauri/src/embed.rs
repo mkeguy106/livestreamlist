@@ -446,7 +446,9 @@ pub(crate) mod build_linux {
             // Upgrade Weak → Arc only for the duration of this callback. If
             // the WebView is already being dropped, upgrade returns None and
             // we silently skip; no risk of resurrecting a dead webview.
-            let Some(wv) = weak.upgrade() else { return; };
+            let Some(wv) = weak.upgrade() else {
+                return;
+            };
             let _ = wv.set_visible(true);
             if let Some(js) = super::injection_for(platform) {
                 let _ = wv.evaluate_script(&js);
@@ -519,7 +521,9 @@ pub(crate) mod build_linux {
             let Some(weak) = cell_for_handler.get() else {
                 return;
             };
-            let Some(wv) = weak.upgrade() else { return; };
+            let Some(wv) = weak.upgrade() else {
+                return;
+            };
             let _ = wv.evaluate_script(super::CB_IMPORT_JS);
         };
 

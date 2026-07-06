@@ -80,16 +80,21 @@ pub fn bundled_en_us_path() -> Option<PathBuf> {
         }
     }
     // Dev: walk up from CARGO_MANIFEST_DIR.
-    let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("dictionaries/en_US.aff");
-    if dev.exists() { Some(dev) } else { None }
+    let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("dictionaries/en_US.aff");
+    if dev.exists() {
+        Some(dev)
+    } else {
+        None
+    }
 }
 
 /// Scan a directory for `.aff` files, pair them with their matching
 /// `.dic`, and append `DictInfo` entries to `out`. Public for testing
 /// (so unit tests can hand a tempdir).
 pub fn scan_dir(dir: &Path, out: &mut Vec<DictInfo>) {
-    let Ok(entries) = std::fs::read_dir(dir) else { return; };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
     for entry in entries.flatten() {
         let p = entry.path();
         if p.extension().and_then(|s| s.to_str()) != Some("aff") {
@@ -240,8 +245,7 @@ mod tests {
         // CARGO_MANIFEST_DIR/dictionaries/. This test verifies dev-mode
         // fallback. (Production resource resolution is tested by
         // SpellChecker::new in Task 6.)
-        let path = bundled_en_us_path()
-            .expect("bundled en_US.aff should be present after Task 5");
+        let path = bundled_en_us_path().expect("bundled en_US.aff should be present after Task 5");
         assert!(path.ends_with("en_US.aff"));
         assert!(path.exists());
         let dic = path.with_extension("dic");

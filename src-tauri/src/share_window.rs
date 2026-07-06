@@ -29,7 +29,9 @@ pub struct ShareWindowState {
 
 impl ShareWindowState {
     pub fn new() -> Self {
-        Self { inner: Mutex::new(HashMap::new()) }
+        Self {
+            inner: Mutex::new(HashMap::new()),
+        }
     }
 }
 

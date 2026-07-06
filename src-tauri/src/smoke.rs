@@ -170,8 +170,7 @@ mod tests {
             make_request("list_channels", serde_json::json!({})),
         )
         .expect("list_channels should succeed");
-        let value: Vec<crate::channels::Channel> =
-            response.deserialize().expect("deserialize");
+        let value: Vec<crate::channels::Channel> = response.deserialize().expect("deserialize");
         assert!(value.is_empty(), "isolated config should have no channels");
     }
 

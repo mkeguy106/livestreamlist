@@ -567,7 +567,10 @@ mod tests {
     fn channel_key_of_returns_input_for_malformed() {
         assert_eq!(channel_key_of(""), "");
         assert_eq!(channel_key_of("not_a_key"), "not_a_key");
-        assert_eq!(channel_key_of("unknownplatform:foo:bar"), "unknownplatform:foo:bar");
+        assert_eq!(
+            channel_key_of("unknownplatform:foo:bar"),
+            "unknownplatform:foo:bar"
+        );
     }
 
     #[test]
@@ -630,7 +633,11 @@ mod tests {
 
         store.replace_livestreams_for_channel(
             &ch.unique_key(),
-            vec![live_yt_stream(&ch, "v1"), live_yt_stream(&ch, "v2"), live_yt_stream(&ch, "v3")],
+            vec![
+                live_yt_stream(&ch, "v1"),
+                live_yt_stream(&ch, "v2"),
+                live_yt_stream(&ch, "v3"),
+            ],
         );
         assert_eq!(store.livestreams.len(), 3);
 
@@ -655,7 +662,11 @@ mod tests {
         let ch = store.channels[0].clone();
         store.replace_livestreams_for_channel(
             &ch.unique_key(),
-            vec![live_yt_stream(&ch, "v1"), live_yt_stream(&ch, "v2"), live_yt_stream(&ch, "v3")],
+            vec![
+                live_yt_stream(&ch, "v1"),
+                live_yt_stream(&ch, "v2"),
+                live_yt_stream(&ch, "v3"),
+            ],
         );
 
         for _ in 0..2 {
@@ -680,10 +691,7 @@ mod tests {
             &ch.unique_key(),
             vec![live_yt_stream(&ch, "v1"), live_yt_stream(&ch, "v2")],
         );
-        store.replace_livestreams_for_channel(
-            &ch.unique_key(),
-            vec![live_yt_stream(&ch, "v1")],
-        );
+        store.replace_livestreams_for_channel(&ch.unique_key(), vec![live_yt_stream(&ch, "v1")]);
         assert_eq!(store.youtube_miss_counts.get("youtube:UCnasa:v2"), Some(&1));
         store.replace_livestreams_for_channel(
             &ch.unique_key(),
