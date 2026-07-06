@@ -3,6 +3,11 @@ import { chatConnect, chatDisconnect, listenEvent, replayChatHistory } from '../
 
 const BUFFER_SIZE = 250;
 const HISTORY_REPLAY = 100;
+// Absolute ceiling enforced even while trimming is paused (scroll-up pause, or
+// Find-open pause which has NO timeout). Without this, a fast chat could grow
+// the paused buffer without bound and exhaust memory. Far above BUFFER_SIZE so
+// normal reading-while-scrolled-up is never disturbed.
+const HARD_BUFFER_CAP = 5000;
 
 /**
  * Subscribe to a channel's chat stream. Pass `null`/`undefined` to disable.
@@ -97,6 +102,12 @@ export function useChat(channelKey) {
         const next = [...bufferRef.current, payload];
         if (!pausedRef.current && next.length > BUFFER_SIZE) {
           next.splice(0, next.length - BUFFER_SIZE);
+        } else if (next.length > HARD_BUFFER_CAP) {
+          // Paused, but past the absolute ceiling — trim from the front so the
+          // buffer can never grow without bound. Keeps the most recent
+          // HARD_BUFFER_CAP messages; the user's scroll position drifts but
+          // memory stays bounded.
+          next.splice(0, next.length - HARD_BUFFER_CAP);
         }
         bufferRef.current = next;
         setMessages(next);

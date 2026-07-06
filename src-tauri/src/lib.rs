@@ -1865,6 +1865,27 @@ pub fn run() {
                     }
                 })?;
             }
+            // Close-to-tray: intercept the MAIN window's close request and,
+            // when the setting is on, hide it instead of quitting. Attached
+            // per-window so auth popups / share popouts / detached chat
+            // windows (which register their own on_window_event handlers) are
+            // untouched. Tray "Quit" calls `app.exit(0)`, which bypasses this
+            // path entirely, so the app can always be fully quit.
+            {
+                let main_win = app
+                    .get_webview_window("main")
+                    .expect("main window must exist by setup time");
+                let settings_for_close = app.state::<AppState>().settings.clone();
+                let win_for_close = main_win.clone();
+                main_win.on_window_event(move |event| {
+                    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                        if settings_for_close.read().general.close_to_tray {
+                            api.prevent_close();
+                            let _ = win_for_close.hide();
+                        }
+                    }
+                });
+            }
             // No focus-tracking hide: `transient_for(main)` makes the WM
             // stack the embed above the main window, so when the user
             // switches to another app it naturally goes behind. Manual
