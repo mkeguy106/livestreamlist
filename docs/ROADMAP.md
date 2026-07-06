@@ -382,6 +382,7 @@ Gap analysis against the Qt app (`~/livestream.list.qt/`) — docs (`README.md`,
 
 ### Chat — core message handling
 
+- [x] **Chat render performance — memoized rows + frozen hidden tabs** (PR #168) — `IrcRow`/`CompactRow`/`SystemRow` wrapped in `React.memo` with stabilized handler identities (`messagesRef` pattern: `handleOpen`/`handleHover` count session messages at event time, not render time), so an incoming message re-renders only the appended row instead of reconciling all 250. Hidden Command tabs freeze React state while buffering continues (`useChat` gains `{ active, onMessage }`; buffer flushes once on activation); mention flash on inactive tabs moved to the per-message `onMessage` callback since it depended on the old hidden re-render loop. `EmoteText` hoists `TextEncoder`/`TextDecoder` to module scope and memoizes byte-slice segmentation.
 - [ ] **ROOMSTATE → chat-mode banners** — parse `slow`, `subs-only`, `emote-only`, `followers-only` (minutes; `-1` = off), `r9k` and surface as a dismissible banner row above the message list. → Ph 3
 - [ ] **`/me` action messages** — detect `\x01ACTION …\x01` payload and render in italic with the username coloured like the body. → Ph 3
 - [ ] **First-message (`first-msg=1`) highlight** — shipped? (check current chat rendering); if not, add a subtle left accent / tinted row. → shipped?
