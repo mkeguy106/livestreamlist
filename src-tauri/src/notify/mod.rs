@@ -8,6 +8,7 @@
 //! live doesn't spam a notification. See `is_go_live` for the exact rule.
 
 pub mod gate;
+pub mod sound;
 
 use parking_lot::Mutex;
 use std::collections::HashMap;
