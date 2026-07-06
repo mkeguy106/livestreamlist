@@ -38,6 +38,8 @@ jobs:
             librsvg2-dev \
             libsoup-3.0-dev \
             libjavascriptcoregtk-4.1-dev \
+            libhunspell-dev \
+            libclang-dev \
             build-essential curl wget file
 
       - name: Set up Node
