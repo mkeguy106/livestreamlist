@@ -323,14 +323,28 @@ pub(crate) mod linux {
 #[cfg(target_os = "linux")]
 pub(crate) use linux::FixedHandle;
 
+// Field 0: the WebView. Field 1: the `WebContext` it was built with, owned
+// here so it drops WITH the embed instead of being `Box::leak`'d per mount.
+// Field order is load-bearing — Rust drops tuple fields in declaration order,
+// so the WebView (0) drops first (running `InnerWebView::Drop` →
+// `webview.destroy()`, which detaches the GtkWidget), THEN the context (1) is
+// finalized. Dropping the context after the webview is safe on GTK: the
+// `WebKitWebView` holds its own GObject ref to the underlying
+// `WebKitWebContext`, and we register no custom URI schemes on it (wry's only
+// documented "keep the WebContext alive" caveat).
 #[cfg(target_os = "linux")]
-pub(crate) struct ChildInner(pub(crate) std::sync::Arc<wry::WebView>);
+pub(crate) struct ChildInner(
+    pub(crate) std::sync::Arc<wry::WebView>,
+    // Held purely for ownership so it drops with the embed (RAII); never read.
+    #[allow(dead_code)] pub(crate) Box<wry::WebContext>,
+);
 
-// SAFETY: like `FixedHandle`, the wry::WebView wraps GTK pointers that are
-// not thread-safe. All access happens behind the EmbedHost's parking_lot
-// Mutex on the GTK main thread (invoke commands and lifecycle hooks all
-// route through `glib::MainContext::default().invoke` or run on the main
-// thread already). We never touch the WebView off the main thread.
+// SAFETY: like `FixedHandle`, the wry::WebView and WebContext wrap GTK
+// pointers that are not thread-safe. All access (and the drop that runs
+// `webview.destroy()`) happens behind the EmbedHost's parking_lot Mutex on
+// the GTK main thread (invoke commands and lifecycle hooks all route through
+// `glib::MainContext::default().invoke` or run on the main thread already).
+// We never touch either off the main thread.
 #[cfg(target_os = "linux")]
 unsafe impl Send for ChildInner {}
 #[cfg(target_os = "linux")]
@@ -372,16 +386,24 @@ pub(crate) mod build_linux {
     /// Caller must hold the host's inner mutex (we borrow it as a reference
     /// to access `fixed`).
     ///
-    /// **WebContext lifetime**: wry 0.54 requires `WebViewBuilder::new_with_web_context`
-    /// taking `&'a mut WebContext`. The smoke / Phase 3 path leaks the
-    /// WebContext via `Box::leak` (paired with the `mem::forget(webview)`
-    /// in the smoke command — both live as long as the gtk::Fixed). Phase 5
-    /// will design proper per-child WebContext ownership.
+    /// **WebContext ownership**: wry 0.54 requires `WebViewBuilder::new_with_web_context`
+    /// taking `&'a mut WebContext`. The context is only borrowed for the
+    /// builder's lifetime — once `build_gtk` consumes the builder the borrow
+    /// ends, so we return the owned `Box<WebContext>` alongside the webview.
+    /// The caller stashes it in the `ChildEmbed` so it drops when the embed
+    /// unmounts (no more per-mount `Box::leak`). Dropping the context after
+    /// the webview is safe on GTK: `webkit_web_view` holds its own GObject
+    /// reference to the underlying `WebKitWebContext`, so the context lives as
+    /// long as the webview regardless of the Rust wrapper, and we register no
+    /// custom URI schemes on it (the only thing wry's drop warning is about).
     ///
     /// Phase 6: created hidden, the on_page_load handler shows it on
     /// PageLoadEvent::Finished + injects per-platform CSS/JS + verifies
     /// Chaturbate auth.
-    pub(crate) fn build_child(host_inner: &Inner, spec: BuildSpec) -> Result<Arc<wry::WebView>> {
+    pub(crate) fn build_child(
+        host_inner: &Inner,
+        spec: BuildSpec,
+    ) -> Result<(Arc<wry::WebView>, Box<WebContext>)> {
         use std::sync::{OnceLock, Weak};
 
         let fixed = host_inner
@@ -391,9 +413,9 @@ pub(crate) mod build_linux {
 
         let wry_rect = physical_to_logical(spec.bounds, spec.scale_factor);
 
-        // Leaked WebContext — see doc comment above.
-        let ctx: &'static mut WebContext =
-            Box::leak(Box::new(WebContext::new(Some(spec.profile_dir))));
+        // Owned WebContext — returned to the caller and stored in the
+        // ChildEmbed so it drops on unmount. See the doc comment above.
+        let mut ctx: Box<WebContext> = Box::new(WebContext::new(Some(spec.profile_dir)));
 
         // OnceLock so the on_page_load closure can reach the WebView post-build.
         // The wry 0.54 with_on_page_load_handler callback signature does not
@@ -434,7 +456,7 @@ pub(crate) mod build_linux {
             }
         };
 
-        let mut builder = WebViewBuilder::new_with_web_context(ctx)
+        let mut builder = WebViewBuilder::new_with_web_context(&mut ctx)
             .with_url(&spec.url)
             .with_background_color(spec.background)
             .with_visible(false) // shown by handler on PageLoadEvent::Finished
@@ -447,9 +469,11 @@ pub(crate) mod build_linux {
         let webview = builder
             .build_gtk(&fixed.0)
             .map_err(|e| anyhow::anyhow!("build_gtk failed: {e}"))?;
+        // `build_gtk` consumed the builder, ending the `&mut ctx` borrow — the
+        // Box is ours again to hand back for ownership by the ChildEmbed.
         let webview_arc = Arc::new(webview);
         let _ = cell.set(Arc::downgrade(&webview_arc));
-        Ok(webview_arc)
+        Ok((webview_arc, ctx))
     }
 
     /// Build the transient, invisible Chaturbate follows-import webview. Loads
@@ -463,7 +487,7 @@ pub(crate) mod build_linux {
         profile_dir: PathBuf,
         session_cookie: String,
         tx: tokio::sync::oneshot::Sender<String>,
-    ) -> Result<Arc<wry::WebView>> {
+    ) -> Result<(Arc<wry::WebView>, Box<WebContext>)> {
         use std::sync::{OnceLock, Weak};
 
         let _ = app; // reserved for parity with build_child; unused here
@@ -472,8 +496,10 @@ pub(crate) mod build_linux {
             .as_ref()
             .context("install_overlay was not called yet — gtk::Fixed missing")?;
 
-        let ctx: &'static mut WebContext =
-            Box::leak(Box::new(WebContext::new(Some(profile_dir))));
+        // Owned WebContext, same as build_child — the import webview has a
+        // real lifecycle (stored under CB_IMPORT_KEY, unmounted after the
+        // scrape completes), so its context drops with it instead of leaking.
+        let mut ctx: Box<WebContext> = Box::new(WebContext::new(Some(profile_dir)));
 
         // Same Weak/OnceLock discipline as build_child: capturing a strong Arc
         // in the page-load closure would cycle and prevent webview.destroy() on
@@ -515,7 +541,7 @@ pub(crate) mod build_linux {
             super::json_string(&session_cookie),
         );
 
-        let webview = WebViewBuilder::new_with_web_context(ctx)
+        let webview = WebViewBuilder::new_with_web_context(&mut ctx)
             .with_url("https://chaturbate.com/")
             .with_background_color((9, 9, 11, 255))
             .with_visible(false)
@@ -533,7 +559,7 @@ pub(crate) mod build_linux {
             .map_err(|e| anyhow::anyhow!("build_gtk (cb import) failed: {e}"))?;
         let webview_arc = Arc::new(webview);
         let _ = cell.set(Arc::downgrade(&webview_arc));
-        Ok(webview_arc)
+        Ok((webview_arc, ctx))
     }
 }
 
@@ -700,8 +726,8 @@ impl EmbedHost {
                 platform: channel.platform,
                 app: app.clone(),
             };
-            let webview_arc = build_linux::build_child(&g, spec)?;
-            ChildInner(webview_arc)
+            let (webview_arc, ctx) = build_linux::build_child(&g, spec)?;
+            ChildInner(webview_arc, ctx)
         };
 
         #[cfg(not(target_os = "linux"))]
@@ -780,7 +806,7 @@ impl EmbedHost {
             anyhow::bail!("a Chaturbate import is already running");
         }
         let profile_dir = crate::auth::chaturbate::webview_profile_dir()?;
-        let webview = {
+        let (webview, web_context) = {
             let g = self.inner.lock();
             build_linux::build_import_child(&g, app.clone(), profile_dir, session_cookie, tx)?
         };
@@ -788,7 +814,7 @@ impl EmbedHost {
             platform: Platform::Chaturbate,
             bounds: Rect::new(-10_000.0, -10_000.0, 1.0, 1.0),
             visible: false,
-            inner: ChildInner(webview),
+            inner: ChildInner(webview, web_context),
         };
         self.inner
             .lock()

@@ -181,12 +181,21 @@ pub async fn status(client: &reqwest::Client) -> Result<Option<TwitchWebIdentity
     match validate(client, &token).await {
         Ok(id) => {
             // Refresh the stored identity with the new last_verified_at.
-            let _ = save_pair(&token, &id);
+            // Best-effort — but warn, since a silently-stale identity is
+            // confusing to debug (self-corrects on the next status() call).
+            if let Err(e) = save_pair(&token, &id) {
+                log::warn!("re-caching Twitch web identity failed: {e:#}");
+            }
             Ok(Some(id))
         }
         Err(e) => {
             log::warn!("Twitch web cookie invalid, clearing: {e:#}");
-            let _ = clear();
+            // If the clear itself fails, the dead cookie stays in the keyring
+            // and every anniversary check will keep failing against it — warn
+            // so that loop is diagnosable.
+            if let Err(e) = clear() {
+                log::warn!("clearing invalid Twitch web cookie failed: {e:#}");
+            }
             Ok(None)
         }
     }
@@ -339,8 +348,12 @@ pub async fn login_with_match_check(
         if oauth.login.eq_ignore_ascii_case(&identity.login) {
             return Ok(identity);
         }
-        // Mismatch: roll back the keyring writes login_via_webview did.
-        let _ = clear();
+        // Mismatch: roll back the keyring writes login_via_webview did. If
+        // the rollback fails, the wrong account's cookie stays stored while
+        // the user sees a mismatch error — warn so that state is traceable.
+        if let Err(e) = clear() {
+            log::warn!("rolling back mismatched Twitch web login failed: {e:#}");
+        }
         return Err(LoginError::AccountMismatch {
             web: identity.login,
             oauth: oauth.login,

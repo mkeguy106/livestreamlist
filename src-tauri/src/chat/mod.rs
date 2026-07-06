@@ -55,6 +55,40 @@ pub struct ChatManager {
 struct ConnectionHandle {
     task: JoinHandle<()>,
     outbound: mpsc::UnboundedSender<OutboundMsg>,
+    aux: AuxTasks,
+}
+
+/// Handles for the short-lived background tasks a connection fans out
+/// (3rd-party emote fetch, Twitch badge prefetch). Tracked per connection
+/// so `disconnect` can abort any still in flight — otherwise rapid
+/// connect/disconnect churn (e.g. flipping between chat tabs) piles up
+/// orphaned paginated fetches. Cloneable (shared `Arc`) so the connection
+/// task can push its own in-task spawns after `connect` has returned.
+///
+/// Aborting mid-fetch is safe: every loader inserts into the shared caches
+/// only *after* a successful fetch completes (see `emote_loader` /
+/// `badges`), so a cancelled task simply leaves the cache untouched — never
+/// half-populated.
+#[derive(Clone, Default)]
+pub(crate) struct AuxTasks(Arc<Mutex<Vec<JoinHandle<()>>>>);
+
+impl AuxTasks {
+    /// Track a spawned auxiliary task so `disconnect` can abort it.
+    pub(crate) fn push(&self, handle: JoinHandle<()>) {
+        self.0.lock().push(handle);
+    }
+
+    /// Abort every tracked task and clear the list. Idempotent.
+    fn abort_all(&self) {
+        for handle in self.0.lock().drain(..) {
+            handle.abort();
+        }
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.0.lock().len()
+    }
 }
 
 impl ChatManager {
@@ -135,15 +169,19 @@ impl ChatManager {
                 let auth = auth::twitch::stored_auth_pair()
                     .map(|(login, token)| twitch::TwitchAuth { login, token });
 
+                let aux = AuxTasks::default();
+
                 // Fire the full emote fan-out in a detached task so it doesn't
                 // block the chat connection. Messages without emotes render
                 // fine; matched 3rd-party tokens swap in as the cache fills.
+                // Tracked in `aux` so a quick disconnect aborts the (slow,
+                // paginated) fetch instead of leaking it.
                 let emote_cache = Arc::clone(&self.emotes);
                 let http_clone = self.http.clone();
                 let app_clone = self.app.clone();
                 let key_clone = unique_key.clone();
                 let login_clone = channel_id.clone();
-                async_runtime::spawn(async move {
+                aux.push(async_runtime::spawn(async move {
                     emote_loader::load_twitch_for_channel(
                         http_clone,
                         emote_cache,
@@ -152,7 +190,7 @@ impl ChatManager {
                         login_clone,
                     )
                     .await;
-                });
+                }));
 
                 let cfg = twitch::TwitchChatConfig {
                     app: self.app.clone(),
@@ -168,13 +206,17 @@ impl ChatManager {
                     own_badges: Mutex::new(Vec::new()),
                     own_display_name: Mutex::new(None),
                     last_room_state: Mutex::new(None),
+                    // Clone so the connection task can push its own in-task
+                    // spawns (badge prefetch); disconnect aborts via the copy
+                    // stored in ConnectionHandle below.
+                    aux: aux.clone(),
                 };
                 let task = async_runtime::spawn(async move {
                     twitch::run(cfg).await;
                 });
                 self.connections
                     .lock()
-                    .insert(unique_key, ConnectionHandle { task, outbound: tx });
+                    .insert(unique_key, ConnectionHandle { task, outbound: tx, aux });
             }
             Platform::Kick => {
                 let (tx, rx) = mpsc::unbounded_channel::<OutboundMsg>();
@@ -190,9 +232,15 @@ impl ChatManager {
                 let task = async_runtime::spawn(async move {
                     kick::run(cfg).await;
                 });
-                self.connections
-                    .lock()
-                    .insert(unique_key, ConnectionHandle { task, outbound: tx });
+                // Kick fans out no auxiliary tasks; keep an empty tracker.
+                self.connections.lock().insert(
+                    unique_key,
+                    ConnectionHandle {
+                        task,
+                        outbound: tx,
+                        aux: AuxTasks::default(),
+                    },
+                );
             }
             _ => {
                 // YouTube / Chaturbate use embedded webviews, not Rust-side chat.
@@ -205,6 +253,9 @@ impl ChatManager {
     pub fn disconnect(&self, unique_key: &str) {
         if let Some(h) = self.connections.lock().remove(unique_key) {
             h.task.abort();
+            // Abort any still-in-flight emote/badge loaders this connection
+            // spawned so churn doesn't accumulate orphaned fetches.
+            h.aux.abort_all();
         }
     }
 
@@ -294,5 +345,72 @@ impl ChatManager {
                 let _ = self.connect(ch.platform, ch.channel_id.clone(), key);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AuxTasks;
+
+    /// Test-owned single-thread runtime. Deliberately does NOT spawn on
+    /// `tauri::async_runtime`'s process-global runtime — real tasks spawned
+    /// there from parallel unit tests caused intermittent SIGSEGVs at
+    /// test-binary teardown. The runtime must outlive the handles it
+    /// produced, so each test keeps it alive on the stack.
+    fn test_rt() -> tokio::runtime::Runtime {
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("test runtime")
+    }
+
+    fn pending_handle(rt: &tokio::runtime::Runtime) -> tauri::async_runtime::JoinHandle<()> {
+        // Never resolves on its own, so it's still live when we abort it —
+        // exercises the real JoinHandle::abort path, not a finished stub.
+        tauri::async_runtime::JoinHandle::Tokio(
+            rt.spawn(async { std::future::pending::<()>().await }),
+        )
+    }
+
+    #[test]
+    fn aux_tasks_default_is_empty() {
+        assert_eq!(AuxTasks::default().len(), 0);
+    }
+
+    #[test]
+    fn aux_tasks_push_tracks_and_abort_all_drains() {
+        let rt = test_rt();
+        let aux = AuxTasks::default();
+        for _ in 0..3 {
+            aux.push(pending_handle(&rt));
+        }
+        assert_eq!(aux.len(), 3);
+        aux.abort_all();
+        assert_eq!(aux.len(), 0);
+    }
+
+    #[test]
+    fn aux_tasks_abort_all_is_idempotent() {
+        let rt = test_rt();
+        let aux = AuxTasks::default();
+        aux.push(pending_handle(&rt));
+        aux.abort_all();
+        assert_eq!(aux.len(), 0);
+        // Second call on an already-drained tracker must not panic.
+        aux.abort_all();
+        assert_eq!(aux.len(), 0);
+    }
+
+    #[test]
+    fn aux_tasks_clone_shares_backing_store() {
+        // The connection task holds a clone; pushes through it must be
+        // visible to the ConnectionHandle's copy (and vice versa) so
+        // disconnect aborts in-task spawns.
+        let rt = test_rt();
+        let a = AuxTasks::default();
+        let b = a.clone();
+        b.push(pending_handle(&rt));
+        assert_eq!(a.len(), 1);
+        a.abort_all();
+        assert_eq!(b.len(), 0);
     }
 }
