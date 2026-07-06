@@ -7,6 +7,8 @@
 //! fire on the first refresh so adding or bulk-importing a channel while it's
 //! live doesn't spam a notification. See `is_go_live` for the exact rule.
 
+pub mod gate;
+
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use tauri::Runtime;
