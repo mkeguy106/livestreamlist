@@ -51,7 +51,7 @@ cargo run --manifest-path src-tauri/Cargo.toml --features smoke --bin smoke -- -
 cargo run --manifest-path src-tauri/Cargo.toml --features smoke --bin smoke -- spellcheck_check '{"text":"helo","language":"en_US","channelEmotes":[]}'
 # Single-shot: positional cmd + JSON args. JSONL streaming: no positionals, read stdin.
 # Isolated config by default (--use-real-config to opt out); side-effects denied (--allow-side-effects to opt in).
-# See src-tauri/src/bin/README.md for the full protocol.
+# See src-tauri/src/smoke_harness/README.md for the full protocol.
 ```
 
 Relaunch during Rust-side dev (Tauri watches `src-tauri/`; no explicit kill usually needed):

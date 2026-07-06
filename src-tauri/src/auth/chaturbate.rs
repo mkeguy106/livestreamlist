@@ -408,9 +408,21 @@ pub async fn login_via_webview(app: AppHandle) -> Result<ChaturbateAuth> {
         if let Some(main) = main.as_ref() {
             // Parent to main so KWin keeps stacking and focus consistent
             // (no `always_on_top` needed; transient_for handles it).
-            builder = builder
-                .transient_for(main)
-                .context("transient_for(main) on Chaturbate login window")?;
+            // `transient_for` is a GTK-only (Linux) extension; the portable
+            // `parent` gives equivalent above-owner stacking on Windows/macOS
+            // and maps to `set_transient_for` on Linux.
+            #[cfg(target_os = "linux")]
+            {
+                builder = builder
+                    .transient_for(main)
+                    .context("transient_for(main) on Chaturbate login window")?;
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                builder = builder
+                    .parent(main)
+                    .context("parent(main) on Chaturbate login window")?;
+            }
         }
         builder.build().context("opening Chaturbate login window")?
     };
