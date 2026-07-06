@@ -121,8 +121,8 @@ mod tests {
         let td = TempDir::new().unwrap();
         let p = tmp(&td);
         let mut d = PersonalDict::load(p.clone());
-        assert_eq!(d.add("Kappa").unwrap(), true);
-        assert_eq!(d.add("Kappa").unwrap(), false); // duplicate
+        assert!(d.add("Kappa").unwrap());
+        assert!(!d.add("Kappa").unwrap()); // duplicate
         assert_eq!(d.len(), 1);
 
         let d2 = PersonalDict::load(p);

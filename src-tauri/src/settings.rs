@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use crate::config;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Settings {
     #[serde(default)]
     pub general: GeneralSettings,
@@ -19,16 +19,6 @@ pub struct Settings {
     pub appearance: AppearanceSettings,
     #[serde(default)]
     pub chat: ChatSettings,
-}
-
-impl Default for Settings {
-    fn default() -> Self {
-        Self {
-            general: GeneralSettings::default(),
-            appearance: AppearanceSettings::default(),
-            chat: ChatSettings::default(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

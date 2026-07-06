@@ -276,6 +276,7 @@ pub fn save(stamp: &ChaturbateAuth) -> Result<()> {
 }
 
 /// Bumps `last_verified_at` if the stamp exists. No-op when not signed in.
+#[allow(dead_code)] // called only by the non-test CB auth-drift path (embed.rs, #[cfg(not(test))])
 pub fn touch_verified() -> Result<()> {
     let Some(mut stamp) = load()? else {
         return Ok(());

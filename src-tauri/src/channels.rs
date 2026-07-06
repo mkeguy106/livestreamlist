@@ -52,13 +52,13 @@ pub fn channel_key_of(stream_key: &str) -> &str {
         return stream_key;
     }
     let mut parts = stream_key.splitn(3, ':');
-    let plat = parts.next();
-    let chan = parts.next();
-    if plat.is_some() && chan.is_some() && parts.next().is_some() {
-        let len = plat.unwrap().len() + 1 + chan.unwrap().len();
-        return &stream_key[..len];
+    match (parts.next(), parts.next(), parts.next()) {
+        (Some(plat), Some(chan), Some(_)) => {
+            let len = plat.len() + 1 + chan.len();
+            &stream_key[..len]
+        }
+        _ => stream_key,
     }
-    stream_key
 }
 
 /// Transient live-status snapshot keyed by channel unique_key.
@@ -697,7 +697,7 @@ mod tests {
             &ch.unique_key(),
             vec![live_yt_stream(&ch, "v1"), live_yt_stream(&ch, "v2")],
         );
-        assert!(store.youtube_miss_counts.get("youtube:UCnasa:v2").is_none());
+        assert!(!store.youtube_miss_counts.contains_key("youtube:UCnasa:v2"));
     }
 
     #[test]

@@ -27,6 +27,7 @@ use tokio::sync::oneshot;
 /// platform so both apps can coexist:
 ///   - Twitch: 65433
 ///   - Kick:   65432
+///
 /// Each auth module passes its own port to `spawn_once`.
 pub const CALLBACK_HOST: &str = "localhost";
 pub const CALLBACK_PATH: &str = "/redirect";
@@ -118,7 +119,7 @@ fn handle_conn(mut stream: TcpStream) -> Result<Option<CallbackResult>> {
 
     if method == "GET" && path.starts_with(CALLBACK_PATH) {
         // Code flow: ?code=...&state=...
-        if let Some(qs) = path.splitn(2, '?').nth(1) {
+        if let Some(qs) = path.split_once('?').map(|x| x.1) {
             let q = parse_query(qs);
             if let Some(err) = q.get("error") {
                 respond_html(&mut stream, ERROR_PAGE)?;

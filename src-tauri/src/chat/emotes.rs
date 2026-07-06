@@ -119,7 +119,7 @@ impl EmoteCache {
             }
         }
         let mut list: Vec<Emote> = out.into_values().collect();
-        list.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        list.sort_by_key(|a| a.name.to_lowercase());
         list
     }
 
@@ -269,7 +269,7 @@ pub async fn load_bttv_channel(http: &reqwest::Client, twitch_user_id: &str) -> 
         .and_then(|v| v.as_array())
         .cloned()
         .unwrap_or_default();
-    let combined: Vec<Value> = channel.into_iter().chain(shared.into_iter()).collect();
+    let combined: Vec<Value> = channel.into_iter().chain(shared).collect();
     Ok(parse_bttv(&Value::Array(combined), &[]))
 }
 

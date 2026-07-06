@@ -427,7 +427,7 @@ fn extract_initial_data(html: &str, var_name: &str) -> Option<Value> {
             .map(|i| i + start_marker_window.len()),
     ];
     let json_start = candidates.iter().filter_map(|x| *x).next()?;
-    let bytes = html[json_start..].as_bytes();
+    let bytes = &html.as_bytes()[json_start..];
     if bytes.first() != Some(&b'{') {
         return None;
     }

@@ -60,9 +60,13 @@ pub struct SubAnniversaryInfo {
     pub renews_at: String,
 }
 
+/// One cache slot: when it was stored, the cookie status at fetch time, and
+/// the (optional) anniversary payload.
+type CacheEntry = (Instant, CookieStatus, Option<SubAnniversaryInfo>);
+
 /// In-memory TTL cache. Keyed by channel_login (lowercase recommended).
 pub struct Cache {
-    inner: Mutex<HashMap<String, (Instant, CookieStatus, Option<SubAnniversaryInfo>)>>,
+    inner: Mutex<HashMap<String, CacheEntry>>,
     ttl_some: Duration,
     ttl_none: Duration,
 }

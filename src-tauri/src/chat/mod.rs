@@ -344,8 +344,8 @@ impl ChatManager {
             .connections
             .lock()
             .keys()
-            .cloned()
             .filter(|k| k.starts_with(&format!("{}:", platform.as_str())))
+            .cloned()
             .collect();
         let channels = store.lock().channels().to_vec();
         for key in keys {

@@ -259,12 +259,8 @@ fn browser_table() -> Vec<(&'static str, &'static str, Vec<PathBuf>)> {
     let local = dirs::data_local_dir().unwrap_or_default();
 
     let chromium_paths = |sub: &str| -> Vec<PathBuf> {
-        let mut out = Vec::new();
-        // Linux/macOS layouts both go through dirs::config_dir() correctly.
-        out.push(config.join(sub));
-        // Windows: Local AppData
-        out.push(local.join(sub));
-        out
+        // Linux/macOS layouts go through dirs::config_dir(); Windows uses Local AppData.
+        vec![config.join(sub), local.join(sub)]
     };
 
     vec![
@@ -388,7 +384,7 @@ pub fn parse_pasted(text: &str) -> Result<YouTubeCookies> {
             }
         }
     } else {
-        for chunk in trimmed.split(|c| c == ';' || c == '\n') {
+        for chunk in trimmed.split([';', '\n']) {
             let pair = chunk.trim().trim_end_matches(';');
             if pair.is_empty() {
                 continue;

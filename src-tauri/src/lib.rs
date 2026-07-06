@@ -810,6 +810,9 @@ mod chat_detach_tests {
 // take concrete AppHandle and embed_mount/embed_bounds are in the smoke DENYLIST.
 #[cfg(not(any(feature = "smoke", test)))]
 #[tauri::command]
+// Args map 1:1 to the frontend IPC call's named parameters; flattening the
+// x/y/width/height rect into a struct would change the invoke contract.
+#[allow(clippy::too_many_arguments)]
 fn embed_mount(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
@@ -832,6 +835,8 @@ fn embed_mount(
 
 #[cfg(any(feature = "smoke", test))]
 #[tauri::command]
+// Signature mirrors the real `embed_mount` command; args map 1:1 to IPC params.
+#[allow(clippy::too_many_arguments)]
 fn embed_mount<R: tauri::Runtime>(
     _app: tauri::AppHandle<R>,
     _state: State<'_, AppState>,
@@ -2060,7 +2065,7 @@ pub fn run() {
             // login chiclet shows it without waiting for a re-login.
             if auth::youtube::load().ok().flatten().is_some() {
                 let http = app.state::<AppState>().http.clone();
-                spawn_youtube_user_info_refresh(&app.handle(), http);
+                spawn_youtube_user_info_refresh(app.handle(), http);
             }
             // Pre-warm the Twitch user-emote layer (subs, follower, bits,
             // Turbo, Prime) so the Composer picker has the user's full
@@ -2119,7 +2124,7 @@ pub fn run() {
             if let Ok(res_dir) = app.path().resource_dir() {
                 std::env::set_var("LIVESTREAMLIST_RESOURCE_DIR", &res_dir);
             }
-            tray::build(&app.handle())?;
+            tray::build(app.handle())?;
             window_state::register(app)?;
             spawn_refresh_scheduler(app.handle());
             Ok(())

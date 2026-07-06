@@ -9,6 +9,8 @@
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::sync::Arc;
+// Only referenced by `cookies_for_url`, which is `#[cfg(not(test))]`.
+#[cfg(not(test))]
 use url::Url;
 
 use crate::platforms::Platform;
@@ -261,6 +263,7 @@ pub(crate) mod linux {
     /// gated by `glib::MainContext::default().invoke` in real call
     /// sites, so the unsafe Send is sound — we never touch the widget
     /// off the main thread.
+    #[allow(dead_code)] // field read only by non-test overlay wiring (#[cfg(not(test))])
     pub(crate) struct FixedHandle(pub Fixed);
     unsafe impl Send for FixedHandle {}
 
@@ -333,6 +336,7 @@ pub(crate) use linux::FixedHandle;
 // `WebKitWebContext`, and we register no custom URI schemes on it (wry's only
 // documented "keep the WebContext alive" caveat).
 #[cfg(target_os = "linux")]
+#[allow(dead_code)] // constructed/read only by the non-test embed machinery (#[cfg(not(test))])
 pub(crate) struct ChildInner(
     pub(crate) std::sync::Arc<wry::WebView>,
     // Held purely for ownership so it drops with the embed (RAII); never read.
@@ -353,7 +357,9 @@ unsafe impl Sync for ChildInner {}
 #[cfg(not(target_os = "linux"))]
 pub(crate) struct ChildInner(pub(crate) tauri::webview::Webview);
 
-#[cfg(target_os = "linux")]
+// Real GTK/wry child-webview construction — only compiled for non-test builds
+// (unit tests stub the embed machinery to avoid needing a live GTK display).
+#[cfg(all(target_os = "linux", not(test)))]
 pub(crate) mod build_linux {
     use super::*;
     use anyhow::{Context, Result};
@@ -400,6 +406,10 @@ pub(crate) mod build_linux {
     /// Phase 6: created hidden, the on_page_load handler shows it on
     /// PageLoadEvent::Finished + injects per-platform CSS/JS + verifies
     /// Chaturbate auth.
+    // `wry::WebView` is `!Send`/`!Sync`, but the on-page-load closure requires
+    // `Send + Sync` and `ChildInner` is `unsafe impl Send + Sync`, so the
+    // shared `WebView`/cell handles must use `Arc` (atomic refcount), not `Rc`.
+    #[allow(clippy::arc_with_non_send_sync)]
     pub(crate) fn build_child(
         host_inner: &Inner,
         spec: BuildSpec,
@@ -483,6 +493,9 @@ pub(crate) mod build_linux {
     /// first page-load Finished, and forwards the JS's `window.ipc.postMessage`
     /// payload through `tx` (fired at most once). Parked off-screen at 1×1 and
     /// never shown — it only needs a live page context to run same-origin XHR.
+    // Same rationale as `build_child`: the shared `WebView`/cell handles cross
+    // into a `Send + Sync` closure, so `Arc` (not `Rc`) is required.
+    #[allow(clippy::arc_with_non_send_sync)]
     pub(crate) fn build_import_child(
         host_inner: &Inner,
         app: tauri::AppHandle,
@@ -639,6 +652,7 @@ pub(crate) mod build_other {
     }
 }
 
+#[allow(dead_code)] // non-test embed plumbing (real GTK/wry path is #[cfg(not(test))])
 fn profile_dir(platform: Platform) -> anyhow::Result<std::path::PathBuf> {
     match platform {
         Platform::Youtube => crate::auth::youtube::webview_profile_dir(),
@@ -649,6 +663,7 @@ fn profile_dir(platform: Platform) -> anyhow::Result<std::path::PathBuf> {
     }
 }
 
+#[allow(dead_code)] // non-test embed plumbing (real GTK/wry path is #[cfg(not(test))])
 const ZINC_950: (u8, u8, u8, u8) = (9, 9, 11, 255);
 
 #[cfg(not(target_os = "linux"))]
@@ -828,6 +843,7 @@ impl EmbedHost {
     }
 }
 
+#[allow(dead_code)] // injected only by the non-test embed path (#[cfg(not(test))])
 const YT_THEME_CSS: &str = r#"
 html, body { background: #09090b !important; }
 yt-live-chat-renderer, yt-live-chat-app { background: #09090b !important; }
@@ -838,6 +854,7 @@ yt-live-chat-header-renderer { background: #09090b !important; border: 0 !import
 ::-webkit-scrollbar-thumb:hover { background: #3f3f46; }
 "#;
 
+#[allow(dead_code)] // injected only by the non-test embed path (#[cfg(not(test))])
 const CB_ISOLATE_JS: &str = r#"
 (function() {
   function apply() {
@@ -883,6 +900,7 @@ const CB_ISOLATE_JS: &str = r#"
 /// Reserved EmbedKey for the transient Chaturbate follows-import webview.
 /// Not a real channel — never collides with a `platform:channel_id` key
 /// because real Chaturbate keys use the model's username.
+#[allow(dead_code)] // used only by the non-test follows-import path (#[cfg(not(test))])
 pub const CB_IMPORT_KEY: &str = "chaturbate:__import__";
 
 /// JS run once (on the first page-load Finished) inside a logged-in
@@ -891,6 +909,7 @@ pub const CB_IMPORT_KEY: &str = "chaturbate:__import__";
 /// cleared by the shared profile — then posts the result back to Rust via
 /// wry's `window.ipc.postMessage`. Ported from the Qt app's
 /// `_FETCH_ALL_FOLLOWS_JS` + age-gate dismissal.
+#[allow(dead_code)] // injected only by the non-test follows-import path (#[cfg(not(test))])
 const CB_IMPORT_JS: &str = r#"
 (function() {
   if (!window.ipc || !window.ipc.postMessage) return;          // IPC not ready
@@ -1006,11 +1025,13 @@ pub fn parse_cb_follows(payload: &str) -> anyhow::Result<Vec<String>> {
     Ok(out)
 }
 
+#[allow(dead_code)] // non-test embed plumbing (real GTK/wry path is #[cfg(not(test))])
 fn json_string(s: &str) -> String {
     serde_json::to_string(s).unwrap_or_else(|_| "''".to_string())
 }
 
 /// JS the embed should run after every page load.
+#[allow(dead_code)] // non-test embed plumbing (real GTK/wry path is #[cfg(not(test))])
 fn injection_for(platform: Platform) -> Option<String> {
     match platform {
         Platform::Youtube => Some(format!(
@@ -1023,6 +1044,7 @@ fn injection_for(platform: Platform) -> Option<String> {
 }
 
 #[derive(Clone, serde::Serialize)]
+#[allow(dead_code)] // emitted only by the non-test auth-drift path (#[cfg(not(test))])
 struct ChaturbateAuthEvent {
     signed_in: bool,
     /// "ok" | "session_expired" | "not_logged_in"
@@ -1042,6 +1064,7 @@ fn classify_chaturbate_auth(signed_in: bool, stamp_present: bool) -> &'static st
 /// Common tail for both platform variants of `verify_chaturbate_auth_*`:
 /// touch the stamp on success, clear-stamp-only on drift, then emit the
 /// `chat:auth:chaturbate` event.
+#[allow(dead_code)] // non-test auth-drift plumbing (real GTK/wry path is #[cfg(not(test))])
 fn handle_chaturbate_auth_outcome(app: &tauri::AppHandle, signed_in: bool) {
     use tauri::Emitter as _;
     let stamp_present = matches!(crate::auth::chaturbate::load(), Ok(Some(_)));
@@ -1066,6 +1089,7 @@ fn handle_chaturbate_auth_outcome(app: &tauri::AppHandle, signed_in: bool) {
 }
 
 #[cfg(target_os = "linux")]
+#[allow(dead_code)] // called only by the non-test embed page-load handler (#[cfg(not(test))])
 fn verify_chaturbate_auth_linux(webview: &Arc<wry::WebView>, app: &tauri::AppHandle) {
     let signed_in = match webview.cookies_for_url("https://chaturbate.com/") {
         Ok(jar) => capture_cb_session(jar.iter().map(|c| (c.name(), c.value()))),
@@ -1080,6 +1104,7 @@ fn verify_chaturbate_auth_linux(webview: &Arc<wry::WebView>, app: &tauri::AppHan
 /// Given an iterator of (name, value) cookie pairs, persist `sessionid` for the
 /// follows-import to reuse and return whether the user is signed in. Capturing
 /// here (on every CB chat-embed page load) keeps the stored cookie fresh.
+#[allow(dead_code)] // non-test auth-drift plumbing (real GTK/wry path is #[cfg(not(test))])
 fn capture_cb_session<'a>(cookies: impl Iterator<Item = (&'a str, &'a str)>) -> bool {
     for (name, value) in cookies {
         if name == "sessionid" && !value.is_empty() {

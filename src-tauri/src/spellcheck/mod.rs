@@ -158,6 +158,10 @@ impl SpellChecker {
             .to_string_lossy()
             .to_string();
         let h = HunspellDict::new(&aff, &dic);
+        // Arc (not Rc) is required: `SpellChecker` is `unsafe impl Send + Sync`
+        // and shared across Tauri worker threads, so these handles need atomic
+        // refcounting even though `HunspellDict` itself is `!Send`.
+        #[allow(clippy::arc_with_non_send_sync)]
         let arc = Arc::new(Mutex::new(h));
         map.insert(code.to_string(), arc.clone());
         Some(arc)
