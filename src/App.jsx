@@ -67,9 +67,8 @@ export default function App() {
 
   const hoverEnabled = settings?.chat?.user_card_hover !== false; // default true
   const hoverDelay = settings?.chat?.user_card_hover_delay_ms ?? 400;
-  const intervalSeconds = settings?.general?.refresh_interval_seconds;
   const { livestreams, loading, error, refresh, refreshChannel, dropLivestream } =
-    useLivestreams({ intervalSeconds });
+    useLivestreams();
   const onTitlebarMouseDown = useDragHandler();
   const card = useUserCard();
   const { applyNickname } = useNicknames();

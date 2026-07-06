@@ -40,6 +40,13 @@ pub(crate) struct AppState {
     pub(crate) pronouns: Arc<PronounsCache>,
     pub(crate) twitch_anniversary_cache: platforms::twitch_anniversary::SharedCache,
     pub(crate) share_windows: share_window::SharedShareWindowState,
+    /// Serializes full-store refreshes so the background scheduler and a
+    /// user-initiated `refresh_all` never fan out network requests on top of
+    /// each other. Manual refresh `lock().await`s (always runs, just waits out
+    /// any in-flight cycle); the scheduler `try_lock()`s (skips its tick when a
+    /// refresh is already running). The store merge is idempotent, so this is a
+    /// stampede-avoidance optimization rather than a correctness requirement.
+    pub(crate) refresh_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl AppState {
@@ -75,6 +82,7 @@ impl AppState {
             pronouns,
             twitch_anniversary_cache: Arc::new(platforms::twitch_anniversary::Cache::new()),
             share_windows: Arc::new(share_window::ShareWindowState::new()),
+            refresh_lock: Arc::new(tokio::sync::Mutex::new(())),
         })
     }
 }
@@ -154,6 +162,45 @@ fn set_favorite(
     Ok(touched)
 }
 
+/// The full-store refresh path shared by the manual `refresh_all` IPC command
+/// and the background scheduler task. Runs the network fan-out, fires
+/// offline→live desktop notifications (or just advances the tracker when
+/// notifications are off), updates the tray tooltip, and **pushes the fresh
+/// snapshot to the frontend via the `livestreams:updated` event** so every
+/// refresh path — manual, scheduled, or tray-triggered — results in exactly one
+/// push. Returns the snapshot for callers that also want it as a value.
+async fn perform_refresh_all<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    store: SharedStore,
+    client: reqwest::Client,
+    notifier: Arc<NotifyTracker>,
+    yt_browser: Option<String>,
+    notify_enabled: bool,
+) -> Result<Vec<Livestream>, String> {
+    let snapshot = refresh::refresh_all(Arc::clone(&store), client, yt_browser)
+        .await
+        .map_err(err_string)?;
+
+    // Fire desktop notifications for offline→live transitions, and update
+    // the tray tooltip with the new counts.
+    let channels = store.lock().channels().to_vec();
+    if notify_enabled {
+        notifier.detect_and_notify(app, &channels, &snapshot);
+    } else {
+        // Still advance the tracker so re-enabling doesn't retro-fire every
+        // currently-live channel.
+        notifier.seed(&snapshot);
+    }
+    let live = snapshot.iter().filter(|l| l.is_live).count();
+    tray::update_tooltip(app, live, snapshot.len());
+
+    // Push to the frontend. Same payload shape as this command's return value,
+    // so `useLivestreams` can set state directly from the event.
+    let _ = app.emit("livestreams:updated", &snapshot);
+
+    Ok(snapshot)
+}
+
 #[tauri::command]
 async fn refresh_all<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
@@ -168,25 +215,11 @@ async fn refresh_all<R: tauri::Runtime>(
         .general
         .youtube_cookies_browser
         .clone();
-    let snapshot = refresh::refresh_all(store, client, yt_browser)
-        .await
-        .map_err(err_string)?;
-
-    // Fire desktop notifications for offline→live transitions, and update
-    // the tray tooltip with the new counts.
-    let channels = state.store.lock().channels().to_vec();
     let notify_enabled = state.settings.read().general.notify_on_live;
-    if notify_enabled {
-        notifier.detect_and_notify(&app, &channels, &snapshot);
-    } else {
-        // Still advance the tracker so re-enabling doesn't retro-fire every
-        // currently-live channel.
-        notifier.seed(&snapshot);
-    }
-    let live = snapshot.iter().filter(|l| l.is_live).count();
-    tray::update_tooltip(&app, live, snapshot.len());
-
-    Ok(snapshot)
+    // Manual refresh always runs — wait out any in-flight scheduler cycle
+    // rather than skipping, so pressing R never no-ops.
+    let _guard = state.refresh_lock.lock().await;
+    perform_refresh_all(&app, store, client, notifier, yt_browser, notify_enabled).await
 }
 
 /// Refresh a single channel's live status. Called immediately after a
@@ -221,6 +254,10 @@ async fn refresh_channel<R: tauri::Runtime>(
     let snapshot = state.store.lock().snapshot();
     let live = snapshot.iter().filter(|l| l.is_live).count();
     tray::update_tooltip(&app, live, snapshot.len());
+
+    // Push the full updated snapshot so the UI reflects the single-channel
+    // change immediately (same event + payload shape as refresh_all).
+    let _ = app.emit("livestreams:updated", &snapshot);
 
     Ok(result)
 }
@@ -736,6 +773,18 @@ mod chat_detach_tests {
         let label = format!("chat-detach-{slug}");
         assert_eq!(label, "chat-detach-kick-trainwrecks-");
     }
+
+    #[test]
+    fn refresh_interval_clamps_to_floor() {
+        // Below-floor values are lifted to the floor…
+        assert_eq!(clamp_refresh_interval(0), MIN_REFRESH_INTERVAL_SECS);
+        assert_eq!(clamp_refresh_interval(5), MIN_REFRESH_INTERVAL_SECS);
+        assert_eq!(clamp_refresh_interval(9), MIN_REFRESH_INTERVAL_SECS);
+        // …exactly-floor and above pass through unchanged.
+        assert_eq!(clamp_refresh_interval(10), 10);
+        assert_eq!(clamp_refresh_interval(60), 60);
+        assert_eq!(clamp_refresh_interval(3600), 3600);
+    }
 }
 
 // Real handlers delegate to EmbedHost. EmbedHost::mount / set_bounds / set_visible
@@ -927,6 +976,87 @@ fn spawn_youtube_user_info_refresh<R: tauri::Runtime>(app: &tauri::AppHandle<R>,
                 log::debug!("YouTube user info not detectable (no cookies or no marker match)");
             }
             Err(e) => log::warn!("fetch YouTube user info: {e:#}"),
+        }
+    });
+}
+
+/// Lower bound on the auto-refresh interval, in seconds. A misconfigured or
+/// hand-edited `settings.json` with a tiny interval would otherwise hammer the
+/// platform APIs (and risk 429 cooldowns); 10 s is well below any realistic
+/// user setting while still protecting the endpoints.
+const MIN_REFRESH_INTERVAL_SECS: u64 = 10;
+
+/// Clamp a user-configured refresh interval (seconds) to the enforced floor.
+/// Pure so it can be unit-tested without spinning up the app.
+fn clamp_refresh_interval(configured_secs: u32) -> u64 {
+    (configured_secs as u64).max(MIN_REFRESH_INTERVAL_SECS)
+}
+
+/// Background auto-refresh scheduler. Loops for the app's lifetime: run the
+/// same full-store refresh the manual `refresh_all` command uses (via
+/// `perform_refresh_all`, which pushes `livestreams:updated`), then sleep for
+/// `settings.general.refresh_interval_seconds`. The interval is re-read every
+/// cycle so a Preferences change takes effect on the next tick without a
+/// restart. Clamped to `MIN_REFRESH_INTERVAL_SECS`.
+///
+/// Uses `try_lock` on the shared `refresh_lock` so a scheduler tick that lands
+/// while a manual refresh is mid-flight simply skips (the manual refresh
+/// already produced a fresh push); the manual path, by contrast, waits for the
+/// lock and always runs.
+fn spawn_refresh_scheduler<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        loop {
+            // Re-read settings each cycle so live interval / notify / cookie
+            // changes are honored without a restart.
+            let (interval_secs, notify_enabled, yt_browser) = {
+                let state = app.state::<AppState>();
+                let g = &state.settings.read().general;
+                (
+                    clamp_refresh_interval(g.refresh_interval_seconds),
+                    g.notify_on_live,
+                    g.youtube_cookies_browser.clone(),
+                )
+            };
+
+            // Grab owned clones of everything the refresh needs, plus the lock
+            // Arc, so nothing borrows from the short-lived `State` handle across
+            // the await below.
+            let (refresh_lock, store, client, notifier) = {
+                let state = app.state::<AppState>();
+                (
+                    Arc::clone(&state.refresh_lock),
+                    Arc::clone(&state.store),
+                    state.http.clone(),
+                    Arc::clone(&state.notifier),
+                )
+            };
+
+            // Skip this tick if a refresh (manual or a prior overrunning
+            // scheduler cycle) is already in flight — avoids stacking network
+            // fan-outs on a throttled endpoint. The guard is held across the
+            // await so a manual refresh waits behind us instead of overlapping.
+            match refresh_lock.try_lock() {
+                Ok(_guard) => {
+                    if let Err(e) = perform_refresh_all(
+                        &app,
+                        store,
+                        client,
+                        notifier,
+                        yt_browser,
+                        notify_enabled,
+                    )
+                    .await
+                    {
+                        log::warn!("scheduled refresh failed: {e}");
+                    }
+                }
+                Err(_) => {
+                    log::debug!("scheduled refresh skipped — refresh already in flight");
+                }
+            }
+
+            tokio::time::sleep(std::time::Duration::from_secs(interval_secs)).await;
         }
     });
 }
@@ -1961,6 +2091,7 @@ pub fn run() {
             }
             tray::build(&app.handle())?;
             window_state::register(app)?;
+            spawn_refresh_scheduler(app.handle());
             Ok(())
         })
         .invoke_handler(register_handlers!())
