@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use crate::config;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Settings {
     #[serde(default)]
     pub general: GeneralSettings,
@@ -19,16 +19,6 @@ pub struct Settings {
     pub appearance: AppearanceSettings,
     #[serde(default)]
     pub chat: ChatSettings,
-}
-
-impl Default for Settings {
-    fn default() -> Self {
-        Self {
-            general: GeneralSettings::default(),
-            appearance: AppearanceSettings::default(),
-            chat: ChatSettings::default(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -170,7 +160,11 @@ fn default_lang() -> String {
             // Drop encoding suffix (`.UTF-8`) and locale modifier (`@euro`).
             let no_enc = l.split('.').next().unwrap_or("");
             let trimmed = no_enc.split('@').next().unwrap_or("");
-            if trimmed.is_empty() { None } else { Some(trimmed.to_string()) }
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
         })
         .filter(|s| s != "C" && s != "POSIX")
         .unwrap_or_else(|| "en_US".to_string())
@@ -369,7 +363,10 @@ mod tests {
         let s = EventBannerSettings::default();
         assert!(s.enabled, "master toggle defaults on");
         assert!(s.kinds.subgift, "subgift defaults on (C scope)");
-        assert!(s.kinds.submysterygift, "submysterygift defaults on (C scope)");
+        assert!(
+            s.kinds.submysterygift,
+            "submysterygift defaults on (C scope)"
+        );
         assert!(s.kinds.raid, "raid defaults on (C scope)");
         assert!(!s.kinds.sub, "sub defaults off");
         assert!(!s.kinds.resub, "resub defaults off");
@@ -396,8 +393,13 @@ mod tests {
         let s = EventBannerSettings {
             enabled: false,
             kinds: EventBannerKinds {
-                sub: true, resub: false, subgift: false, submysterygift: false,
-                raid: false, bitsbadgetier: true, announcement: true,
+                sub: true,
+                resub: false,
+                subgift: false,
+                submysterygift: false,
+                raid: false,
+                bitsbadgetier: true,
+                announcement: true,
             },
         };
         let json = serde_json::to_string(&s).unwrap();

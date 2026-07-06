@@ -17,11 +17,22 @@ fn list_prints_at_least_some_known_commands() {
     assert!(output.status.success(), "exit status: {:?}", output.status);
     let stdout = String::from_utf8(output.stdout).unwrap();
     // Sanity: a few well-known commands must be in the output.
-    for cmd in &["list_channels", "list_livestreams", "spellcheck_check", "chat_send"] {
-        assert!(stdout.contains(cmd), "--list output missing {cmd}; got:\n{stdout}");
+    for cmd in &[
+        "list_channels",
+        "list_livestreams",
+        "spellcheck_check",
+        "chat_send",
+    ] {
+        assert!(
+            stdout.contains(cmd),
+            "--list output missing {cmd}; got:\n{stdout}"
+        );
     }
     // chat_send is on the denylist, so it should be tagged.
-    assert!(stdout.contains("chat_send [blocked]"), "denylist tag missing for chat_send");
+    assert!(
+        stdout.contains("chat_send [blocked]"),
+        "denylist tag missing for chat_send"
+    );
 }
 
 #[test]
@@ -31,8 +42,14 @@ fn help_prints_usage_and_exits_zero() {
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("Usage:"), "--help output missing 'Usage:'");
     assert!(stdout.contains("--list"), "--help should mention --list");
-    assert!(stdout.contains("--use-real-config"), "--help should mention --use-real-config");
-    assert!(stdout.contains("--allow-side-effects"), "--help should mention --allow-side-effects");
+    assert!(
+        stdout.contains("--use-real-config"),
+        "--help should mention --use-real-config"
+    );
+    assert!(
+        stdout.contains("--allow-side-effects"),
+        "--help should mention --allow-side-effects"
+    );
 }
 
 #[test]
@@ -41,7 +58,12 @@ fn single_shot_list_channels_returns_empty_array() {
         .args(["list_channels", "{}"])
         .output()
         .expect("run list_channels");
-    assert!(output.status.success(), "exit: {:?} stderr: {}", output.status, String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "exit: {:?} stderr: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
     let stdout = String::from_utf8(output.stdout).unwrap();
     let json: serde_json::Value = serde_json::from_str(stdout.trim())
         .unwrap_or_else(|e| panic!("stdout not JSON ({e}): {stdout}"));
@@ -57,7 +79,10 @@ fn single_shot_marshalling_error_classifies_as_deserialize() {
         .args(["add_channel_from_input", r#"{"wrong_field":"x"}"#])
         .output()
         .expect("run add_channel_from_input with bad args");
-    assert!(!output.status.success(), "expected non-zero exit for bad args");
+    assert!(
+        !output.status.success(),
+        "expected non-zero exit for bad args"
+    );
     let stdout = String::from_utf8(output.stdout).unwrap();
     let json: serde_json::Value = serde_json::from_str(stdout.trim())
         .unwrap_or_else(|e| panic!("stdout not JSON ({e}): {stdout}"));
@@ -65,7 +90,10 @@ fn single_shot_marshalling_error_classifies_as_deserialize() {
     assert_eq!(json["ok"], false);
     assert_eq!(json["kind"], "deserialize");
     assert!(
-        json["error"].as_str().unwrap_or("").contains("invalid args"),
+        json["error"]
+            .as_str()
+            .unwrap_or("")
+            .contains("invalid args"),
         "error message should contain Tauri's stable 'invalid args' prefix; got: {}",
         json["error"]
     );
@@ -77,12 +105,19 @@ fn single_shot_unknown_command_returns_command_error() {
         .args(["this_command_does_not_exist", "{}"])
         .output()
         .expect("run unknown command");
-    assert!(!output.status.success(), "expected non-zero exit for unknown command");
+    assert!(
+        !output.status.success(),
+        "expected non-zero exit for unknown command"
+    );
     let stdout = String::from_utf8(output.stdout).unwrap();
     let json: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
     assert_eq!(json["ok"], false);
     // kind is "command" for any post-dispatch error that isn't deserialize
-    assert_eq!(json["kind"], "command", "unknown command should classify as 'command'; got: {}", json["kind"]);
+    assert_eq!(
+        json["kind"], "command",
+        "unknown command should classify as 'command'; got: {}",
+        json["kind"]
+    );
 }
 
 #[test]
@@ -97,15 +132,23 @@ fn denylist_blocks_chat_send_by_default() {
     assert_eq!(json["ok"], false);
     assert_eq!(json["kind"], "blocked");
     assert!(
-        json["error"].as_str().unwrap_or("").contains("--allow-side-effects"),
-        "error should mention the opt-out flag; got: {}", json["error"]
+        json["error"]
+            .as_str()
+            .unwrap_or("")
+            .contains("--allow-side-effects"),
+        "error should mention the opt-out flag; got: {}",
+        json["error"]
     );
 }
 
 #[test]
 fn allow_side_effects_bypasses_denylist() {
     let output = smoke()
-        .args(["--allow-side-effects", "chat_send", r#"{"uniqueKey":"twitch:shroud","text":"hi"}"#])
+        .args([
+            "--allow-side-effects",
+            "chat_send",
+            r#"{"uniqueKey":"twitch:shroud","text":"hi"}"#,
+        ])
         .output()
         .expect("run chat_send with allow-side-effects");
     let stdout = String::from_utf8(output.stdout).unwrap();
@@ -114,7 +157,10 @@ fn allow_side_effects_bypasses_denylist() {
     // We don't assert the call succeeds — chat_send under MockRuntime with no
     // ChatManager state will fail (Task 2 deliberately doesn't construct it).
     // We just assert it's NOT blocked.
-    assert_ne!(json["kind"], "blocked", "kind=blocked means flag wasn't honored");
+    assert_ne!(
+        json["kind"], "blocked",
+        "kind=blocked means flag wasn't honored"
+    );
     // The warning should appear on stderr.
     assert!(
         stderr.contains("dispatching side-effecting command 'chat_send'"),
@@ -178,7 +224,12 @@ fn jsonl_state_persists_across_calls_in_one_session() {
         .write_stdin(input)
         .output()
         .expect("run add+list jsonl stream");
-    assert!(output.status.success(), "exit: {:?} stderr: {}", output.status, String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "exit: {:?} stderr: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
     let stdout = String::from_utf8(output.stdout).unwrap();
     let lines: Vec<_> = stdout.trim().split('\n').collect();
     assert_eq!(lines.len(), 2, "expected 2 response lines, got: {stdout}");
@@ -189,7 +240,11 @@ fn jsonl_state_persists_across_calls_in_one_session() {
     let list: serde_json::Value = serde_json::from_str(lines[1]).unwrap();
     assert_eq!(list["ok"], true);
     let channels = list["value"].as_array().expect("channels array");
-    assert_eq!(channels.len(), 1, "expected 1 channel after add; got {channels:?}");
+    assert_eq!(
+        channels.len(),
+        1,
+        "expected 1 channel after add; got {channels:?}"
+    );
     assert_eq!(channels[0]["channel_id"], "shroud");
 }
 
@@ -200,11 +255,21 @@ fn jsonl_malformed_input_continues_session() {
 this is not json
 {\"cmd\":\"list_livestreams\",\"args\":{}}
 ";
-    let output = smoke().write_stdin(input).output().expect("run with malformed line");
-    assert!(output.status.success(), "should exit 0 on EOF even with malformed lines");
+    let output = smoke()
+        .write_stdin(input)
+        .output()
+        .expect("run with malformed line");
+    assert!(
+        output.status.success(),
+        "should exit 0 on EOF even with malformed lines"
+    );
     let stdout = String::from_utf8(output.stdout).unwrap();
     let lines: Vec<_> = stdout.trim().split('\n').collect();
-    assert_eq!(lines.len(), 3, "should emit 3 responses (good, bad, good); got: {stdout}");
+    assert_eq!(
+        lines.len(),
+        3,
+        "should emit 3 responses (good, bad, good); got: {stdout}"
+    );
 
     let r0: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
     assert_eq!(r0["ok"], true);
@@ -239,10 +304,19 @@ fn jsonl_panicking_command_does_not_kill_session() {
         .write_stdin(input)
         .output()
         .expect("run panic-test jsonl");
-    assert!(output.status.success(), "session must survive failing call; exit: {:?} stderr: {}", output.status, String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "session must survive failing call; exit: {:?} stderr: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
     let stdout = String::from_utf8(output.stdout).unwrap();
     let lines: Vec<_> = stdout.trim().split('\n').collect();
-    assert_eq!(lines.len(), 3, "expected 3 lines (good, fail, good); got: {stdout}");
+    assert_eq!(
+        lines.len(),
+        3,
+        "expected 3 lines (good, fail, good); got: {stdout}"
+    );
 
     let r0: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
     assert_eq!(r0["id"], "a");
@@ -255,7 +329,8 @@ fn jsonl_panicking_command_does_not_kill_session() {
     // (the called function returned an error instead of panicking).
     assert!(
         ["panic", "command", "deserialize"].contains(&r1["kind"].as_str().unwrap_or("")),
-        "kind should be panic, command, or deserialize for failing call; got: {}", r1["kind"]
+        "kind should be panic, command, or deserialize for failing call; got: {}",
+        r1["kind"]
     );
 
     let r2: serde_json::Value = serde_json::from_str(lines[2]).unwrap();
@@ -266,11 +341,17 @@ fn jsonl_panicking_command_does_not_kill_session() {
 #[test]
 fn jsonl_optional_id_omitted_in_response_when_absent_in_input() {
     let input = "{\"cmd\":\"list_channels\",\"args\":{}}\n";
-    let output = smoke().write_stdin(input).output().expect("run no-id jsonl");
+    let output = smoke()
+        .write_stdin(input)
+        .output()
+        .expect("run no-id jsonl");
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
     let json: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
-    assert!(json.get("id").is_none(), "id should be omitted when absent in input; got: {json}");
+    assert!(
+        json.get("id").is_none(),
+        "id should be omitted when absent in input; got: {json}"
+    );
 }
 
 #[test]
@@ -280,11 +361,17 @@ fn jsonl_omitted_args_dispatches_with_empty_object() {
     // dispatch_one receives raw_args="null" and Tauri rejects it.
     // Confirms list_channels (which takes no args) returns ok=true.
     let input = "{\"cmd\":\"list_channels\"}\n";
-    let output = smoke().write_stdin(input).output().expect("run no-args jsonl");
+    let output = smoke()
+        .write_stdin(input)
+        .output()
+        .expect("run no-args jsonl");
     assert!(output.status.success(), "exit: {:?}", output.status);
     let stdout = String::from_utf8(output.stdout).unwrap();
     let json: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
-    assert_eq!(json["ok"], true, "omitted args should dispatch as empty object; got: {json}");
+    assert_eq!(
+        json["ok"], true,
+        "omitted args should dispatch as empty object; got: {json}"
+    );
     assert_eq!(json["value"], serde_json::json!([]));
 }
 
@@ -293,18 +380,28 @@ fn config_isolated_by_default_across_runs() {
     // Two independent smoke runs. Each gets a fresh temp config.
     // The second run must NOT see channels added by the first.
     let r1 = smoke()
-        .args(["add_channel_from_input", r#"{"input":"https://twitch.tv/shroud"}"#])
-        .output().expect("first run");
-    assert!(r1.status.success(), "first add failed: {:?}", String::from_utf8_lossy(&r1.stderr));
+        .args([
+            "add_channel_from_input",
+            r#"{"input":"https://twitch.tv/shroud"}"#,
+        ])
+        .output()
+        .expect("first run");
+    assert!(
+        r1.status.success(),
+        "first add failed: {:?}",
+        String::from_utf8_lossy(&r1.stderr)
+    );
 
     let r2 = smoke()
         .args(["list_channels", "{}"])
-        .output().expect("second run");
+        .output()
+        .expect("second run");
     assert!(r2.status.success());
     let stdout = String::from_utf8(r2.stdout).unwrap();
     let json: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
     assert_eq!(
-        json["value"], serde_json::json!([]),
+        json["value"],
+        serde_json::json!([]),
         "second run must see empty channel list (isolation broken if non-empty); got: {json}"
     );
 }
@@ -368,7 +465,8 @@ fn list_count_matches_register_handlers_macro_body() {
 
     let output = smoke().arg("--list").output().expect("run --list");
     assert!(output.status.success());
-    let list_count = String::from_utf8(output.stdout).unwrap()
+    let list_count = String::from_utf8(output.stdout)
+        .unwrap()
         .lines()
         .filter(|l| !l.trim().is_empty())
         .count();

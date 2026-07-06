@@ -34,14 +34,7 @@ impl LoginPopupManager {
     /// rectangle. Closes any previously-open popup before creating a new
     /// one; positioning a stale window across re-opens is more code for no
     /// real benefit, since open/close fires once per click.
-    pub fn open(
-        &self,
-        app: &AppHandle,
-        x: f64,
-        y: f64,
-        width: f64,
-        height: f64,
-    ) -> Result<()> {
+    pub fn open(&self, app: &AppHandle, x: f64, y: f64, width: f64, height: f64) -> Result<()> {
         // Close any existing popup first so re-clicks don't stack windows.
         self.close();
 
@@ -95,7 +88,10 @@ impl LoginPopupManager {
 
         // Force exact physical pixels (the inner_size/position above are
         // logical; KDE Plasma scaling botches them).
-        let _ = win.set_size(PhysicalSize::new(width.max(1.0) as u32, height.max(1.0) as u32));
+        let _ = win.set_size(PhysicalSize::new(
+            width.max(1.0) as u32,
+            height.max(1.0) as u32,
+        ));
         let _ = win.set_position(PhysicalPosition::new(x, y));
 
         // Auto-close on focus loss. Time-based guard (not "ever-focused")

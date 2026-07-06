@@ -11,12 +11,12 @@ use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
 use super::badges::classify_mod_twitch;
 use super::emotes::{self, EmoteCache};
 use super::irc::{self, IrcMessage};
+use super::links::scan_links;
 use super::log_store::ChatLogWriter;
 use super::models::{
     ChatBadge, ChatMessage, ChatModerationEvent, ChatRoomState, ChatRoomStateEvent, ChatStatus,
     ChatStatusEvent, ChatUser, EmoteRange, ReplyInfo, SystemEvent,
 };
-use super::links::scan_links;
 use super::reconnect::{Backoff, CLEAN_RECONNECT_DELAY};
 use super::OutboundMsg;
 use crate::platforms::Platform;
@@ -208,18 +208,28 @@ async fn fetch_and_replay_recent_messages(
     {
         Ok(r) if r.status().is_success() => r,
         Ok(r) => {
-            log::debug!("recent-messages HTTP {} for {}", r.status(), cfg.channel_login);
+            log::debug!(
+                "recent-messages HTTP {} for {}",
+                r.status(),
+                cfg.channel_login
+            );
             return;
         }
         Err(e) => {
-            log::debug!("recent-messages fetch failed for {}: {e:#}", cfg.channel_login);
+            log::debug!(
+                "recent-messages fetch failed for {}: {e:#}",
+                cfg.channel_login
+            );
             return;
         }
     };
     let body: RecentMessagesBody = match resp.json().await {
         Ok(b) => b,
         Err(e) => {
-            log::debug!("recent-messages decode failed for {}: {e:#}", cfg.channel_login);
+            log::debug!(
+                "recent-messages decode failed for {}: {e:#}",
+                cfg.channel_login
+            );
             return;
         }
     };
@@ -568,11 +578,7 @@ fn build_outbound_line(
             channel_login.to_ascii_lowercase(),
             text
         ),
-        None => format!(
-            "PRIVMSG #{} :{}",
-            channel_login.to_ascii_lowercase(),
-            text
-        ),
+        None => format!("PRIVMSG #{} :{}", channel_login.to_ascii_lowercase(), text),
     }
 }
 
@@ -743,10 +749,9 @@ fn build_usernotice(cfg: &TwitchChatConfig, msg: &IrcMessage<'_>) -> Option<Chat
                     "months": months,
                     "login": login,
                 });
-                let _ = cfg.app.emit(
-                    &format!("chat:resub_self:{}", cfg.channel_key),
-                    payload,
-                );
+                let _ = cfg
+                    .app
+                    .emit(&format!("chat:resub_self:{}", cfg.channel_key), payload);
             }
         }
     }
@@ -832,7 +837,10 @@ pub fn apply_roomstate_tags(
     if let Some(v) = tags.get("slow").and_then(|s| s.parse::<u32>().ok()) {
         prior.slow_seconds = v;
     }
-    if let Some(v) = tags.get("followers-only").and_then(|s| s.parse::<i32>().ok()) {
+    if let Some(v) = tags
+        .get("followers-only")
+        .and_then(|s| s.parse::<i32>().ok())
+    {
         prior.followers_only_minutes = v;
     }
     if let Some(v) = tags.get("subs-only") {
@@ -1151,7 +1159,10 @@ mod tests {
             parent_text: "hi".to_string(),
         };
         let line = build_outbound_line("xqc", "hello world", Some(&reply));
-        assert_eq!(line, "@reply-parent-msg-id=abc-123 PRIVMSG #xqc :hello world");
+        assert_eq!(
+            line,
+            "@reply-parent-msg-id=abc-123 PRIVMSG #xqc :hello world"
+        );
     }
 
     #[test]

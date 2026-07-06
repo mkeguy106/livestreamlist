@@ -9,17 +9,14 @@ static SCHEMED_URL_RE: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 const TLD_ALLOWLIST: &[&str] = &[
-    "com", "net", "org", "io", "gg", "tv", "edu", "gov",
-    "co", "uk", "us", "me", "ly", "app", "dev", "fm",
-    "live", "stream", "video", "art", "news", "to", "cc",
-    "so", "ai", "xyz", "info", "sh",
+    "com", "net", "org", "io", "gg", "tv", "edu", "gov", "co", "uk", "us", "me", "ly", "app",
+    "dev", "fm", "live", "stream", "video", "art", "news", "to", "cc", "so", "ai", "xyz", "info",
+    "sh",
 ];
 
 static BARE_DOMAIN_RE: LazyLock<Regex> = LazyLock::new(|| {
     let tlds = TLD_ALLOWLIST.join("|");
-    let pat = format!(
-        r#"(?i)\b(?:[a-z0-9-]+\.)+(?:{tlds})\b(?:/[^\s<>"]*)?"#
-    );
+    let pat = format!(r#"(?i)\b(?:[a-z0-9-]+\.)+(?:{tlds})\b(?:/[^\s<>"]*)?"#);
     Regex::new(&pat).expect("bare domain regex compiles")
 });
 
@@ -61,7 +58,11 @@ pub fn scan_links(text: &str, existing: &[EmoteRange]) -> Vec<LinkRange> {
         };
         let candidate_clean = strip_zero_width(&candidate);
         if let Ok(parsed) = url::Url::parse(&candidate_clean) {
-            out.push(LinkRange { start, end, url: parsed.to_string() });
+            out.push(LinkRange {
+                start,
+                end,
+                url: parsed.to_string(),
+            });
         }
     }
     out
@@ -90,7 +91,10 @@ fn trim_url_end(s: &str) -> usize {
         // Strip trailing punctuation.
         while len > 0 {
             let c = bytes[len - 1];
-            if matches!(c, b'.' | b',' | b';' | b':' | b'!' | b'?' | b'\'' | b'"' | b'*' | b'_') {
+            if matches!(
+                c,
+                b'.' | b',' | b';' | b':' | b'!' | b'?' | b'\'' | b'"' | b'*' | b'_'
+            ) {
                 len -= 1;
             } else {
                 break;
@@ -102,7 +106,11 @@ fn trim_url_end(s: &str) -> usize {
         if len > 0 {
             let last = bytes[len - 1];
             if last == b')' || last == b']' {
-                let (open, close) = if last == b')' { (b'(', b')') } else { (b'[', b']') };
+                let (open, close) = if last == b')' {
+                    (b'(', b')')
+                } else {
+                    (b'[', b']')
+                };
                 let mut opens = 0i32;
                 let mut closes = 0i32;
                 for &c in &bytes[..len] {
@@ -130,7 +138,11 @@ mod tests {
     use super::*;
 
     fn r(start: usize, end: usize, url: &str) -> LinkRange {
-        LinkRange { start, end, url: url.to_string() }
+        LinkRange {
+            start,
+            end,
+            url: url.to_string(),
+        }
     }
 
     #[test]
@@ -185,10 +197,7 @@ mod tests {
     #[test]
     fn bare_domain_allowlisted() {
         let got = scan_links("yo youtube.com/watch?v=abc end", &[]);
-        assert_eq!(
-            got,
-            vec![r(3, 26, "https://youtube.com/watch?v=abc")]
-        );
+        assert_eq!(got, vec![r(3, 26, "https://youtube.com/watch?v=abc")]);
     }
 
     #[test]
@@ -207,10 +216,7 @@ mod tests {
     #[test]
     fn bare_domain_subdomain() {
         let got = scan_links("watch live.twitch.tv/shroud now", &[]);
-        assert_eq!(
-            got,
-            vec![r(6, 27, "https://live.twitch.tv/shroud")]
-        );
+        assert_eq!(got, vec![r(6, 27, "https://live.twitch.tv/shroud")]);
     }
 
     #[test]
@@ -223,7 +229,10 @@ mod tests {
         assert_eq!(got.len(), 1, "expected 1 link, got {got:?}");
         let link = &got[0];
         // Display range still spans the ZW char.
-        assert_eq!(&text[link.start..link.end], "https://twitch.tv/\u{200B}shroud");
+        assert_eq!(
+            &text[link.start..link.end],
+            "https://twitch.tv/\u{200B}shroud"
+        );
         // Click target has ZW stripped.
         assert_eq!(link.url, "https://twitch.tv/shroud");
     }
@@ -243,6 +252,9 @@ mod tests {
             animated: false,
         }];
         let got = scan_links("twitch.tv/x rest", &existing);
-        assert!(got.is_empty(), "expected emote-overlap to drop link, got {got:?}");
+        assert!(
+            got.is_empty(),
+            "expected emote-overlap to drop link, got {got:?}"
+        );
     }
 }

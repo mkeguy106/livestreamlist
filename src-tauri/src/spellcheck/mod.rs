@@ -7,9 +7,9 @@
 //!   `~/.config/livestreamlist/personal_dict.json`.
 //! - `dict`      — enumerate installed hunspell dicts; bundled en_US fallback.
 
-pub mod tokenize;
-pub mod personal;
 pub mod dict;
+pub mod personal;
+pub mod tokenize;
 
 use crate::spellcheck::dict::DictInfo;
 use crate::spellcheck::personal::PersonalDict;
@@ -64,11 +64,17 @@ impl HunspellDict {
     }
 
     fn check(&self, word: &str) -> hunspell_rs::CheckResult {
-        self.0.as_ref().expect("hunspell instance alive").check(word)
+        self.0
+            .as_ref()
+            .expect("hunspell instance alive")
+            .check(word)
     }
 
     fn suggest(&self, word: &str) -> Vec<String> {
-        self.0.as_ref().expect("hunspell instance alive").suggest(word)
+        self.0
+            .as_ref()
+            .expect("hunspell instance alive")
+            .suggest(word)
     }
 }
 
@@ -146,8 +152,16 @@ impl SpellChecker {
         }
         let info = self.available.iter().find(|d| d.code == code)?;
         let aff = info.aff_path.to_string_lossy().to_string();
-        let dic = info.aff_path.with_extension("dic").to_string_lossy().to_string();
+        let dic = info
+            .aff_path
+            .with_extension("dic")
+            .to_string_lossy()
+            .to_string();
         let h = HunspellDict::new(&aff, &dic);
+        // Arc (not Rc) is required: `SpellChecker` is `unsafe impl Send + Sync`
+        // and shared across Tauri worker threads, so these handles need atomic
+        // refcounting even though `HunspellDict` itself is `!Send`.
+        #[allow(clippy::arc_with_non_send_sync)]
         let arc = Arc::new(Mutex::new(h));
         map.insert(code.to_string(), arc.clone());
         Some(arc)
@@ -171,8 +185,12 @@ impl SpellChecker {
         let personal = self.personal.read();
         let mut out = Vec::new();
         for tok in tokenize(text, channel_emotes) {
-            if tok.class != TokenClass::Word { continue; }
-            if personal.contains(&tok.text) { continue; }
+            if tok.class != TokenClass::Word {
+                continue;
+            }
+            if personal.contains(&tok.text) {
+                continue;
+            }
             if dict.check(&tok.text) != hunspell_rs::CheckResult::FoundInDictionary {
                 out.push(MisspelledRange {
                     start: tok.start,
@@ -185,7 +203,9 @@ impl SpellChecker {
     }
 
     pub fn suggest(&self, word: &str, language: &str) -> Vec<String> {
-        let Some(dict) = self.dict_for(language) else { return Vec::new(); };
+        let Some(dict) = self.dict_for(language) else {
+            return Vec::new();
+        };
         let dict = dict.lock();
         let mut s = dict.suggest(word);
         s.truncate(5);
@@ -218,7 +238,11 @@ mod integration_tests {
         let c = checker_with_bundled();
         let result = c.check("hello wnoderful world", "en_US", &[]);
         let words: Vec<&str> = result.iter().map(|r| r.word.as_str()).collect();
-        assert!(words.contains(&"wnoderful"), "expected wnoderful flagged, got {:?}", words);
+        assert!(
+            words.contains(&"wnoderful"),
+            "expected wnoderful flagged, got {:?}",
+            words
+        );
         // Correct words must NOT be flagged.
         assert!(!words.contains(&"hello"));
         assert!(!words.contains(&"world"));
@@ -227,9 +251,11 @@ mod integration_tests {
     #[test]
     fn check_skips_mentions_urls_emotes() {
         let c = checker_with_bundled();
-        let r = c.check("hi @shroud check twitch.tv/shroud Kappa LMAO",
-                        "en_US",
-                        &["Kappa".to_string()]);
+        let r = c.check(
+            "hi @shroud check twitch.tv/shroud Kappa LMAO",
+            "en_US",
+            &["Kappa".to_string()],
+        );
         // None of the skip-tokens should appear as misspellings.
         for word in r.iter().map(|m| &m.word) {
             assert_ne!(word, "shroud");
@@ -247,7 +273,11 @@ mod integration_tests {
         // …then add it and confirm it's NOT.
         c.add_to_personal("wnoderful").unwrap();
         let r = c.check("wnoderful test", "en_US", &[]);
-        assert!(r.is_empty(), "personal-dict word should not be flagged: {:?}", r);
+        assert!(
+            r.is_empty(),
+            "personal-dict word should not be flagged: {:?}",
+            r
+        );
     }
 
     #[test]
@@ -255,7 +285,11 @@ mod integration_tests {
         let c = checker_with_bundled();
         let s = c.suggest("teh", "en_US");
         assert!(!s.is_empty(), "expected at least one suggestion for 'teh'");
-        assert!(s.iter().any(|s| s == "the"), "'the' should be in suggestions: {:?}", s);
+        assert!(
+            s.iter().any(|s| s == "the"),
+            "'the' should be in suggestions: {:?}",
+            s
+        );
     }
 
     #[test]

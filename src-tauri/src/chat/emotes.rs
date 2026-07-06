@@ -119,7 +119,7 @@ impl EmoteCache {
             }
         }
         let mut list: Vec<Emote> = out.into_values().collect();
-        list.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        list.sort_by_key(|a| a.name.to_lowercase());
         list
     }
 
@@ -269,7 +269,7 @@ pub async fn load_bttv_channel(http: &reqwest::Client, twitch_user_id: &str) -> 
         .and_then(|v| v.as_array())
         .cloned()
         .unwrap_or_default();
-    let combined: Vec<Value> = channel.into_iter().chain(shared.into_iter()).collect();
+    let combined: Vec<Value> = channel.into_iter().chain(shared).collect();
     Ok(parse_bttv(&Value::Array(combined), &[]))
 }
 
@@ -443,11 +443,23 @@ mod tests {
         // emote, the channel set wins (matches what other viewers see).
         let cache = EmoteCache::default();
         let mut user = HashMap::new();
-        user.insert("Foo".to_string(), Emote { url_1x: "user".into(), ..emote("Foo") });
+        user.insert(
+            "Foo".to_string(),
+            Emote {
+                url_1x: "user".into(),
+                ..emote("Foo")
+            },
+        );
         cache.set_user_emotes(user);
 
         let mut ch = HashMap::new();
-        ch.insert("Foo".to_string(), Emote { url_1x: "channel".into(), ..emote("Foo") });
+        ch.insert(
+            "Foo".to_string(),
+            Emote {
+                url_1x: "channel".into(),
+                ..emote("Foo")
+            },
+        );
         cache.set_channel("twitch:bar", ch);
 
         let resolved = cache.lookup("twitch:bar", "Foo").unwrap();
@@ -462,10 +474,22 @@ mod tests {
     fn user_emotes_shadow_globals_on_collision() {
         let cache = EmoteCache::default();
         let mut g = HashMap::new();
-        g.insert("Bar".to_string(), Emote { url_1x: "global".into(), ..emote("Bar") });
+        g.insert(
+            "Bar".to_string(),
+            Emote {
+                url_1x: "global".into(),
+                ..emote("Bar")
+            },
+        );
         cache.merge_globals(g);
         let mut u = HashMap::new();
-        u.insert("Bar".to_string(), Emote { url_1x: "user".into(), ..emote("Bar") });
+        u.insert(
+            "Bar".to_string(),
+            Emote {
+                url_1x: "user".into(),
+                ..emote("Bar")
+            },
+        );
         cache.set_user_emotes(u);
 
         assert_eq!(cache.lookup("any", "Bar").unwrap().url_1x, "user");

@@ -60,9 +60,13 @@ pub struct SubAnniversaryInfo {
     pub renews_at: String,
 }
 
+/// One cache slot: when it was stored, the cookie status at fetch time, and
+/// the (optional) anniversary payload.
+type CacheEntry = (Instant, CookieStatus, Option<SubAnniversaryInfo>);
+
 /// In-memory TTL cache. Keyed by channel_login (lowercase recommended).
 pub struct Cache {
-    inner: Mutex<HashMap<String, (Instant, CookieStatus, Option<SubAnniversaryInfo>)>>,
+    inner: Mutex<HashMap<String, CacheEntry>>,
     ttl_some: Duration,
     ttl_none: Duration,
 }
@@ -86,17 +90,27 @@ impl Cache {
     pub fn get(&self, channel_login: &str) -> Option<(CookieStatus, Option<SubAnniversaryInfo>)> {
         let inner = self.inner.lock();
         let (stored_at, status, value) = inner.get(channel_login)?;
-        let ttl = if value.is_some() { self.ttl_some } else { self.ttl_none };
+        let ttl = if value.is_some() {
+            self.ttl_some
+        } else {
+            self.ttl_none
+        };
         if stored_at.elapsed() > ttl {
             return None;
         }
         Some((status.clone(), value.clone()))
     }
 
-    pub fn set(&self, channel_login: &str, status: CookieStatus, value: Option<SubAnniversaryInfo>) {
-        self.inner.lock().insert(channel_login.to_string(), (Instant::now(), status, value));
+    pub fn set(
+        &self,
+        channel_login: &str,
+        status: CookieStatus,
+        value: Option<SubAnniversaryInfo>,
+    ) {
+        self.inner
+            .lock()
+            .insert(channel_login.to_string(), (Instant::now(), status, value));
     }
-
 }
 
 impl Default for Cache {
@@ -140,9 +154,17 @@ pub fn parse_response(json: &serde_json::Value, channel_login: &str) -> Option<S
     // Validate ISO 8601 — reject malformed timestamps.
     let _: DateTime<Utc> = DateTime::parse_from_rfc3339(&renews_at_str).ok()?.into();
 
-    let tier = benefit.get("tier").and_then(|v| v.as_str()).unwrap_or("1000").to_string();
-    let is_prime = benefit.get("purchasedWithPrime").and_then(|v| v.as_bool()).unwrap_or(false);
-    let is_gift = benefit.get("gift")
+    let tier = benefit
+        .get("tier")
+        .and_then(|v| v.as_str())
+        .unwrap_or("1000")
+        .to_string();
+    let is_prime = benefit
+        .get("purchasedWithPrime")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let is_gift = benefit
+        .get("gift")
         .and_then(|g| g.as_object())
         .and_then(|g| g.get("isGift"))
         .and_then(|v| v.as_bool())
@@ -217,7 +239,10 @@ pub async fn check<R: tauri::Runtime>(
 ) -> CheckResult {
     // Cache hit (positive or negative)
     if let Some((status, value)) = cache.get(channel_login) {
-        return CheckResult { info: value, cookie_status: status };
+        return CheckResult {
+            info: value,
+            cookie_status: status,
+        };
     }
 
     // Cookie required
@@ -225,10 +250,15 @@ pub async fn check<R: tauri::Runtime>(
         Ok(Some(c)) => c,
         _ => {
             use tauri::Emitter;
-            let _ = app.emit("twitch:web_cookie_required",
-                serde_json::json!({ "reason": "missing" }));
+            let _ = app.emit(
+                "twitch:web_cookie_required",
+                serde_json::json!({ "reason": "missing" }),
+            );
             cache.set(channel_login, CookieStatus::Missing, None);
-            return CheckResult { info: None, cookie_status: CookieStatus::Missing };
+            return CheckResult {
+                info: None,
+                cookie_status: CookieStatus::Missing,
+            };
         }
     };
 
@@ -250,26 +280,42 @@ pub async fn check<R: tauri::Runtime>(
         Err(e) => {
             log::warn!("gql.twitch.tv (anniversary) network error: {e}");
             cache.set(channel_login, CookieStatus::Ok, None);
-            return CheckResult { info: None, cookie_status: CookieStatus::Ok };
+            return CheckResult {
+                info: None,
+                cookie_status: CookieStatus::Ok,
+            };
         }
     };
 
     let http_status = resp.status();
-    if http_status == reqwest::StatusCode::UNAUTHORIZED || http_status == reqwest::StatusCode::FORBIDDEN {
+    if http_status == reqwest::StatusCode::UNAUTHORIZED
+        || http_status == reqwest::StatusCode::FORBIDDEN
+    {
         log::warn!("anniversary GQL {http_status} — cookie expired, clearing");
         let _ = crate::auth::twitch_web::clear();
         use tauri::Emitter;
-        let _ = app.emit("twitch:web_cookie_required",
-            serde_json::json!({ "reason": "expired" }));
+        let _ = app.emit(
+            "twitch:web_cookie_required",
+            serde_json::json!({ "reason": "expired" }),
+        );
         let payload: Option<crate::auth::twitch_web::TwitchWebIdentity> = None;
         let _ = app.emit("twitch:web_status_changed", payload);
         cache.set(channel_login, CookieStatus::Expired, None);
-        return CheckResult { info: None, cookie_status: CookieStatus::Expired };
+        return CheckResult {
+            info: None,
+            cookie_status: CookieStatus::Expired,
+        };
     }
     if !http_status.is_success() {
-        log::warn!("anniversary GQL {http_status}: {}", resp.text().await.unwrap_or_default());
+        log::warn!(
+            "anniversary GQL {http_status}: {}",
+            resp.text().await.unwrap_or_default()
+        );
         cache.set(channel_login, CookieStatus::Ok, None);
-        return CheckResult { info: None, cookie_status: CookieStatus::Ok };
+        return CheckResult {
+            info: None,
+            cookie_status: CookieStatus::Ok,
+        };
     }
 
     let json: serde_json::Value = match resp.json().await {
@@ -277,7 +323,10 @@ pub async fn check<R: tauri::Runtime>(
         Err(e) => {
             log::warn!("anniversary GQL JSON parse: {e}");
             cache.set(channel_login, CookieStatus::Ok, None);
-            return CheckResult { info: None, cookie_status: CookieStatus::Ok };
+            return CheckResult {
+                info: None,
+                cookie_status: CookieStatus::Ok,
+            };
         }
     };
 
@@ -285,7 +334,10 @@ pub async fn check<R: tauri::Runtime>(
         Some(i) => i,
         None => {
             cache.set(channel_login, CookieStatus::Ok, None);
-            return CheckResult { info: None, cookie_status: CookieStatus::Ok };
+            return CheckResult {
+                info: None,
+                cookie_status: CookieStatus::Ok,
+            };
         }
     };
 
@@ -294,20 +346,29 @@ pub async fn check<R: tauri::Runtime>(
         Ok(dt) => dt.with_timezone(&Utc),
         Err(_) => {
             cache.set(channel_login, CookieStatus::Ok, None);
-            return CheckResult { info: None, cookie_status: CookieStatus::Ok };
+            return CheckResult {
+                info: None,
+                cookie_status: CookieStatus::Ok,
+            };
         }
     };
     let days_remaining = match compute_window(renews_at, Utc::now()) {
         Some(d) => d,
         None => {
             cache.set(channel_login, CookieStatus::Ok, None);
-            return CheckResult { info: None, cookie_status: CookieStatus::Ok };
+            return CheckResult {
+                info: None,
+                cookie_status: CookieStatus::Ok,
+            };
         }
     };
     info.days_remaining_in_window = days_remaining;
 
     cache.set(channel_login, CookieStatus::Ok, Some(info.clone()));
-    CheckResult { info: Some(info), cookie_status: CookieStatus::Ok }
+    CheckResult {
+        info: Some(info),
+        cookie_status: CookieStatus::Ok,
+    }
 }
 
 #[cfg(test)]
@@ -457,7 +518,10 @@ mod tests {
         let now = dt(2026, 5, 1, 12);
         let renews_at = now + chrono::Duration::days(365);
         let result = compute_window(renews_at, now);
-        assert!(result.is_some(), "annual sub triggers Some — known limitation");
+        assert!(
+            result.is_some(),
+            "annual sub triggers Some — known limitation"
+        );
     }
 
     use std::thread;

@@ -35,11 +35,9 @@ jobs:
 
       - name: Cargo fmt
         run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
-        continue-on-error: true   # tree has pre-existing fmt drift (formatted with an older rustfmt); make blocking once the tree is reformatted in one sweep
 
       - name: Cargo clippy
-        run: cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings
-        continue-on-error: true   # warnings won't block the PR while we tune them
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 
       - name: Cargo test
         run: cargo test --manifest-path src-tauri/Cargo.toml

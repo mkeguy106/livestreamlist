@@ -269,7 +269,10 @@ pub async fn login_via_webview(
     // get flipped on close. Pattern mirrors auth::chaturbate.
     let closed_for_event = closed.clone();
     window.on_window_event(move |event| {
-        if matches!(event, WindowEvent::Destroyed | WindowEvent::CloseRequested { .. }) {
+        if matches!(
+            event,
+            WindowEvent::Destroyed | WindowEvent::CloseRequested { .. }
+        ) {
             closed_for_event.store(true, Ordering::Relaxed);
         }
     });
@@ -281,9 +284,7 @@ pub async fn login_via_webview(
         // Close check FIRST — see chaturbate.rs comment for why this
         // ordering matters (cookies_for_url on a destroyed webview
         // can hang indefinitely).
-        if closed.load(Ordering::Relaxed)
-            || app.get_webview_window(LOGIN_WINDOW_LABEL).is_none()
-        {
+        if closed.load(Ordering::Relaxed) || app.get_webview_window(LOGIN_WINDOW_LABEL).is_none() {
             if let Some(id) = stored_identity() {
                 if Some(id.login.clone()) != initial_login {
                     return Ok(id);
@@ -307,7 +308,9 @@ pub async fn login_via_webview(
                             return Ok(identity);
                         }
                         Err(e) => {
-                            log::debug!("cookie present but validate failed (probably mid-login): {e:#}");
+                            log::debug!(
+                                "cookie present but validate failed (probably mid-login): {e:#}"
+                            );
                         }
                     }
                 }
@@ -320,9 +323,7 @@ pub async fn login_via_webview(
         // (handled by the AtomicBool above). The chaturbate reference has
         // a non-HTTPS-URL fallback because its custom titlebar used to
         // navigate to about:blank on cancel — we have no equivalent.
-        if closed.load(Ordering::Relaxed)
-            || app.get_webview_window(LOGIN_WINDOW_LABEL).is_none()
-        {
+        if closed.load(Ordering::Relaxed) || app.get_webview_window(LOGIN_WINDOW_LABEL).is_none() {
             if let Some(id) = stored_identity() {
                 if Some(id.login.clone()) != initial_login {
                     return Ok(id);
@@ -342,7 +343,9 @@ pub async fn login_via_webview(
 
 #[derive(Debug, thiserror::Error)]
 pub enum LoginError {
-    #[error("Web login is @{web} but app is logged in as @{oauth}. Log out of one before continuing.")]
+    #[error(
+        "Web login is @{web} but app is logged in as @{oauth}. Log out of one before continuing."
+    )]
     AccountMismatch { web: String, oauth: String },
     #[error("{0}")]
     Other(#[from] anyhow::Error),

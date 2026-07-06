@@ -61,7 +61,11 @@ fn resolve_ytdlp_url(url: &str) -> Option<String> {
         return None;
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
-    stdout.lines().next().map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+    stdout
+        .lines()
+        .next()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
 }
 
 pub struct PlayerManager {
@@ -128,7 +132,9 @@ impl PlayerManager {
                     c.arg(&url);
                 }
             }
-            c.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+            c.stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
             c
         } else {
             let mut c = Command::new("streamlink");
@@ -160,10 +166,14 @@ impl PlayerManager {
             cmd.creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW);
         }
 
-        let player_bin = if use_ytdlp(platform) { "mpv" } else { "streamlink" };
-        let child = cmd
-            .spawn()
-            .with_context(|| format!("spawning {player_bin} for {url} (is `{player_bin}` on PATH?)"))?;
+        let player_bin = if use_ytdlp(platform) {
+            "mpv"
+        } else {
+            "streamlink"
+        };
+        let child = cmd.spawn().with_context(|| {
+            format!("spawning {player_bin} for {url} (is `{player_bin}` on PATH?)")
+        })?;
         let pid = child.id();
 
         self.players.lock().insert(unique_key.clone(), pid as i32);
