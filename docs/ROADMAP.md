@@ -171,7 +171,8 @@ These are small-scoped UX fixes that don't belong under a "phase" but should lan
 - [x] **Settings persistence** (commit d3f5100) — `src-tauri/src/settings.rs`; settings serialize to `settings.json` in XDG config via the atomic-write helper.
 - [ ] **Theme editor** — live color-picker for every zinc scale + accent; persist to `~/.config/livestreamlist/themes/*.json`
 - [x] **Desktop notifications on go-live** (commit 50bf983) — Tauri's `tauri-plugin-notification`. `src-tauri/src/notify.rs` (`NotifyTracker` + `is_go_live` offline→live edge detection) fires a notification when a channel goes live, gated on `settings.general.notify_on_live`.
-- [ ] **Rich notification events + settings** — whispers/DMs, quiet-hours window, per-notification sound / urgency. (Go-live notifications shipped above.)
+- [x] **Notification core settings** (backend: PR #184; frontend: PR #185) — `settings.rs::NotificationSettings` (`enabled`, `sound_enabled`, `custom_sound_path`, `platform_filter` per Twitch/YouTube/Kick/Chaturbate, `quiet_hours_enabled` + `quiet_start`/`quiet_end` HH:MM) with a migration that absorbs the legacy `general.notify_on_live` bool into `notifications.enabled` on first load of an old `settings.json` (PR #184). A pure, unit-tested suppression gate (`notify::gate::should_notify`, evaluation order Disabled → ChannelMuted → PlatformFiltered → QuietHours; malformed quiet-hours times fail open rather than silently eating notifications) sits in front of every go-live fire (PR #184). Sound plays via `rodio` on a detached thread — bundled `notify.ogg` by default, or a user-picked file (any rodio-decodable format) via `custom_sound_path`, falling back to the bundled sound if the custom file is unreadable; playback never blocks the caller and failures only log (PR #184; diverges from the original per-OS `paplay`/`winsound`/`NSSound` plan below). Per-channel mute is a right-click "Mute notifications" toggle on channel rows (`set_channel_notify` IPC → `Channel.dont_notify`) plus a muted-glyph indicator on muted rows (PR #185). New Preferences → **Notifications** tab exposes the global toggle, platform filter, quiet-hours window, custom sound picker, and a single ▶ Test button (`notify_test` IPC, bypasses mute/platform-filter/quiet-hours by design so the user can always verify sound + notification delivery) (PR #185).
+- [ ] **Rich notification events** — whispers/mentions, raids, a recent-notifications log, and per-notification urgency/timeout. (Core settings — mute, sound, quiet hours, platform filter, test button — shipped above.)
 - [x] **System tray icon** (commit 50bf983) — `TrayIconBuilder` in `src-tauri/src/tray.rs` with a live-count tooltip and a Show / Hide / Refresh now / Quit menu.
 - [ ] **System tray — Qt parity** — bring the shipped tray up to Qt parity:
   - **Dynamic icon state** — the tray icon visually reflects whether anything is live: a red live-dot variant when ≥ 1 channel is live, a greyed / monochrome variant otherwise. Source from an SVG, rasterise at 22 px (Linux AppIndicator), 16 px (Windows shell), 18 px (macOS menu bar). Refresh the icon from `refresh_all`'s result each poll.
@@ -363,7 +364,7 @@ Gap analysis against the Qt app (`~/livestream.list.qt/`) — docs (`README.md`,
 - [ ] **Hide offline toggle** — one-click filter to show only currently-live channels. → Ph 3 follow-ups
 - [ ] **Last-seen timestamp** — `channels.json` records the last-live UTC timestamp per channel and the row shows "2h ago" / "3d ago" when offline. → new (data model change + row rendering)
 - [ ] **Auto-launch / auto-play channel flag + filter** — per-channel "A" toggle; filter to show only auto-launch channels; toolbar global auto-play master switch. → Ph 5 (pairs with external-player picker)
-- [ ] **Per-channel "don't notify" UI** — the `dont_notify` field exists on `Channel` but has no UI toggle today. → Ph 4 (preferences / per-row)
+- [x] **Per-channel "don't notify" UI** (PR #185) — right-click "Mute notifications" toggle on channel rows (`set_channel_notify` IPC) plus a muted-glyph row indicator; see Notification core settings above. → Ph 4 (preferences / per-row)
 - [ ] **Per-row icon visibility toggles** — independent show/hide for platform icon, play, stop, favorite, chat, browser icons in the channel row. → Ph 4 Appearance tab
 - [ ] **Per-row info toggles** — independent show/hide for live-duration and viewer-count on each row. → Ph 4
 - [ ] **Right-click context menu on channel rows** — Play / Close Channel / Open Chat / Open in Browser / Favorite. → Ph 3 follow-ups
@@ -461,16 +462,16 @@ Gap analysis against the Qt app (`~/livestream.list.qt/`) — docs (`README.md`,
 
 - [ ] **Smart no-flurry on startup** — suppress go-live notifications during the first refresh after launch; channels that were already live at startup are silently noted, only future transitions fire. → Ph 4 (fold into Desktop Notifications bullet)
 - [ ] **Urgency levels** — Low / Normal / Critical (maps to notify-send priority on Linux / criticality level on other OSes). → Ph 4
-- [ ] **Custom notification sound** — file picker for WAV / OGG / MP3 / FLAC / Opus; plays via `paplay`/`aplay`/`ffplay` on Linux, `winsound` on Windows, `NSSound` on macOS. → Ph 4
+- [x] **Custom notification sound** (backend: PR #184; frontend: PR #185) — shipped via `rodio` instead of the OS-native players originally proposed: a bundled `notify.ogg` default, with a Preferences file picker (`custom_sound_path`) for any rodio-decodable file, played fire-and-forget on a detached thread with fail-open-to-default behavior on read/decode error. → Ph 4
 - [ ] **Notification timeout (0–60 s)** — configurable dismiss time, 0 = system default. → Ph 4
-- [ ] **Per-platform notification filter** — independent toggles for Twitch / YouTube / Kick / Chaturbate. → Ph 4
+- [x] **Per-platform notification filter** (backend: PR #184; frontend: PR #185) — independent toggles for Twitch / YouTube / Kick / Chaturbate (`NotificationSettings.platform_filter`), evaluated in the suppression gate; UI lives in Preferences → Notifications. → Ph 4
 - [ ] **Raid notifications** — desktop notification fires on Twitch USERNOTICE `msg-id=raid` on any connected chat, independent of go-live events. → Ph 3 / Ph 4
 - [ ] **Mention notifications + distinct sound** — fire when `@{our_name}` appears in any connected chat; separate sound from go-live. → Ph 3 / Ph 4
 - [ ] **"Watch" action button on notifications** — click to directly `launch_stream` the target channel without focusing the window. → Ph 4
 - [ ] **Show-game / show-title toggles** — suppress game and/or title in the notification body for users who want the minimal "X is live!" form. → Ph 4
 - [ ] **Notification backend selector** — auto / `desktop-notifier` D-Bus / `notify-send` subprocess (Linux); a manual fallback when the auto-detect picks the wrong one. → Ph 4
 - [ ] **Flatpak-safe backend** — use `flatpak-spawn --host notify-send` when `FLATPAK_ID` is set so the sandbox doesn't swallow notifications. → Ph 4
-- [ ] **Test-notification buttons** in Preferences (test live sound + test mention sound). → Ph 4
+- [x] **Test-notification button** (backend: PR #184; frontend: PR #185) — shipped as a single ▶ Test button in Preferences → Notifications (`notify_test` IPC) rather than separate live-sound/mention-sound test rows (no mention notifications exist yet — see Rich notification events above); bypasses mute/platform-filter/quiet-hours so it always fires. → Ph 4
 
 ### Themes + appearance
 

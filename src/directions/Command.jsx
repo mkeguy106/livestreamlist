@@ -84,6 +84,7 @@ export default function Command({ ctx }) {
     openInBrowser,
     removeChannel,
     setFavorite,
+    setChannelNotify,
     onUsernameOpen,
     onUsernameContext,
     onUsernameHover,
@@ -403,6 +404,16 @@ export default function Command({ ctx }) {
 
                   {/* Viewers cluster — hidden in compact density and collapsed mode. */}
                   <div className="cmd-row-meta" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 }}>
+                    {ch.dont_notify && (
+                      <Tooltip text="Notifications muted">
+                        <span
+                          aria-label="Notifications muted"
+                          style={{ display: 'inline-flex', alignItems: 'center', color: 'var(--zinc-600)', lineHeight: 0 }}
+                        >
+                          <IconBellSlash />
+                        </span>
+                      </Tooltip>
+                    )}
                     <span className="rx-mono" style={{ fontSize: 10, color: 'var(--zinc-400)' }}>
                       {ch.is_live || (priv && ch.viewers != null) ? formatViewers(ch.viewers) : '—'}
                     </span>
@@ -540,6 +551,14 @@ export default function Command({ ctx }) {
             }}
           >
             {menu.channel.favorite ? 'Unpin from favorites' : 'Pin as favorite'}
+          </ContextMenu.Item>
+          <ContextMenu.Item
+            onClick={() => {
+              setChannelNotify(menu.channel.unique_key, !menu.channel.dont_notify);
+              setMenu(null);
+            }}
+          >
+            {menu.channel.dont_notify ? 'Unmute notifications' : 'Mute notifications'}
           </ContextMenu.Item>
           <ContextMenu.Separator />
           <ContextMenu.Item
@@ -705,6 +724,25 @@ function IconStar({ filled }) {
       strokeLinejoin="miter"
     >
       <path d="M6 1.2 L7.4 4.4 L11 4.8 L8.4 7.3 L9.1 11 L6 9.2 L2.9 11 L3.6 7.3 L1 4.8 L4.6 4.4 Z" />
+    </svg>
+  );
+}
+function IconBellSlash() {
+  return (
+    <svg
+      width="10"
+      height="10"
+      viewBox="0 0 12 12"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M3.5 8.5 C3.5 6.5 3.5 4.8 4.3 3.8 C4.9 3 5.9 2.5 6 2.5 C6.1 2.5 7.1 3 7.7 3.8 C8.1 4.3 8.3 5 8.4 5.8" />
+      <path d="M2 8.5 h8" />
+      <path d="M5 9.6 a1.2 1.2 0 0 0 2 0" />
+      <path d="M1.5 1.5 L10.5 10.5" />
     </svg>
   );
 }

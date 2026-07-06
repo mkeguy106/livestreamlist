@@ -19,6 +19,8 @@ export const addChannelFromInput = (input) => invoke('add_channel_from_input', {
 export const clipboardChannelUrl = () => invoke('clipboard_channel_url');
 export const removeChannel = (uniqueKey) => invoke('remove_channel', { uniqueKey });
 export const setFavorite = (uniqueKey, favorite) => invoke('set_favorite', { uniqueKey, favorite });
+export const setChannelNotify = (uniqueKey, mute) => invoke('set_channel_notify', { uniqueKey, mute });
+export const notifyTest = () => invoke('notify_test');
 export const refreshAll = () => invoke('refresh_all');
 export const refreshChannel = (uniqueKey) => invoke('refresh_channel', { uniqueKey });
 export const launchStream = (uniqueKey, quality) => invoke('launch_stream', { uniqueKey, quality });
@@ -135,6 +137,15 @@ let mockSettings = {
   general: { refresh_interval_seconds: 60, notify_on_live: true, close_to_tray: false, default_quality: 'best' },
   appearance: { default_layout: 'command', accent_override: '', live_color_override: '' },
   chat: { timestamp_24h: true, history_replay_count: 100 },
+  notifications: {
+    enabled: true,
+    sound_enabled: true,
+    custom_sound_path: '',
+    platform_filter: { twitch: true, youtube: true, kick: true, chaturbate: true },
+    quiet_hours_enabled: false,
+    quiet_start: '23:00',
+    quiet_end: '08:00',
+  },
 };
 
 function mockSnapshot() {
@@ -381,6 +392,16 @@ async function mockInvoke(name, args) {
         `${c.platform}:${c.channel_id}` === args.uniqueKey ? { ...c, favorite: args.favorite } : c,
       );
       return true;
+    case 'set_channel_notify': {
+      const exists = mockChannels.some((c) => `${c.platform}:${c.channel_id}` === args.uniqueKey);
+      mockChannels = mockChannels.map((c) =>
+        `${c.platform}:${c.channel_id}` === args.uniqueKey ? { ...c, dont_notify: args.mute } : c,
+      );
+      return exists;
+    }
+    case 'notify_test':
+      console.log('[mock] notify_test — would fire a desktop notification + sound');
+      return null;
     case 'launch_stream':
       console.warn(`[mock] launch_stream ${args.uniqueKey} @ quality=${args.quality ?? '(default)'}`, args);
       mockPlaying.add(args.uniqueKey);

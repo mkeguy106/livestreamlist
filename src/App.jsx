@@ -21,7 +21,7 @@ import { useLivestreams } from './hooks/useLivestreams.js';
 import { usePreferences } from './hooks/usePreferences.jsx';
 import { useNicknames } from './hooks/useNicknames.jsx';
 import { useUserCard } from './hooks/useUserCard.js';
-import { getUserMetadata, launchStream, listenEvent, openInBrowser, openUrl, removeChannel, setFavorite, setUserMetadata } from './ipc.js';
+import { getUserMetadata, launchStream, listenEvent, openInBrowser, openUrl, removeChannel, setChannelNotify, setFavorite, setUserMetadata } from './ipc.js';
 import { userChannelUrl } from './utils/format.js';
 
 const LAYOUTS = [
@@ -312,6 +312,8 @@ export default function App() {
         .catch((e) => console.error('remove_channel', e)),
     setFavorite: (key, fav) =>
       setFavorite(key, fav).then(refresh).catch((e) => console.error('set_favorite', e)),
+    setChannelNotify: (key, mute) =>
+      setChannelNotify(key, mute).then(refresh).catch((e) => console.error('set_channel_notify', e)),
     onUsernameOpen,
     onUsernameContext,
     onUsernameHover,
