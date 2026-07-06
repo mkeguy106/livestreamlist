@@ -100,7 +100,7 @@ src-tauri/                   # Rust backend
     ├── channels.rs          # Channel, Livestream, ChannelStore (disk + in-memory)
     ├── platforms/
     │   ├── mod.rs           # Platform enum + URL autodetect parser (unit-tested)
-    │   └── twitch.rs        # GraphQL live-status client (batched ≤ 35 / request; chunks awaited serially, not in parallel)
+    │   └── twitch.rs        # GraphQL live-status client (batched ≤ 35 / request; chunks run concurrently, capped at 4 in-flight; 5-min 429 cooldown)
     ├── refresh.rs           # Orchestrates refresh_all across platforms
     ├── spellcheck/
     │   ├── mod.rs           # SpellChecker — per-language Hunspell cache, personal dict
@@ -186,7 +186,7 @@ Events are strictly one-way (Rust → UI). UI never emits events; it calls invok
 - `Channel` — persisted: platform, channel_id, display_name, favorite, dont_notify, auto_play, added_at
 - `Livestream` — transient: live/off, title, game, viewers, started_at, thumbnail_url, last_checked, error
 - `unique_key` = `"{platform}:{channel_id}"` (the identifier used everywhere: storage, IPC, event topics, React keys)
-- `ChannelStore` is held in `Arc<Mutex<…>>` (parking_lot) — no async locks; the store is memory-fast. **Caveat**: the mutating methods (`add` / `remove` / etc.) call `self.save()` — a synchronous `atomic_write` to `channels.json` — while the parking_lot lock is still held (callers do `store.lock().add(…)`). So a channel mutation currently does blocking disk I/O under the lock. Fine at current scale (rare, small file), but a known perf item if writes get hot or the file grows.
+- `ChannelStore` is held in `Arc<Mutex<…>>` (parking_lot) — no async locks; the store is memory-fast. The mutating methods (`add` / `add_many` / `remove` / `set_favorite` / `update_channel_display_name`) are **pure in-memory** — they no longer touch disk. Persistence happens **outside the lock** via the free `channels::persist(&store)` function: it serializes the channel list under the lock (a cheap in-memory clone via `serialize_channels`), drops the guard, then runs the blocking `atomic_write` to `channels.json`. Every mutation call site (in `lib.rs` and `refresh.rs`) calls `persist` after its mutation returns. Bulk imports use `add_many` (one lock acquisition, one `persist`) instead of an O(n) add-and-save loop.
 
 ### Chat architecture
 

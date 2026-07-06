@@ -253,12 +253,15 @@ impl ChannelStore {
         })
     }
 
-    pub fn save(&self) -> Result<()> {
-        let path = config::channels_path()?;
+    /// Serialize the current channel list to pretty JSON bytes. Cheap
+    /// in-memory work meant to run *under* the store lock; the resulting
+    /// bytes are then handed to `atomic_write` after the guard drops (see
+    /// the free `persist` function). Keeps blocking disk I/O off the lock.
+    pub fn serialize_channels(&self) -> Result<Vec<u8>> {
         let json = serde_json::to_vec_pretty(&Persisted {
             channels: self.channels.clone(),
         })?;
-        config::atomic_write(&path, &json)
+        Ok(json)
     }
 
     pub fn channels(&self) -> &[Channel] {
@@ -271,64 +274,75 @@ impl ChannelStore {
             .any(|c| c.platform == platform && c.channel_id.eq_ignore_ascii_case(channel_id))
     }
 
+    /// Insert a channel if not already present. Pure in-memory — the caller
+    /// persists via the free `persist` function *after* dropping the lock.
     pub fn add(&mut self, channel: Channel) -> Result<()> {
         if self.contains(channel.platform, &channel.channel_id) {
             anyhow::bail!("{} is already in the list", channel.unique_key());
         }
         self.channels.push(channel);
-        self.save()
+        Ok(())
     }
 
-    pub fn remove(&mut self, unique_key: &str) -> Result<bool> {
+    /// Insert a batch of channels under a single lock acquisition, skipping any
+    /// that are already present (including duplicates within `channels` itself,
+    /// since `contains` sees each prior push). Returns the count actually added.
+    /// Pure in-memory — the caller persists once after this returns, avoiding
+    /// the O(n) file rewrites a per-channel `add` + save loop would incur on a
+    /// large follow-list import.
+    pub fn add_many(&mut self, channels: Vec<Channel>) -> usize {
+        let mut added = 0;
+        for channel in channels {
+            if self.contains(channel.platform, &channel.channel_id) {
+                continue;
+            }
+            self.channels.push(channel);
+            added += 1;
+        }
+        added
+    }
+
+    /// Remove a channel. Pure in-memory — caller persists after unlocking.
+    /// Returns whether a channel was actually removed.
+    pub fn remove(&mut self, unique_key: &str) -> bool {
         let before = self.channels.len();
         self.channels.retain(|c| c.unique_key() != unique_key);
         let removed = self.channels.len() != before;
         if removed {
             self.livestreams.remove(unique_key);
-            self.save()?;
         }
-        Ok(removed)
+        removed
     }
 
-    pub fn set_favorite(&mut self, unique_key: &str, favorite: bool) -> Result<bool> {
-        let mut touched = false;
+    /// Toggle a channel's favorite flag. Pure in-memory — caller persists
+    /// after unlocking. Returns whether the flag was found and set.
+    pub fn set_favorite(&mut self, unique_key: &str, favorite: bool) -> bool {
         for c in &mut self.channels {
             if c.unique_key() == unique_key {
                 c.favorite = favorite;
-                touched = true;
-                break;
+                return true;
             }
         }
-        if touched {
-            self.save()?;
-        }
-        Ok(touched)
+        false
     }
 
     /// Update the persisted `display_name` for a channel. Used by the
     /// refresh path to backfill the friendly channel name once a
     /// platform hands it to us — e.g. a YouTube channel added via its
     /// UC URL has `display_name == channel_id` until yt-dlp returns the
-    /// real name. No-op if the name already matches.
-    pub fn update_channel_display_name(
-        &mut self,
-        unique_key: &str,
-        new_name: &str,
-    ) -> Result<bool> {
-        let mut touched = false;
+    /// real name. No-op if the name already matches. Pure in-memory —
+    /// caller persists after unlocking. Returns whether the name changed.
+    pub fn update_channel_display_name(&mut self, unique_key: &str, new_name: &str) -> bool {
         for c in &mut self.channels {
             if c.unique_key() == unique_key {
                 if c.display_name != new_name {
                     c.display_name = new_name.to_string();
-                    touched = true;
+                    return true;
                 }
-                break;
+                return false;
             }
         }
-        if touched {
-            self.save()?;
-        }
-        Ok(touched)
+        false
     }
 
     pub fn upsert_livestream(&mut self, ls: Livestream) {
@@ -424,6 +438,17 @@ impl ChannelStore {
 }
 
 pub type SharedStore = Arc<Mutex<ChannelStore>>;
+
+/// Persist the store's channel list to disk. Serializes the channel list
+/// under the lock (a fast in-memory clone) and then writes to disk *after*
+/// the guard has dropped, so the blocking `atomic_write` never runs while
+/// the parking_lot Mutex is held. Call this after any mutation
+/// (`add` / `add_many` / `remove` / `set_favorite` / `update_channel_display_name`).
+pub fn persist(store: &SharedStore) -> Result<()> {
+    let data = { store.lock().serialize_channels()? };
+    let path = config::channels_path()?;
+    config::atomic_write(&path, &data)
+}
 
 #[cfg(test)]
 mod tests {
@@ -686,6 +711,37 @@ mod tests {
         assert!(!store.livestreams.contains_key("youtube:UCnasa:v1"));
         assert!(!store.livestreams.contains_key("youtube:UCnasa:v2"));
         assert!(store.youtube_miss_counts.is_empty());
+    }
+
+    #[test]
+    fn add_many_inserts_new_and_dedups_existing_and_intra_batch() {
+        let mut store = ChannelStore {
+            channels: vec![test_channel(Platform::Twitch, "ninja")],
+            livestreams: HashMap::new(),
+            youtube_miss_counts: HashMap::new(),
+        };
+        let added = store.add_many(vec![
+            test_channel(Platform::Twitch, "ninja"), // dup of existing
+            test_channel(Platform::Twitch, "Ninja"), // dup, case-insensitive
+            test_channel(Platform::Kick, "adin"),    // new
+            test_channel(Platform::Kick, "adin"),    // dup within this batch
+            test_channel(Platform::Youtube, "UC1"),  // new
+        ]);
+        assert_eq!(added, 2, "only the two genuinely-new channels count");
+        assert_eq!(store.channels().len(), 3);
+        assert!(store.contains(Platform::Kick, "adin"));
+        assert!(store.contains(Platform::Youtube, "UC1"));
+    }
+
+    #[test]
+    fn add_many_empty_batch_adds_nothing() {
+        let mut store = ChannelStore {
+            channels: vec![test_channel(Platform::Twitch, "ninja")],
+            livestreams: HashMap::new(),
+            youtube_miss_counts: HashMap::new(),
+        };
+        assert_eq!(store.add_many(vec![]), 0);
+        assert_eq!(store.channels().len(), 1);
     }
 
     #[test]

@@ -1,10 +1,46 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::sync::OnceLock;
+use std::time::{Duration, Instant};
 
 const GQL_URL: &str = "https://gql.twitch.tv/gql";
+
+/// When gql.twitch.tv answers a live-status batch with HTTP 429, refreshes
+/// within this window are skipped so we don't keep hammering a rate-limited
+/// endpoint at every 60 s poll tick. Mirrors the YouTube cooldown pattern
+/// (`platforms::youtube`), sized shorter (5 min) since a GQL 429 clears fast.
+const RATE_LIMIT_COOLDOWN: Duration = Duration::from_secs(5 * 60);
+
+static RATE_LIMITED_UNTIL: OnceLock<Mutex<Option<Instant>>> = OnceLock::new();
+
+fn rate_limit_state() -> &'static Mutex<Option<Instant>> {
+    RATE_LIMITED_UNTIL.get_or_init(|| Mutex::new(None))
+}
+
+/// Pure cooldown gate: is `now` before the recorded `deadline`? Extracted so
+/// the time-based logic is unit-testable without touching the global state.
+fn cooldown_active(deadline: Option<Instant>, now: Instant) -> bool {
+    deadline.map(|d| now < d).unwrap_or(false)
+}
+
+/// True when a previous batch tripped Twitch's rate-limit and the cooldown is
+/// still in effect. `refresh.rs` checks this to skip the Twitch fan-out and
+/// reuse cached live status instead of piling more 429s on top.
+pub fn is_rate_limited() -> bool {
+    cooldown_active(*rate_limit_state().lock(), Instant::now())
+}
+
+fn mark_rate_limited() {
+    *rate_limit_state().lock() = Some(Instant::now() + RATE_LIMIT_COOLDOWN);
+    log::warn!(
+        "Twitch rate-limit (429) detected — pausing Twitch refreshes for {} min",
+        RATE_LIMIT_COOLDOWN.as_secs() / 60
+    );
+}
 
 // Public web client ID — the one twitch.tv itself uses from the browser for
 // unauthenticated public reads. Used only for gql.twitch.tv anonymous calls.
@@ -208,6 +244,12 @@ pub struct SocialLink {
 
 const BATCH_CAP: usize = 35;
 
+/// Max in-flight GraphQL batches. Each batch is ≤ BATCH_CAP logins, so a user
+/// with hundreds of Twitch follows produces ~10 batches; firing them all at
+/// once risks a 429 from gql.twitch.tv. 4 keeps the burst bounded while still
+/// overlapping request latency (matches the Chaturbate fallback's cap).
+const BATCH_CONCURRENCY: usize = 4;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TwitchLive {
     pub channel_id: String,
@@ -234,10 +276,31 @@ pub async fn fetch_live(
     client: &reqwest::Client,
     logins: &[String],
 ) -> Result<HashMap<String, TwitchLive>> {
+    use futures_util::stream::{self, StreamExt};
+
+    // Run the ≤ BATCH_CAP-login batches concurrently (bounded by
+    // BATCH_CONCURRENCY) instead of awaiting each serially. Error semantics are
+    // preserved: any failing batch propagates via `?`, so the whole fetch fails
+    // exactly as the serial version did (refresh.rs then falls back to the
+    // cached snapshot for Twitch).
+    //
+    // Chunks are cloned into owned Vecs and the client is cloned per task
+    // (a cheap Arc bump) so the spawned batch futures own their data — passing
+    // borrowed `&[String]` slices through `buffer_unordered` trips a
+    // higher-ranked-lifetime error when this fn is wrapped by `#[tauri::command]`.
+    let chunks: Vec<Vec<String>> = logins.chunks(BATCH_CAP).map(<[String]>::to_vec).collect();
+    let batches: Vec<Result<HashMap<String, TwitchLive>>> = stream::iter(chunks)
+        .map(|chunk| {
+            let client = client.clone();
+            async move { fetch_live_inner(&client, &chunk).await }
+        })
+        .buffer_unordered(BATCH_CONCURRENCY)
+        .collect()
+        .await;
+
     let mut out = HashMap::new();
-    for chunk in logins.chunks(BATCH_CAP) {
-        let batch = fetch_live_inner(client, chunk).await?;
-        out.extend(batch);
+    for batch in batches {
+        out.extend(batch?);
     }
     Ok(out)
 }
@@ -264,6 +327,9 @@ async fn fetch_live_inner(
         .context("POST gql.twitch.tv")?;
 
     if !resp.status().is_success() {
+        if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            mark_rate_limited();
+        }
         anyhow::bail!(
             "Twitch GraphQL {}: {}",
             resp.status(),
@@ -465,4 +531,29 @@ fn parse_stream(s: &Value) -> Option<TwitchStream> {
             .and_then(|v| v.as_str())
             .map(String::from),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cooldown_inactive_when_no_deadline() {
+        assert!(!cooldown_active(None, Instant::now()));
+    }
+
+    #[test]
+    fn cooldown_active_before_deadline() {
+        let now = Instant::now();
+        let deadline = now + Duration::from_secs(60);
+        assert!(cooldown_active(Some(deadline), now));
+    }
+
+    #[test]
+    fn cooldown_inactive_after_deadline() {
+        let now = Instant::now();
+        // Deadline already in the past relative to `now`.
+        let deadline = now - Duration::from_secs(1);
+        assert!(!cooldown_active(Some(deadline), now));
+    }
 }
