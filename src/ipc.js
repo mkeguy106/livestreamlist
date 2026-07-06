@@ -137,6 +137,15 @@ let mockSettings = {
   general: { refresh_interval_seconds: 60, notify_on_live: true, close_to_tray: false, default_quality: 'best' },
   appearance: { default_layout: 'command', accent_override: '', live_color_override: '' },
   chat: { timestamp_24h: true, history_replay_count: 100 },
+  notifications: {
+    enabled: true,
+    sound_enabled: true,
+    custom_sound_path: '',
+    platform_filter: { twitch: true, youtube: true, kick: true, chaturbate: true },
+    quiet_hours_enabled: false,
+    quiet_start: '23:00',
+    quiet_end: '08:00',
+  },
 };
 
 function mockSnapshot() {

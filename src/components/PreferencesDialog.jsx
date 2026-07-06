@@ -1,15 +1,19 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useAuth } from '../hooks/useAuth.jsx';
 import { usePreferences } from '../hooks/usePreferences.jsx';
-import { formatRelative } from '../utils/format.js';
+import { formatRelative, platformLetter } from '../utils/format.js';
 import Tooltip from './Tooltip.jsx';
 import SidebarPositionPicker from './SidebarPositionPicker.jsx';
+import ConfirmDialog from './ConfirmDialog.jsx';
 import { QUALITY_OPTIONS } from './PlaySplitButton.jsx';
 import {
   importTwitchFollows,
   importYoutubeSubscriptions,
   importChaturbateFollows,
   listBlockedUsers,
+  listChannels,
+  notifyTest,
+  setChannelNotify,
   setUserMetadata,
   spellcheckListDicts,
   twitchWebLogin,
@@ -20,6 +24,7 @@ const TABS = [
   { id: 'general', label: 'General' },
   { id: 'appearance', label: 'Appearance' },
   { id: 'chat', label: 'Chat' },
+  { id: 'notifications', label: 'Notifications' },
   { id: 'accounts', label: 'Accounts' },
 ];
 
@@ -210,6 +215,7 @@ export default function PreferencesDialog({ open, onClose }) {
           {settings && tab === 'general' && <GeneralTab settings={settings} patch={patch} />}
           {settings && tab === 'appearance' && <AppearanceTab settings={settings} patch={patch} />}
           {settings && tab === 'chat' && <ChatTab settings={settings} patch={patch} />}
+          {settings && tab === 'notifications' && <NotificationsTab settings={settings} patch={patch} />}
           {tab === 'accounts' && <AccountsTab />}
         </div>
       </div>
@@ -901,16 +907,6 @@ function GeneralTab({ settings, patch }) {
       </Row>
 
       <Row
-        label="Notify when a channel goes live"
-        hint="Desktop notification when an offline channel transitions to live."
-      >
-        <Toggle
-          checked={g.notify_on_live}
-          onChange={(v) => patch((prev) => ({ ...prev, general: { ...prev.general, notify_on_live: v } }))}
-        />
-      </Row>
-
-      <Row
         label="Close to tray"
         hint="Clicking the window close button hides the app to the tray instead of quitting. Quit from the tray menu to exit."
       >
@@ -1292,6 +1288,331 @@ function BlockedUsersList() {
         </div>
       )}
     </div>
+  );
+}
+
+const NOTIFICATION_PLATFORMS = [
+  { id: 'twitch', label: 'Twitch' },
+  { id: 'youtube', label: 'YouTube' },
+  { id: 'kick', label: 'Kick' },
+  { id: 'chaturbate', label: 'Chaturbate' },
+];
+
+const QUIET_TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+function NotificationsTab({ settings, patch }) {
+  const n = settings.notifications || {};
+  const patchN = (fields) =>
+    patch((prev) => ({ ...prev, notifications: { ...prev.notifications, ...fields } }));
+  const enabled = n.enabled !== false; // default on
+
+  return (
+    <>
+      <Row
+        label="Enable notifications"
+        hint="Desktop notification (and optional sound) when a channel goes live."
+      >
+        <Toggle checked={enabled} onChange={(v) => patchN({ enabled: v })} />
+      </Row>
+
+      <NotificationSoundRow n={n} patchN={patchN} disabled={!enabled} />
+      <NotificationPlatformsRow n={n} patchN={patchN} disabled={!enabled} />
+      <NotificationQuietHoursRow n={n} patchN={patchN} disabled={!enabled} />
+      <MutedChannelsRow />
+    </>
+  );
+}
+
+function NotificationSoundRow({ n, patchN, disabled }) {
+  const soundEnabled = n.sound_enabled !== false; // default on
+  const hasCustomPath = !!n.custom_sound_path;
+
+  const browse = async () => {
+    try {
+      const { open } = await import('@tauri-apps/plugin-dialog');
+      const f = await open({ filters: [{ name: 'Audio', extensions: ['ogg', 'wav', 'mp3', 'flac'] }] });
+      if (f) patchN({ custom_sound_path: f });
+    } catch (e) {
+      // Browser-dev mock mode: the dialog plugin isn't wired to a native
+      // picker. Degrade gracefully rather than throwing into the UI.
+      console.warn('[notifications] file picker unavailable (mock mode?)', e);
+    }
+  };
+
+  return (
+    <>
+      <Row
+        label="Play sound"
+        hint={disabled ? 'Requires notifications to be enabled.' : 'Plays a chime alongside the desktop notification.'}
+      >
+        <Toggle
+          checked={soundEnabled && !disabled}
+          disabled={disabled}
+          onChange={(v) => patchN({ sound_enabled: v })}
+        />
+      </Row>
+
+      <Row label="" hint="Fires a real notification. Ignores quiet hours.">
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <span
+            className="rx-mono"
+            style={{
+              fontSize: 'var(--t-11)',
+              color: 'var(--zinc-400)',
+              flex: 1,
+              minWidth: 80,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {n.custom_sound_path || 'Default chime'}
+          </span>
+          <button type="button" className="rx-btn rx-btn-ghost" disabled={disabled} onClick={browse}>
+            Browse…
+          </button>
+          {hasCustomPath && (
+            <button
+              type="button"
+              className="rx-btn rx-btn-ghost"
+              disabled={disabled}
+              onClick={() => patchN({ custom_sound_path: '' })}
+            >
+              Reset
+            </button>
+          )}
+          <button
+            type="button"
+            className="rx-btn rx-btn-ghost"
+            disabled={disabled}
+            onClick={() => notifyTest().catch(console.error)}
+          >
+            ▶ Test
+          </button>
+        </div>
+      </Row>
+    </>
+  );
+}
+
+function NotificationPlatformsRow({ n, patchN, disabled }) {
+  const pf = n.platform_filter || {};
+  return (
+    <Row
+      label="Platforms"
+      hint={disabled ? 'Requires notifications to be enabled.' : 'Only notify for channels on the platforms checked here.'}
+    >
+      <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+        {NOTIFICATION_PLATFORMS.map((p) => {
+          const checked = pf[p.id] !== false; // default on
+          return (
+            <label
+              key={p.id}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+                cursor: disabled ? 'not-allowed' : 'pointer',
+                opacity: disabled ? 0.5 : 1,
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={checked && !disabled}
+                disabled={disabled}
+                onChange={(e) => patchN({ platform_filter: { ...pf, [p.id]: e.target.checked } })}
+              />
+              <span className={`rx-plat ${platformLetter(p.id)}`} style={{ fontSize: 11 }}>
+                {p.label}
+              </span>
+            </label>
+          );
+        })}
+      </div>
+    </Row>
+  );
+}
+
+function NotificationQuietHoursRow({ n, patchN, disabled }) {
+  const quietRaw = n.quiet_hours_enabled === true;
+  const [startText, setStartText] = useState(n.quiet_start || '23:00');
+  const [endText, setEndText] = useState(n.quiet_end || '08:00');
+  const [startInvalid, setStartInvalid] = useState(false);
+  const [endInvalid, setEndInvalid] = useState(false);
+
+  const commitStart = () => {
+    if (QUIET_TIME_RE.test(startText)) {
+      setStartInvalid(false);
+      patchN({ quiet_start: startText });
+    } else {
+      setStartInvalid(true);
+    }
+  };
+  const commitEnd = () => {
+    if (QUIET_TIME_RE.test(endText)) {
+      setEndInvalid(false);
+      patchN({ quiet_end: endText });
+    } else {
+      setEndInvalid(true);
+    }
+  };
+
+  const inputsDisabled = disabled || !quietRaw;
+
+  return (
+    <Row
+      label="Quiet hours"
+      hint={disabled ? 'Requires notifications to be enabled.' : 'Notifications are suppressed between these times (may wrap midnight).'}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <Toggle
+          checked={quietRaw && !disabled}
+          disabled={disabled}
+          onChange={(v) => patchN({ quiet_hours_enabled: v })}
+        />
+        <input
+          className="rx-input"
+          value={startText}
+          disabled={inputsDisabled}
+          onChange={(e) => setStartText(e.target.value)}
+          onBlur={commitStart}
+          style={{
+            width: 64,
+            boxSizing: 'border-box',
+            borderColor: startInvalid ? 'var(--live)' : undefined,
+          }}
+        />
+        <span style={{ color: 'var(--zinc-500)' }}>–</span>
+        <input
+          className="rx-input"
+          value={endText}
+          disabled={inputsDisabled}
+          onChange={(e) => setEndText(e.target.value)}
+          onBlur={commitEnd}
+          style={{
+            width: 64,
+            boxSizing: 'border-box',
+            borderColor: endInvalid ? 'var(--live)' : undefined,
+          }}
+        />
+      </div>
+    </Row>
+  );
+}
+
+function MutedChannelsRow() {
+  const [channels, setChannels] = useState([]);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [unmuting, setUnmuting] = useState(false);
+
+  const refresh = useCallback(() => {
+    listChannels().then(setChannels).catch(() => setChannels([]));
+  }, []);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  const muted = channels.filter((c) => c.dont_notify);
+
+  const unmuteOne = async (uniqueKey) => {
+    try {
+      await setChannelNotify(uniqueKey, false);
+    } catch (e) {
+      console.error('set_channel_notify', e);
+    }
+    refresh();
+  };
+
+  const unmuteAll = async () => {
+    setUnmuting(true);
+    try {
+      // Sequentially, not Promise.all — mirrors the "review/bulk surface"
+      // framing: this is a deliberate confirm-then-batch action, not a hot
+      // path, and sequential calls keep the store's persist-per-mutation
+      // writes from racing each other.
+      for (const c of muted) {
+        await setChannelNotify(`${c.platform}:${c.channel_id}`, false);
+      }
+    } finally {
+      setUnmuting(false);
+      setConfirmOpen(false);
+      refresh();
+    }
+  };
+
+  return (
+    <Row
+      label="Muted channels"
+      hint="Excluded from live notifications. Mute/unmute a single channel from its right-click menu."
+    >
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {muted.length === 0 ? (
+          <div style={{ color: 'var(--zinc-500)', fontSize: 'var(--t-11)' }}>No muted channels.</div>
+        ) : (
+          <>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 180, overflow: 'auto' }}>
+              {muted.map((c) => {
+                const key = `${c.platform}:${c.channel_id}`;
+                return (
+                  <div
+                    key={key}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: 8,
+                      padding: '6px 8px',
+                      background: 'var(--zinc-900)',
+                      border: 'var(--hair)',
+                      borderRadius: 'var(--r-1)',
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                      <span className={`rx-plat ${platformLetter(c.platform)}`}>
+                        {c.platform.charAt(0).toUpperCase()}
+                      </span>
+                      <span
+                        style={{
+                          color: 'var(--zinc-200)',
+                          fontSize: 'var(--t-12)',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        {c.display_name}
+                      </span>
+                    </div>
+                    <button type="button" className="rx-btn rx-btn-ghost" onClick={() => unmuteOne(key)}>
+                      Unmute
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+            <button
+              type="button"
+              className="rx-btn rx-btn-ghost"
+              style={{ alignSelf: 'flex-start' }}
+              onClick={() => setConfirmOpen(true)}
+            >
+              Unmute all
+            </button>
+          </>
+        )}
+      </div>
+
+      <ConfirmDialog
+        open={confirmOpen}
+        title="Unmute all channels?"
+        body={`Restores live notifications for ${muted.length} channel${muted.length === 1 ? '' : 's'}.`}
+        confirmLabel={unmuting ? 'Unmuting…' : 'Unmute all'}
+        cancelLabel="Cancel"
+        onConfirm={unmuteAll}
+        onClose={() => setConfirmOpen(false)}
+      />
+    </Row>
   );
 }
 
