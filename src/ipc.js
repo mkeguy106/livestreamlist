@@ -285,11 +285,24 @@ async function mockInvoke(name, args) {
       ];
     case 'list_emotes':
       return [
-        { name: 'Kappa',    url_1x: 'https://static-cdn.jtvnw.net/emoticons/v2/25/default/dark/1.0', url_2x: null, url_4x: null, animated: false },
-        { name: 'PogChamp', url_1x: 'https://static-cdn.jtvnw.net/emoticons/v2/305954156/default/dark/1.0', url_2x: null, url_4x: null, animated: false },
-        { name: 'LUL',      url_1x: 'https://static-cdn.jtvnw.net/emoticons/v2/425618/default/dark/1.0', url_2x: null, url_4x: null, animated: false },
-        { name: 'Kreygasm', url_1x: 'https://static-cdn.jtvnw.net/emoticons/v2/41/default/dark/1.0', url_2x: null, url_4x: null, animated: false },
-        { name: 'peepoClap',url_1x: '', url_2x: null, url_4x: null, animated: false },
+        // Channel emotes
+        { name: 'peepoClap', url_1x: '', url_2x: null, url_4x: null, animated: false, provider: 'twitch', origin: 'channel', locked: true },
+        { name: 'customEmote', url_1x: 'https://example.com/custom.png', url_2x: null, url_4x: null, animated: false, provider: 'twitch', origin: 'channel', locked: false },
+        // Logged-in user's own Twitch emotes
+        { name: 'Kappa', url_1x: 'https://static-cdn.jtvnw.net/emoticons/v2/25/default/dark/1.0', url_2x: null, url_4x: null, animated: false, provider: 'twitch', origin: 'user', locked: false },
+        { name: 'PogChamp', url_1x: 'https://static-cdn.jtvnw.net/emoticons/v2/305954156/default/dark/1.0', url_2x: null, url_4x: null, animated: false, provider: 'twitch', origin: 'user', locked: false },
+        { name: 'LUL', url_1x: 'https://static-cdn.jtvnw.net/emoticons/v2/425618/default/dark/1.0', url_2x: null, url_4x: null, animated: false, provider: 'twitch', origin: 'user', locked: false },
+        { name: 'Kreygasm', url_1x: 'https://static-cdn.jtvnw.net/emoticons/v2/41/default/dark/1.0', url_2x: null, url_4x: null, animated: false, provider: 'twitch', origin: 'user', locked: false },
+        // 7TV emotes
+        { name: 'GOTTEM', url_1x: 'https://cdn.7tv.app/emotes/6179ee7e9b2c2b000d57a79b/1x', url_2x: null, url_4x: null, animated: true, provider: '7tv', origin: 'global', locked: false },
+        { name: 'MonkaS', url_1x: 'https://cdn.7tv.app/emotes/6166c3a1b20a1f000d8cfa95/1x', url_2x: null, url_4x: null, animated: false, provider: '7tv', origin: 'global', locked: false },
+        // BTTV emotes
+        { name: 'Clap', url_1x: 'https://cdn.betterttv.net/emote/55028cd2135896936880fdd7/1x', url_2x: null, url_4x: null, animated: false, provider: 'bttv', origin: 'global', locked: false },
+        { name: 'SourPls', url_1x: 'https://cdn.betterttv.net/emote/54fa8f1401e369093a3a747c/1x', url_2x: null, url_4x: null, animated: true, provider: 'bttv', origin: 'global', locked: false },
+        // FFZ emotes
+        { name: 'Huh', url_1x: 'https://cdn.frankerfacez.com/emoticon/1/1', url_2x: null, url_4x: null, animated: false, provider: 'ffz', origin: 'global', locked: false },
+        // Kick emotes
+        { name: 'KickEmote', url_1x: 'https://example.com/kick.png', url_2x: null, url_4x: null, animated: false, provider: 'kick', origin: 'global', locked: false },
       ];
     case 'auth_status':
       return {

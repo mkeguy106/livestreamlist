@@ -4,6 +4,7 @@ import { shouldAutocorrect, isPastWord, rangeAtCaret } from '../utils/autocorrec
 import Tooltip from './Tooltip.jsx';
 import SpellcheckOverlay from './SpellcheckOverlay.jsx';
 import SpellcheckContextMenu from './SpellcheckContextMenu.jsx';
+import EmotePicker from './EmotePicker.jsx';
 import { useSpellcheck } from '../hooks/useSpellcheck.js';
 import { usePreferences } from '../hooks/usePreferences.jsx';
 
@@ -102,6 +103,7 @@ export default function Composer({
   const [error, setError] = useState(null);
   const [emotes, setEmotes] = useState([]);
   const [popup, setPopup] = useState(null); // { kind, query, start, items, index }
+  const [pickerOpen, setPickerOpen] = useState(false);
   const inputRef = useRef(null);
   const [caret, setCaret] = useState(0);
 
@@ -130,25 +132,44 @@ export default function Composer({
   // pre-warm completion, 30 min stale-refresh) — without this listener the
   // picker would hold a stale snapshot taken before the paginated user-emote
   // fetch finished and the user's sub emotes would silently be missing.
+  //
+  // `fetchEmotes` is pulled out (rather than an inline effect-local
+  // closure) so both the autocomplete popup AND the EmotePicker's "Couldn't
+  // load emotes — Retry" empty state can trigger the same fetch — the
+  // picker consumes this exact state, never a second fetch of its own.
+  const channelKeyRef = useRef(channelKey);
   useEffect(() => {
-    if (!channelKey) return;
-    let cancelled = false;
+    channelKeyRef.current = channelKey;
+  }, [channelKey]);
+
+  const fetchEmotes = useCallback(() => {
+    if (!channelKey) return Promise.resolve();
+    const key = channelKey;
+    return listEmotes(key)
+      .then((data) => {
+        if (channelKeyRef.current !== key) return; // channel switched mid-flight
+        setEmotes(Array.isArray(data) ? data : []);
+      })
+      .catch(() => {
+        if (channelKeyRef.current !== key) return;
+        setEmotes([]);
+      });
+  }, [channelKey]);
+
+  useEffect(() => {
+    if (!channelKey) return undefined;
+    let mounted = true;
     let unlisten = null;
-    const fetch = () => {
-      listEmotes(channelKey)
-        .then((data) => !cancelled && setEmotes(Array.isArray(data) ? data : []))
-        .catch(() => !cancelled && setEmotes([]));
-    };
-    fetch();
-    listenEvent('chat:emotes_loaded', fetch).then((u) => {
-      if (cancelled) u();
+    fetchEmotes();
+    listenEvent('chat:emotes_loaded', fetchEmotes).then((u) => {
+      if (!mounted) u();
       else unlisten = u;
     });
     return () => {
-      cancelled = true;
+      mounted = false;
       if (unlisten) unlisten();
     };
-  }, [channelKey]);
+  }, [channelKey, fetchEmotes]);
 
   // Memoize the names array so useSpellcheck's dep array sees a stable
   // reference across re-renders (the array identity changes when the
@@ -158,6 +179,15 @@ export default function Composer({
   useEffect(() => {
     if (!authed) setError(null);
   }, [authed, channelKey]);
+
+  // The picker's trigger button and Ctrl+E are both gated on `authed`
+  // (render-guarded and handler-guarded respectively) — this closes any
+  // already-open panel if auth drops mid-session, so state doesn't sit
+  // stale as `true` and reappear on a later re-auth without the user
+  // having pressed anything.
+  useEffect(() => {
+    if (!authed) setPickerOpen(false);
+  }, [authed]);
 
   const {
     misspellings,
@@ -271,6 +301,44 @@ export default function Composer({
       el.setSelectionRange(newCaret, newCaret);
     });
   };
+
+  // EmotePicker insert path — same splice + caret idiom as `accept` above,
+  // but sourced from the picker's click/Enter rather than the `:`-trigger
+  // popup. `keepOpen` (Shift+click "spree") means the picker stays open for
+  // inserting several emotes in a row.
+  // Close+refocus on normal (non-spree) inserts is owned by EmotePicker's
+  // synchronous onClose callback (line 118 in EmotePicker.jsx). The RAF
+  // here only syncs the DOM caret state with React state to preserve
+  // correct splice position for subsequent inserts in a spree.
+  const insertEmote = (name, { keepOpen } = {}) => {
+    const el = inputRef.current;
+    const pos = el && document.activeElement === el ? el.selectionStart : caret;
+    const before = text.slice(0, pos);
+    const after = text.slice(pos);
+    const insertion = `${name} `;
+    const next = `${before}${insertion}${after}`.slice(0, MAX_LEN);
+    setText(next);
+    const newCaret = (before + insertion).length;
+    setCaret(newCaret);
+    // Always sync DOM caret so the next insert in a spree reads the correct
+    // position. When keepOpen is false, EmotePicker's synchronous onClose
+    // (called from insert()) closes the panel and refocuses the input.
+    requestAnimationFrame(() => {
+      const inputEl = inputRef.current;
+      if (!inputEl) return;
+      inputEl.setSelectionRange(newCaret, newCaret);
+    });
+  };
+
+  // Referentially stable across renders — EmotePicker's outside-click
+  // effect deps on `[onClose]`, so a fresh arrow function every render
+  // would tear down and re-add that document listener on every keystroke
+  // typed anywhere in Composer (autocomplete recompute, caret tracking,
+  // etc. all re-render this component while the picker is open).
+  const closePicker = useCallback(() => {
+    setPickerOpen(false);
+    inputRef.current?.focus();
+  }, []);
 
   const onContextMenu = (e) => {
     if (!spellcheckEnabled || !authed) return;
@@ -463,10 +531,33 @@ export default function Composer({
     }
   };
 
+  // Ctrl+E toggles the emote picker. Deliberately on the <form>, not the
+  // main <input>'s onKeyDown: EmotePicker's search box autoFocuses the
+  // instant the panel opens, so focus is no longer on the composer input
+  // by the time a user presses Ctrl+E a second time to close it. The form
+  // wraps both the input and the (conditionally rendered) picker, so a
+  // single bubbling-phase handler here catches Ctrl+E regardless of which
+  // descendant currently has focus — one toggle point, no double-handling.
+  const onFormKeyDown = (e) => {
+    if (!authed) return; // composer is fully disabled when logged out
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'e') {
+      // Some browsers/webviews bind Ctrl+E to an address-bar/search
+      // shortcut — preventDefault unconditionally so the picker toggle
+      // always wins inside the composer.
+      e.preventDefault();
+      if (pickerOpen) {
+        closePicker();
+      } else {
+        setPickerOpen(true);
+      }
+    }
+  };
+
   return (
     <form
       onSubmit={submit}
       onContextMenu={onContextMenu}
+      onKeyDown={onFormKeyDown}
       style={{
         borderTop: 'var(--hair)',
         padding: '6px 10px',
@@ -547,7 +638,33 @@ export default function Composer({
               recentCorrections={recentCorrections}
             />
           )}
+          {pickerOpen && authed && (
+            <EmotePicker
+              emotes={emotes}
+              onRetry={fetchEmotes}
+              onInsert={insertEmote}
+              onClose={closePicker}
+            />
+          )}
         </div>
+        {authed && (
+          <Tooltip
+            placement="top"
+            align="right"
+            text="Emote picker (Ctrl+E)"
+          >
+            <button
+              type="button"
+              className="rx-btn rx-btn-ghost"
+              aria-label="Emote picker (Ctrl+E)"
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={() => setPickerOpen((v) => !v)}
+              style={{ padding: '2px 6px', fontSize: 13 }}
+            >
+              🙂
+            </button>
+          </Tooltip>
+        )}
         {channelKey && (
           <Tooltip
             placement="top"
