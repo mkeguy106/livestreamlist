@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { chatOpenInBrowser, chatSend, listEmotes, listenEvent, spellcheckAddWord, spellcheckSuggest } from '../ipc.js';
 import { shouldAutocorrect, isPastWord, rangeAtCaret } from '../utils/autocorrect.js';
+import { counterState } from '../utils/charCount.js';
 import Tooltip from './Tooltip.jsx';
 import SpellcheckOverlay from './SpellcheckOverlay.jsx';
 import SpellcheckContextMenu from './SpellcheckContextMenu.jsx';
@@ -476,7 +477,8 @@ export default function Composer({
   const submit = async (e) => {
     e?.preventDefault?.();
     const body = text.trim();
-    if (!body || !authed || busy || !channelKey) return;
+    const counter = counterState(text.length);
+    if (!body || !authed || busy || !channelKey || counter?.over) return;
     setBusy(true);
     setError(null);
     try {
@@ -763,9 +765,14 @@ export default function Composer({
             </button>
           </Tooltip>
         )}
-        <span className="rx-mono" style={{ fontSize: 10, color: 'var(--zinc-600)', minWidth: 54, textAlign: 'right' }}>
-          {text.length} / {MAX_LEN}
-        </span>
+        {(() => {
+          const counter = counterState(text.length);
+          return counter && (
+            <span className="rx-mono" style={{ fontSize: 10, color: counter.over ? 'var(--live)' : 'var(--zinc-500)', alignSelf: 'center' }}>
+              {counter.text}
+            </span>
+          );
+        })()}
       </div>
       {error && (
         <div style={{ color: '#f87171', fontSize: 'var(--t-11)' }}>{error}</div>
