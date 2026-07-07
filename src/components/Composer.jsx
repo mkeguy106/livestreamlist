@@ -304,11 +304,12 @@ export default function Composer({
 
   // EmotePicker insert path — same splice + caret idiom as `accept` above,
   // but sourced from the picker's click/Enter rather than the `:`-trigger
-  // popup. `keepOpen` (Shift+click "spree") skips the close+refocus so the
-  // user can drop several emotes in a row without reopening the panel.
-  // When keepOpen, the picker retains DOM focus (via closePicker NOT being
-  // called). Only update text/caret state; the close+refocus is handled
-  // by closePicker's onClose callback in the non-spree path.
+  // popup. `keepOpen` (Shift+click "spree") means the picker stays open for
+  // inserting several emotes in a row.
+  // Close+refocus on normal (non-spree) inserts is owned by EmotePicker's
+  // synchronous onClose callback (line 118 in EmotePicker.jsx). The RAF
+  // here only syncs the DOM caret state with React state to preserve
+  // correct splice position for subsequent inserts in a spree.
   const insertEmote = (name, { keepOpen } = {}) => {
     const el = inputRef.current;
     const pos = el && document.activeElement === el ? el.selectionStart : caret;
@@ -319,17 +320,13 @@ export default function Composer({
     setText(next);
     const newCaret = (before + insertion).length;
     setCaret(newCaret);
-    // Always sync DOM caret; gate focus/close to the non-spree path so the
-    // user can drop several emotes in a row without focus bouncing back to
-    // the input (and reopening/closing the picker).
+    // Always sync DOM caret so the next insert in a spree reads the correct
+    // position. When keepOpen is false, EmotePicker's synchronous onClose
+    // (called from insert()) closes the panel and refocuses the input.
     requestAnimationFrame(() => {
       const inputEl = inputRef.current;
       if (!inputEl) return;
       inputEl.setSelectionRange(newCaret, newCaret);
-      if (!keepOpen) {
-        inputEl.focus();
-        closePicker();
-      }
     });
   };
 
