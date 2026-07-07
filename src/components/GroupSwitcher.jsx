@@ -39,7 +39,8 @@ export default function GroupSwitcher({ groups, activeId, onSwitch, onCreate, on
   }, []);
 
   const activeGroup = groups.find((g) => g.id === activeId);
-  const activeName = activeId === 'live-now' || !activeGroup ? 'Live now' : activeGroup.name;
+  const activeName =
+    activeId === 'live-now' ? 'Live now' : activeGroup ? activeGroup.name : 'Choose group…';
 
   const closeMenu = () => {
     setOpen(false);
