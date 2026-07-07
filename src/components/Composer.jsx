@@ -7,6 +7,7 @@ import SpellcheckContextMenu from './SpellcheckContextMenu.jsx';
 import EmotePicker from './EmotePicker.jsx';
 import { useSpellcheck } from '../hooks/useSpellcheck.js';
 import { usePreferences } from '../hooks/usePreferences.jsx';
+import { recordSent, historyAt } from '../utils/sentHistory.js';
 
 const MAX_LEN = 500;
 const SUGGESTION_CAP = 75;
@@ -106,6 +107,9 @@ export default function Composer({
   const [pickerOpen, setPickerOpen] = useState(false);
   const inputRef = useRef(null);
   const [caret, setCaret] = useState(0);
+  // -1 = not browsing sent-message history. >= 0 = index into the
+  // per-channel history buffer (0 = most-recently-sent).
+  const historyIndexRef = useRef(-1);
 
   // Right-click menu state. null = closed; object = open.
   // { kind, word, originalWord?, start, end, x, y }
@@ -206,10 +210,14 @@ export default function Composer({
     channelEmotes: emoteNames,
   });
 
-  // Per-channel reset of autocorrect memory.
+  // Per-channel reset of autocorrect memory. Sent-message history buffers
+  // themselves are NOT cleared here — they persist per channel by design
+  // (module-level Map in sentHistory.js) — only the "currently browsing"
+  // cursor resets so switching channels doesn't leave stale index state.
   useEffect(() => {
     clearRecent();
     clearIgnored();
+    historyIndexRef.current = -1;
   }, [channelKey, clearRecent, clearIgnored]);
 
   // Auto-focus the input when reply mode arms — user clicked Reply on a
@@ -276,6 +284,9 @@ export default function Composer({
 
   const onChange = (e) => {
     const value = e.target.value.slice(0, MAX_LEN);
+    // Real user typing (as opposed to a history-recall setText, which
+    // never runs through this native onChange) always exits browsing mode.
+    historyIndexRef.current = -1;
     setText(value);
     setCaret(e.target.selectionStart ?? value.length);
     recomputePopup(value, e.target.selectionStart);
@@ -463,6 +474,8 @@ export default function Composer({
           }
         : null;
       await chatSend(channelKey, body, replyArg);
+      recordSent(channelKey, body);
+      historyIndexRef.current = -1;
       setText('');
       setPopup(null);
       clearIgnored();
@@ -497,6 +510,48 @@ export default function Composer({
       if (e.key === 'Escape') {
         e.preventDefault();
         setPopup(null);
+        return;
+      }
+    }
+    // Sent-message history recall (↑/↓). Gated on: no autocomplete popup
+    // (it owns arrows above — this only runs when that branch didn't
+    // return) and the emote picker closed (it owns its own search-box
+    // navigation; `pickerOpen` is a defensive guard in case focus is
+    // briefly still on this input right after the toggle). Recall itself
+    // only engages when the draft is empty OR we're already browsing —
+    // a non-empty, never-browsed draft leaves ↑/↓ alone (native no-op in
+    // a single-line input) so in-progress typing is never clobbered.
+    if (!popup && !pickerOpen) {
+      if (e.key === 'ArrowUp' && (text === '' || historyIndexRef.current >= 0)) {
+        e.preventDefault();
+        const nextIndex = historyIndexRef.current + 1;
+        const entry = historyAt(channelKey, nextIndex);
+        if (entry == null) {
+          // Already at the oldest entry — nothing further to recall.
+          return;
+        }
+        historyIndexRef.current = nextIndex;
+        setText(entry);
+        setCaret(entry.length);
+        requestAnimationFrame(() => {
+          const el = inputRef.current;
+          if (!el) return;
+          el.setSelectionRange(entry.length, entry.length);
+        });
+        return;
+      }
+      if (e.key === 'ArrowDown' && historyIndexRef.current >= 0) {
+        e.preventDefault();
+        const nextIndex = historyIndexRef.current - 1;
+        historyIndexRef.current = nextIndex;
+        const value = nextIndex < 0 ? '' : (historyAt(channelKey, nextIndex) ?? '');
+        setText(value);
+        setCaret(value.length);
+        requestAnimationFrame(() => {
+          const el = inputRef.current;
+          if (!el) return;
+          el.setSelectionRange(value.length, value.length);
+        });
         return;
       }
     }
