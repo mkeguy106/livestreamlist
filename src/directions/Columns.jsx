@@ -1,14 +1,10 @@
 /* Direction B — "Columns"
- * TweetDeck-style parallel-monitoring layout: one compact column per live
- * channel, each with its own chat. PR 1 shipped the "Live now" pseudo-group
- * is stable-append). PR 2 adds named manual groups: the `GroupSwitcher`
- * toolbar control (create/rename/delete, Task 4), `AddColumnPicker` +
- * per-column remove + clear-all (Task 5), and drag-to-reorder columns
- * (Task 6, this file) — mouse-event drag mirroring TabStrip's canonical
- * pattern (src/components/TabStrip.jsx), since HTML5 dnd doesn't work on
- * WebKitGTK.
- * from live status, not curated, so `dragProps` stays `null` for those
- * columns.
+ * TweetDeck-style parallel-monitoring layout: user-curated named groups of
+ * channel columns, each column a compact ChatView. Group CRUD via the
+ * GroupSwitcher dropdown; AddColumnPicker + per-column remove + clear-all;
+ * drag-to-reorder via the mouse-event pattern mirroring TabStrip's
+ * canonical implementation (HTML5 dnd doesn't work on WebKitGTK).
+ * No group selected -> chooser empty-state with inline group creation.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import AddColumnPicker from '../components/AddColumnPicker.jsx';
@@ -99,6 +95,15 @@ export default function Columns({ ctx }) {
   // time a reorder touches this group (`reorderVisible` persists the visible
   // subset as the new `keys`, below); until then a ghost is otherwise
   // tolerated at render.
+  // Livestream lookup by unique_key — drives column headers (name, live
+  // state, viewers) and ghost-key filtering. The store synthesizes offline
+  // rows for every channel, so any real channel key resolves here.
+  const byKey = useMemo(() => {
+    const m = new Map();
+    for (const l of livestreams) m.set(l.unique_key, l);
+    return m;
+  }, [livestreams]);
+
   const activeManualGroup = useMemo(
     () => cols.groups.find((g) => g.id === cols.active_group) ?? null,
     [cols.groups, cols.active_group],
