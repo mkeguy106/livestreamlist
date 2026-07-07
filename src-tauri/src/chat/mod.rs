@@ -9,7 +9,7 @@ pub mod models;
 mod reconnect;
 mod twitch;
 
-pub use emotes::Emote;
+pub use emotes::PickerEmote;
 
 use anyhow::Result;
 use parking_lot::Mutex;
@@ -295,9 +295,10 @@ impl ChatManager {
         }
     }
 
-    /// All known emotes for a channel, globals + any channel-specific entries.
-    /// Sorted by name (case-insensitive). Used by the composer's `:` popup.
-    pub fn list_emotes(&self, channel_key: &str) -> Vec<Emote> {
+    /// All known emotes for a channel, globals + any channel-specific entries,
+    /// each annotated with its cache-layer origin and sub-lock state. Sorted
+    /// by name (case-insensitive). Used by the composer's `:` popup.
+    pub fn list_emotes(&self, channel_key: &str) -> Vec<PickerEmote> {
         self.emotes.list_for_channel(channel_key)
     }
 

@@ -16,6 +16,25 @@ pub struct Emote {
     pub url_2x: Option<String>,
     pub url_4x: Option<String>,
     pub animated: bool,
+    /// Which provider supplied this emote: "twitch" | "7tv" | "bttv" | "ffz" | "kick".
+    /// Serde-defaulted for data cached before this field existed.
+    #[serde(default)]
+    pub provider: String,
+}
+
+/// An `Emote` annotated with picker-relevant metadata: which cache layer
+/// supplied it, and whether it's a Twitch channel sub-emote the current
+/// user doesn't own (and therefore can't send, even though it appears in
+/// the channel's set).
+#[derive(Debug, Clone, Serialize)]
+pub struct PickerEmote {
+    #[serde(flatten)]
+    pub emote: Emote,
+    /// "channel" | "user" | "global" — which cache layer supplied it.
+    pub origin: String,
+    /// Twitch channel sub-emote the authed user does not own. Always
+    /// false for third-party providers and non-channel origins.
+    pub locked: bool,
 }
 
 impl Emote {
@@ -107,19 +126,41 @@ impl EmoteCache {
 
     /// Flatten globals + user emotes + this channel's overrides into a
     /// single sorted list. Higher-precedence layers shadow lower ones on
-    /// name collision (channel > user > global).
-    pub fn list_for_channel(&self, channel_key: &str) -> Vec<Emote> {
-        let mut out: HashMap<String, Emote> = self.globals.read().clone();
-        for (name, emote) in self.user_emotes.read().iter() {
-            out.insert(name.clone(), emote.clone());
+    /// name collision (channel > user > global) — the kept entry's `origin`
+    /// reflects whichever layer won.
+    ///
+    /// Also computes `locked`: true for a Twitch channel sub-emote the
+    /// current user does not personally own (i.e. it isn't also present in
+    /// the user layer). Used by the picker to grey out emotes the viewer
+    /// can see in the set but can't actually send.
+    pub fn list_for_channel(&self, channel_key: &str) -> Vec<PickerEmote> {
+        let mut out: HashMap<String, (Emote, &'static str)> = HashMap::new();
+        for (name, emote) in self.globals.read().iter() {
+            out.insert(name.clone(), (emote.clone(), "global"));
+        }
+        let user_emotes = self.user_emotes.read();
+        for (name, emote) in user_emotes.iter() {
+            out.insert(name.clone(), (emote.clone(), "user"));
         }
         if let Some(ch) = self.channels.read().get(channel_key) {
             for (name, emote) in ch.iter() {
-                out.insert(name.clone(), emote.clone());
+                out.insert(name.clone(), (emote.clone(), "channel"));
             }
         }
-        let mut list: Vec<Emote> = out.into_values().collect();
-        list.sort_by_key(|a| a.name.to_lowercase());
+        let mut list: Vec<PickerEmote> = out
+            .into_iter()
+            .map(|(name, (emote, origin))| {
+                let locked = origin == "channel"
+                    && emote.provider == "twitch"
+                    && !user_emotes.contains_key(&name);
+                PickerEmote {
+                    emote,
+                    origin: origin.to_string(),
+                    locked,
+                }
+            })
+            .collect();
+        list.sort_by_key(|p| p.emote.name.to_lowercase());
         list
     }
 
@@ -235,6 +276,7 @@ fn parse_seventv(root: &Value) -> Vec<Emote> {
                 url_2x: pick("2x.webp").or_else(|| pick("2x.avif")),
                 url_4x: pick("4x.webp").or_else(|| pick("4x.avif")),
                 animated,
+                provider: "7tv".to_string(),
             })
         })
         .collect()
@@ -294,6 +336,7 @@ fn parse_bttv(root: &Value, _host_hint: &[&str]) -> Vec<Emote> {
                 url_2x: Some(format!("{base}/2x")),
                 url_4x: Some(format!("{base}/3x")),
                 animated,
+                provider: "bttv".to_string(),
             })
         })
         .collect()
@@ -346,6 +389,7 @@ fn parse_ffz(root: &Value) -> Vec<Emote> {
                 url_2x: grab("2"),
                 url_4x: grab("4"),
                 animated: false,
+                provider: "ffz".to_string(),
             });
         }
     }
@@ -395,6 +439,7 @@ mod tests {
                 url_2x: None,
                 url_4x: None,
                 animated: false,
+                provider: "twitch".to_string(),
             },
         );
         cache.merge_globals(m);
@@ -412,6 +457,7 @@ mod tests {
             url_2x: None,
             url_4x: None,
             animated: false,
+            provider: String::new(),
         }
     }
 
@@ -431,10 +477,111 @@ mod tests {
         let in_unknown = cache.list_for_channel("twitch:nonexistent");
 
         for list in [&in_channel_a, &in_channel_b, &in_unknown] {
-            let names: Vec<&str> = list.iter().map(|e| e.name.as_str()).collect();
+            let names: Vec<&str> = list.iter().map(|e| e.emote.name.as_str()).collect();
             assert!(names.contains(&"millyy3Lurk"));
             assert!(names.contains(&"callsi4Rock"));
         }
+    }
+
+    #[test]
+    fn picker_list_marks_origin_per_layer() {
+        let cache = EmoteCache::default();
+
+        let mut g = HashMap::new();
+        g.insert(
+            "global7tv".to_string(),
+            Emote {
+                provider: "7tv".to_string(),
+                ..emote("global7tv")
+            },
+        );
+        cache.merge_globals(g);
+
+        let mut u = HashMap::new();
+        u.insert(
+            "userTwitch".to_string(),
+            Emote {
+                provider: "twitch".to_string(),
+                ..emote("userTwitch")
+            },
+        );
+        cache.set_user_emotes(u);
+
+        let mut ch = HashMap::new();
+        ch.insert(
+            "chanEmote".to_string(),
+            Emote {
+                provider: "7tv".to_string(),
+                ..emote("chanEmote")
+            },
+        );
+        cache.set_channel("twitch:bar", ch);
+
+        let list = cache.list_for_channel("twitch:bar");
+        let origin_of = |name: &str| {
+            list.iter()
+                .find(|p| p.emote.name == name)
+                .map(|p| p.origin.as_str())
+                .unwrap()
+        };
+        assert_eq!(origin_of("global7tv"), "global");
+        assert_eq!(origin_of("userTwitch"), "user");
+        assert_eq!(origin_of("chanEmote"), "channel");
+    }
+
+    #[test]
+    fn picker_list_locks_unowned_twitch_channel_emotes() {
+        let cache = EmoteCache::default();
+
+        // User owns "owned1" (a twitch sub emote elsewhere).
+        let mut u = HashMap::new();
+        u.insert(
+            "owned1".to_string(),
+            Emote {
+                provider: "twitch".to_string(),
+                ..emote("owned1")
+            },
+        );
+        cache.set_user_emotes(u);
+
+        let mut ch = HashMap::new();
+        // Twitch sub emote the user does NOT own -> locked.
+        ch.insert(
+            "chanSub1".to_string(),
+            Emote {
+                provider: "twitch".to_string(),
+                ..emote("chanSub1")
+            },
+        );
+        // Third-party channel emote -> never locked, regardless of ownership.
+        ch.insert(
+            "chan7tv".to_string(),
+            Emote {
+                provider: "7tv".to_string(),
+                ..emote("chan7tv")
+            },
+        );
+        // Twitch sub emote the user DOES own (also present in user layer)
+        // -> not locked.
+        ch.insert(
+            "owned1".to_string(),
+            Emote {
+                provider: "twitch".to_string(),
+                ..emote("owned1")
+            },
+        );
+        cache.set_channel("twitch:bar", ch);
+
+        let list = cache.list_for_channel("twitch:bar");
+        let locked_of = |name: &str| {
+            list.iter()
+                .find(|p| p.emote.name == name)
+                .map(|p| p.locked)
+                .unwrap()
+        };
+        assert!(locked_of("chanSub1"));
+        assert!(!locked_of("chan7tv"));
+        assert!(!locked_of("owned1"));
     }
 
     #[test]
@@ -541,5 +688,35 @@ mod tests {
 
         assert!(cache.lookup("any", "Old").is_none());
         assert!(cache.lookup("any", "New").is_some());
+    }
+
+    #[test]
+    fn emote_provider_defaults_empty_on_deserialize() {
+        let e: Emote = serde_json::from_str(
+            r#"{"name":"Kappa","url_1x":"u1","url_2x":null,"url_4x":null,"animated":false}"#,
+        )
+        .unwrap();
+        assert_eq!(e.provider, "");
+    }
+
+    #[test]
+    fn scan_message_ranges_carry_provider() {
+        let cache = EmoteCache::default();
+        let mut g = HashMap::new();
+        g.insert(
+            "PogU".to_string(),
+            Emote {
+                provider: "7tv".to_string(),
+                ..emote("PogU")
+            },
+        );
+        cache.merge_globals(g);
+
+        let hits = cache.scan_message("some:channel", "hello PogU world", &[]);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].name, "PogU");
+
+        let cached = cache.lookup("some:channel", "PogU").unwrap();
+        assert_eq!(cached.provider, "7tv");
     }
 }
