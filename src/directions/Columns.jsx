@@ -3,10 +3,13 @@
  * channel, each with its own chat. PR 1 shipped the "Live now" pseudo-group
  * (channels appear when they go live, disappear when they go offline, order
  * is stable-append). PR 2 adds named manual groups: the `GroupSwitcher`
- * toolbar control (create/rename/delete, Task 4), and this task
- * (`AddColumnPicker` + per-column remove + clear-all) makes curating a
- * manual group's `keys` a first-class flow. Drag-to-reorder is still a
- * later PR-2 task (`dragProps` stays `null` here).
+ * toolbar control (create/rename/delete, Task 4), `AddColumnPicker` +
+ * per-column remove + clear-all (Task 5), and drag-to-reorder columns
+ * (Task 6, this file) — mouse-event drag mirroring TabStrip's canonical
+ * pattern (src/components/TabStrip.jsx), since HTML5 dnd doesn't work on
+ * WebKitGTK. Reorder is manual-groups-only; Live-now's order is derived
+ * from live status, not curated, so `dragProps` stays `null` for those
+ * columns.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import AddColumnPicker from '../components/AddColumnPicker.jsx';
@@ -24,7 +27,12 @@ import {
   liveNowOrder,
   removeKey,
   renameGroup,
+  reorderKey,
 } from '../utils/columnGroups.js';
+
+// Mouse-move distance (px) before an armed column-header mousedown becomes a
+// real drag rather than a click — same threshold TabStrip uses.
+const DRAG_THRESHOLD_PX = 5;
 
 // Clear-all skips the confirm step below this many keys — a slip of the
 // mouse on a 1-2 column group is trivially undoable by re-adding, so the
@@ -218,6 +226,99 @@ export default function Columns({ ctx }) {
     }
   }, [activeManualGroup, doClearAll]);
 
+  // Drag-to-reorder (manual groups only) — mouse-event pattern mirroring
+  // TabStrip's canonical drag: mousedown on a column's header arms
+  // `{ key, startX, startY, active, targetKey, dropPosition }`; document-level
+  // mousemove/mouseup (attached only while armed, so the drag survives the
+  // cursor leaving the column) track the cursor, and Esc cancels. The
+  // hover target is found via `elementFromPoint(...).closest('[data-col-key]')`
+  // — the same attribute ColumnView's resize handle already relies on.
+  const [drag, setDrag] = useState(null);
+
+  const onColumnHeaderMouseDown = useCallback((key) => (e) => {
+    if (e.button !== 0) return;
+    // Don't arm a drag when the mousedown lands on the × remove button in
+    // the header — only a plain header-background press should start a
+    // reorder (mirrors TabStrip's `closest('button')` guard).
+    if (e.target.closest('button')) return;
+    e.preventDefault();
+    setDrag({ key, startX: e.clientX, startY: e.clientY, active: false, targetKey: null, dropPosition: null });
+  }, []);
+
+  useEffect(() => {
+    if (!drag) return undefined;
+
+    const onMove = (e) => {
+      const dx = Math.abs(e.clientX - drag.startX);
+      const dy = Math.abs(e.clientY - drag.startY);
+      const moved = dx + dy >= DRAG_THRESHOLD_PX;
+      const el = document.elementFromPoint(e.clientX, e.clientY);
+      const targetEl = el && el.closest && el.closest('[data-col-key]');
+      const targetKey = targetEl ? targetEl.getAttribute('data-col-key') : null;
+      // Cursor on the left half of the target column -> drop before it;
+      // right half -> drop after it (reaches the trailing position by
+      // hovering the right edge of the rightmost column).
+      let dropPosition = 'before';
+      if (targetEl) {
+        const rect = targetEl.getBoundingClientRect();
+        dropPosition = e.clientX >= rect.left + rect.width / 2 ? 'after' : 'before';
+      }
+      setDrag((prev) =>
+        prev ? { ...prev, active: prev.active || moved, targetKey, dropPosition } : prev,
+      );
+    };
+
+    const onUp = () => {
+      setDrag((prev) => {
+        if (!prev) return null;
+        if (prev.active && prev.targetKey && prev.targetKey !== prev.key && activeManualGroup) {
+          // `visibleKeys` is the on-screen order (== the manual group's
+          // curated `keys`, filtered to channels still present). Translate
+          // the before/after-by-cursor-half drop into the post-removal
+          // index `reorderKey` expects: find where the target lands once
+          // the source is spliced out, then offset by one more for "after".
+          const sourceIdx = visibleKeys.indexOf(prev.key);
+          const targetIdx = visibleKeys.indexOf(prev.targetKey);
+          if (sourceIdx !== -1 && targetIdx !== -1) {
+            const targetIdxAfterRemoval = targetIdx > sourceIdx ? targetIdx - 1 : targetIdx;
+            const toIndex = prev.dropPosition === 'after' ? targetIdxAfterRemoval + 1 : targetIdxAfterRemoval;
+            patchColumns({ groups: reorderKey(cols.groups, activeManualGroup.id, prev.key, toIndex) });
+          }
+        }
+        return null;
+      });
+    };
+
+    const onKey = (e) => {
+      if (e.key === 'Escape') setDrag(null);
+    };
+
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [drag, visibleKeys, activeManualGroup, cols.groups, patchColumns]);
+
+  // Lock the document cursor + disable text selection while a real drag is
+  // active, same as TabStrip and Command.jsx's DragResizeHandle — otherwise
+  // the cursor flickers to text-selection over neighboring chat text as it
+  // crosses column boundaries.
+  useEffect(() => {
+    if (!drag?.active) return undefined;
+    const prevCursor = document.body.style.cursor;
+    const prevUserSelect = document.body.style.userSelect;
+    document.body.style.cursor = 'grabbing';
+    document.body.style.userSelect = 'none';
+    return () => {
+      document.body.style.cursor = prevCursor;
+      document.body.style.userSelect = prevUserSelect;
+    };
+  }, [drag?.active]);
+
   return (
     <>
       {/* Toolbar */}
@@ -302,21 +403,29 @@ export default function Columns({ ctx }) {
         </div>
       ) : (
         <div style={{ flex: 1, display: 'flex', overflowX: 'auto', minHeight: 0 }}>
-          {visibleKeys.map((k) => (
-            <ColumnView
-              key={k}
-              column={{
-                key: k,
-                live: isLiveNow ? true : !!byKey.get(k)?.is_live,
-                channel: byKey.get(k),
-              }}
-              width={widthFor(k)}
-              onResize={handleResize}
-              onRemove={isLiveNow ? null : onRemoveColumn}
-              dragProps={null}
-              ctx={ctx}
-            />
-          ))}
+          {visibleKeys.map((k) => {
+            const isDragSource = !isLiveNow && drag?.active === true && drag.key === k;
+            const isDropTarget =
+              !isLiveNow && drag?.active === true && drag.targetKey === k && drag.key !== k;
+            const dropEdge = isDropTarget ? (drag.dropPosition === 'after' ? 'right' : 'left') : null;
+            return (
+              <ColumnView
+                key={k}
+                column={{
+                  key: k,
+                  live: isLiveNow ? true : !!byKey.get(k)?.is_live,
+                  channel: byKey.get(k),
+                }}
+                width={widthFor(k)}
+                onResize={handleResize}
+                onRemove={isLiveNow ? null : onRemoveColumn}
+                dragProps={isLiveNow ? null : { onMouseDown: onColumnHeaderMouseDown(k) }}
+                isDragSource={isDragSource}
+                dropEdge={dropEdge}
+                ctx={ctx}
+              />
+            );
+          })}
         </div>
       )}
 
