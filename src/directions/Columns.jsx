@@ -1,13 +1,12 @@
 /* Direction B — "Columns"
  * TweetDeck-style parallel-monitoring layout: one compact column per live
  * channel, each with its own chat. PR 1 shipped the "Live now" pseudo-group
- * (channels appear when they go live, disappear when they go offline, order
  * is stable-append). PR 2 adds named manual groups: the `GroupSwitcher`
  * toolbar control (create/rename/delete, Task 4), `AddColumnPicker` +
  * per-column remove + clear-all (Task 5), and drag-to-reorder columns
  * (Task 6, this file) — mouse-event drag mirroring TabStrip's canonical
  * pattern (src/components/TabStrip.jsx), since HTML5 dnd doesn't work on
- * WebKitGTK. Reorder is manual-groups-only; Live-now's order is derived
+ * WebKitGTK.
  * from live status, not curated, so `dragProps` stays `null` for those
  * columns.
  */
@@ -24,7 +23,6 @@ import {
   clearKeys,
   createGroup,
   deleteGroup,
-  liveNowOrder,
   removeKey,
   renameGroup,
   reorderVisible,
@@ -41,10 +39,9 @@ const DRAG_THRESHOLD_PX = 5;
 const CLEAR_ALL_CONFIRM_THRESHOLD = 3;
 
 const NO_GROUP_HINT = 'Select or create a group first';
-const LIVE_NOW_DISABLED_HINT = 'Live now follows your live channels — create a group to curate';
 
 export default function Columns({ ctx }) {
-  const { livestreams, openAddDialog, refresh, loading } = ctx;
+  const { livestreams, refresh, loading } = ctx;
   const { settings, patch } = usePreferences();
   const cols = settings?.columns || { groups: [], active_group: '', column_widths: {} };
 
@@ -56,64 +53,6 @@ export default function Columns({ ctx }) {
     (fields) => patch((prev) => ({ ...prev, columns: { ...prev.columns, ...fields } })),
     [patch],
   );
-
-  // Live-now ordering: stable-append. `liveNowOrder` is a pure function of
-  // (previous order, current live keys) — kept channels retain their
-  // position, newly-live channels append at the end, channels that went
-  // offline are dropped.
-  //
-  // Ref-sync choice: we compute `order` in a `useMemo` that reads
-  // `liveOrderRef.current` (a *read* during render, which is fine — only
-  // *writes* during render are the thing React warns against) and sync the
-  // ref's value in a `useEffect` that runs after commit. This is the
-  // canonical React pattern for "remember the previous derived value without
-  // re-deriving from raw state on every render": the ref never drives a
-  // render itself, it's purely an input to the next render's memo, and the
-  // write happens in the one place (`useEffect`) guaranteed to run after the
-  // render that produced `order` has committed. The alternative (writing
-  // `liveOrderRef.current = order` directly in the render body) happens to
-  // be idempotent here, but relying on that is fragile — a future edit to
-  // `liveNowOrder` or a concurrent-rendering edge case could make an
-  // in-render write observable across double-renders (React Strict Mode
-  // intentionally double-invokes render bodies in dev to surface exactly
-  // this class of bug).
-  const liveOrderRef = useRef([]);
-  const liveKeys = useMemo(
-    () => livestreams.filter((l) => l.is_live).map((l) => l.unique_key),
-    [livestreams],
-  );
-  const order = useMemo(
-    () => liveNowOrder(liveOrderRef.current, liveKeys),
-    [liveKeys],
-  );
-  useEffect(() => {
-    liveOrderRef.current = order;
-  }, [order]);
-
-  const byKey = useMemo(() => {
-    const m = new Map();
-    for (const l of livestreams) m.set(l.unique_key, l);
-    return m;
-  }, [livestreams]);
-
-  // Local, uncommitted width overrides while a column is mid-drag. Cleared
-  // (per-key) on commit — the settings value then becomes the source of
-  // truth again via `cols.column_widths`.
-  const [widthOverrides, setWidthOverrides] = useState({});
-
-  // Prune stale overrides for channels that are no longer in the order.
-  // Without this, if a column unmounts mid-drag (channel goes offline), the
-  // stale override lingers and silently beats the persisted width when the
-  // channel returns.
-  useEffect(() => {
-    setWidthOverrides((prev) => {
-      const keys = Object.keys(prev).filter((k) => !order.includes(k));
-      if (keys.length === 0) return prev;   // no change -> no re-render loop
-      const next = { ...prev };
-      for (const k of keys) delete next[k];
-      return next;
-    });
-  }, [order]);
 
   const handleResize = useCallback((key, px, opts) => {
     const clamped = clampWidth(px);
@@ -147,9 +86,9 @@ export default function Columns({ ctx }) {
     [widthOverrides, cols.column_widths],
   );
 
-  // Active-group resolution: "live-now" (or an `active_group` id that no
-  // longer matches any stored group — e.g. deleted from another device)
-  // falls back to the live-now path. Otherwise render the stored group's
+  // Active-group resolution: an empty/unknown `active_group` (fresh install,
+  // stale persisted value incl. the retired "live-now") renders the chooser
+  // empty-state. Otherwise render the stored group's
   // `keys`, filtered to channels still present in `byKey` — unknown ("ghost")
   // keys are skipped here at render, not pruned. They get pruned the next
   // time a reorder touches this group (`reorderVisible` persists the visible
@@ -159,18 +98,29 @@ export default function Columns({ ctx }) {
     () => cols.groups.find((g) => g.id === cols.active_group) ?? null,
     [cols.groups, cols.active_group],
   );
-  const isLiveNow = cols.active_group === 'live-now';
-  // No group selected (fresh install, or the active id no longer exists):
-  // render the chooser empty-state instead of auto-mounting a chat per live
-  // channel. "Live now" is an explicit opt-in via the switcher.
-  const isNone = !isLiveNow && !activeManualGroup;
+  const isNone = !activeManualGroup;
 
   const manualKeys = useMemo(() => {
-    if (isLiveNow || !activeManualGroup) return null;
+    if (!activeManualGroup) return null;
     return activeManualGroup.keys.filter((k) => byKey.has(k));
-  }, [isLiveNow, activeManualGroup, byKey]);
+  }, [activeManualGroup, byKey]);
 
-  const visibleKeys = isLiveNow ? order : (manualKeys ?? []);
+  const visibleKeys = manualKeys ?? [];
+
+  // Prune stale width overrides for channels no longer rendered (e.g. a
+  // column unmounted mid-drag, or a group switch): a lingering uncommitted
+  // override would otherwise beat the persisted width when the channel
+  // reappears. Return-prev-when-unchanged guard avoids setState loops.
+  useEffect(() => {
+    setWidthOverrides((prev) => {
+      const stale = Object.keys(prev).filter((k) => !visibleKeys.includes(k));
+      if (stale.length === 0) return prev;
+      const next = { ...prev };
+      for (const k of stale) delete next[k];
+      return next;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visibleKeys.join('|')]);
 
   const onSwitchGroup = useCallback(
     (id) => patchColumns({ active_group: id }),
@@ -357,23 +307,23 @@ export default function Columns({ ctx }) {
           onDelete={onDeleteGroup}
         />
         <div style={{ flex: 1 }} />
-        <Tooltip text={isLiveNow ? LIVE_NOW_DISABLED_HINT : isNone ? NO_GROUP_HINT : 'Clear all columns from this group'}>
+        <Tooltip text={isNone ? NO_GROUP_HINT : 'Clear all columns from this group'}>
           <button
             type="button"
-            aria-label={isLiveNow ? LIVE_NOW_DISABLED_HINT : isNone ? NO_GROUP_HINT : 'Clear all columns from this group'}
+            aria-label={isNone ? NO_GROUP_HINT : 'Clear all columns from this group'}
             className="rx-btn rx-btn-ghost"
-            disabled={isLiveNow || isNone}
+            disabled={isNone}
             onClick={onClearAllClick}
           >
             Clear all
           </button>
         </Tooltip>
-        <Tooltip text={isLiveNow ? LIVE_NOW_DISABLED_HINT : isNone ? NO_GROUP_HINT : 'Add columns to this group'}>
+        <Tooltip text={isNone ? NO_GROUP_HINT : 'Add columns to this group'}>
           <button
             type="button"
-            aria-label={isLiveNow ? LIVE_NOW_DISABLED_HINT : isNone ? NO_GROUP_HINT : 'Add columns to this group'}
+            aria-label={isNone ? NO_GROUP_HINT : 'Add columns to this group'}
             className="rx-btn rx-btn-ghost"
-            disabled={isLiveNow || isNone}
+            disabled={isNone}
             onClick={() => setPickerOpen(true)}
           >
             ＋ Add column
@@ -390,7 +340,6 @@ export default function Columns({ ctx }) {
             <IconRefresh spinning={loading} />
           </button>
         </Tooltip>
-        <button type="button" className="rx-btn" onClick={openAddDialog}>＋ Add channel</button>
       </div>
 
       {/* Column row */}
@@ -410,19 +359,8 @@ export default function Columns({ ctx }) {
           {isNone ? (
             <>
               <div>No column group selected.</div>
-              <button
-                type="button"
-                className="rx-btn"
-                onClick={() => onSwitchGroup('live-now')}
-              >
-                Show live channels ({order.length} live)
-              </button>
-              <span className="rx-chiclet">or create a group from the dropdown</span>
-            </>
-          ) : isLiveNow ? (
-            <>
-              <div>No channels are live right now.</div>
-              <span className="rx-chiclet">columns appear here as channels go live</span>
+              <ChooserCreate onCreate={onCreateGroup} />
+              <span className="rx-chiclet">or pick one from the dropdown</span>
             </>
           ) : (
             <div>This group is empty.</div>
@@ -431,22 +369,22 @@ export default function Columns({ ctx }) {
       ) : (
         <div style={{ flex: 1, display: 'flex', overflowX: 'auto', minHeight: 0 }}>
           {visibleKeys.map((k) => {
-            const isDragSource = !isLiveNow && drag?.active === true && drag.key === k;
+            const isDragSource = drag?.active === true && drag.key === k;
             const isDropTarget =
-              !isLiveNow && drag?.active === true && drag.targetKey === k && drag.key !== k;
+              drag?.active === true && drag.targetKey === k && drag.key !== k;
             const dropEdge = isDropTarget ? (drag.dropPosition === 'after' ? 'right' : 'left') : null;
             return (
               <ColumnView
                 key={k}
                 column={{
                   key: k,
-                  live: isLiveNow ? true : !!byKey.get(k)?.is_live,
+                  live: !!byKey.get(k)?.is_live,
                   channel: byKey.get(k),
                 }}
                 width={widthFor(k)}
                 onResize={handleResize}
-                onRemove={isLiveNow ? null : onRemoveColumn}
-                dragProps={isLiveNow ? null : { onMouseDown: onColumnHeaderMouseDown(k) }}
+                onRemove={onRemoveColumn}
+                dragProps={{ onMouseDown: onColumnHeaderMouseDown(k) }}
                 isDragSource={isDragSource}
                 dropEdge={dropEdge}
                 ctx={ctx}
@@ -472,7 +410,7 @@ export default function Columns({ ctx }) {
       </div>
 
       <AddColumnPicker
-        open={pickerOpen && !isLiveNow}
+        open={pickerOpen && !isNone}
         onClose={() => setPickerOpen(false)}
         livestreams={livestreams}
         existingKeys={activeManualGroup?.keys}
@@ -524,5 +462,32 @@ function IconRefresh({ spinning }) {
       <path d="M 9.5 4 A 4 4 0 0 1 4 9.5" />
       <path d="M 4 10.5 L 4 9.5 L 5 9.5" />
     </svg>
+  );
+}
+
+
+/** Inline create-a-group input for the no-group chooser state. */
+function ChooserCreate({ onCreate }) {
+  const [name, setName] = useState('');
+  const commit = () => {
+    const n = name.trim();
+    if (!n) return;
+    onCreate(n);
+    setName('');
+  };
+  return (
+    <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+      <input
+        className="rx-input"
+        style={{ width: 180, boxSizing: 'border-box' }}
+        placeholder="New group name…"
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        onKeyDown={(e) => { if (e.key === 'Enter') commit(); }}
+      />
+      <button type="button" className="rx-btn" onClick={commit} disabled={!name.trim()}>
+        Create
+      </button>
+    </div>
   );
 }

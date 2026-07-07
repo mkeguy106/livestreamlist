@@ -19,9 +19,13 @@
  * disabled), onConfirm(selectedKeys).
  */
 import { useEffect, useMemo, useState } from 'react';
+import { useEmbedOcclusion } from './EmbedLayer.jsx';
 import { platformLetter } from '../utils/format.js';
 
 export default function AddColumnPicker({ open, onClose, livestreams, existingKeys, onConfirm }) {
+  // Hide native embeds while the picker modal is open (embeds render above
+  // the React surface and would otherwise cover the dialog).
+  useEmbedOcclusion(open);
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState(() => new Set());
 
