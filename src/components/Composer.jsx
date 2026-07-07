@@ -8,6 +8,7 @@ import SpellcheckContextMenu from './SpellcheckContextMenu.jsx';
 import EmotePicker from './EmotePicker.jsx';
 import { useSpellcheck } from '../hooks/useSpellcheck.js';
 import { usePreferences } from '../hooks/usePreferences.jsx';
+import { useRoomState } from '../hooks/useRoomState.js';
 import { recordSent, historyAt } from '../utils/sentHistory.js';
 
 const SUGGESTION_CAP = 75;
@@ -130,6 +131,54 @@ export default function Composer({
   const spellcheckEnabled = settings?.chat?.spellcheck_enabled ?? true;
   const spellcheckLanguage = settings?.chat?.spellcheck_language ?? 'en_US';
   const autocorrectEnabled = settings?.chat?.autocorrect_enabled ?? true;
+
+  // Slow-mode countdown chip. `roomState` mirrors the raw ChatRoomState
+  // payload (as-delivered field names); `useRoomState` already owns the
+  // chat:roomstate:{channelKey} subscription for the mode banner
+  // (ChatModeBanner.jsx) — reused here rather than opening a second
+  // listener on the same topic.
+  const { state: roomState } = useRoomState(channelKey);
+  const slowSeconds = roomState?.slow_seconds ?? 0;
+
+  // `cooldownUntil` is an epoch-ms deadline; 0 means no active cooldown.
+  // `remaining` is the whole-second countdown the chip renders. The 250ms
+  // tick interval below is created only while a cooldown is actually
+  // counting down — never while cooldownUntil is 0 — and is cleared the
+  // instant the countdown reaches zero, on channel change, and on unmount.
+  const [cooldownUntil, setCooldownUntil] = useState(0);
+  const [remaining, setRemaining] = useState(0);
+
+  // Switching channels invalidates any in-flight cooldown from the
+  // previous channel's slow-mode — resetting cooldownUntil to 0 here
+  // makes the tick effect below tear down its interval (if any) and not
+  // start a new one.
+  useEffect(() => {
+    setCooldownUntil(0);
+    setRemaining(0);
+  }, [channelKey]);
+
+  useEffect(() => {
+    if (!cooldownUntil) {
+      setRemaining(0);
+      return undefined;
+    }
+    const tick = () => {
+      const r = Math.ceil((cooldownUntil - Date.now()) / 1000);
+      if (r <= 0) {
+        // Reaching zero clears cooldownUntil, which re-runs this effect
+        // (dep changed) — the cleanup below clears THIS interval, and the
+        // re-run's guard (`if (!cooldownUntil)`) returns before scheduling
+        // a new one. No interval survives past the countdown reaching 0.
+        setRemaining(0);
+        setCooldownUntil(0);
+      } else {
+        setRemaining(r);
+      }
+    };
+    tick(); // compute immediately so the chip doesn't show a stale value for the first 250ms
+    const id = setInterval(tick, 250);
+    return () => clearInterval(id);
+  }, [cooldownUntil]);
 
   const platformAuth =
     platform === 'twitch' ? auth?.twitch : platform === 'kick' ? auth?.kick : null;
@@ -477,7 +526,7 @@ export default function Composer({
     e?.preventDefault?.();
     const body = text.trim();
     const counter = counterState(text.length);
-    if (!body || !authed || busy || !channelKey || counter?.over) return;
+    if (!body || !authed || busy || !channelKey || counter?.over || remaining > 0) return;
     setBusy(true);
     setError(null);
     try {
@@ -491,6 +540,9 @@ export default function Composer({
         : null;
       await chatSend(channelKey, body, replyArg);
       recordSent(channelKey, body);
+      if (slowSeconds > 0) {
+        setCooldownUntil(Date.now() + slowSeconds * 1000);
+      }
       historyIndexRef.current = -1;
       setText('');
       setPopup(null);
@@ -762,6 +814,15 @@ export default function Composer({
               Browser ↗
             </button>
           </Tooltip>
+        )}
+        {remaining > 0 && (
+          <span
+            className="rx-chiclet rx-mono"
+            aria-label="Slow mode cooldown"
+            style={{ alignSelf: 'center' }}
+          >
+            ⏱ {remaining}s
+          </span>
         )}
         {(() => {
           const counter = counterState(text.length);
