@@ -288,11 +288,11 @@ async function mockInvoke(name, args) {
         // Channel emotes
         { name: 'peepoClap', url_1x: '', url_2x: null, url_4x: null, animated: false, provider: 'twitch', origin: 'channel', locked: true },
         { name: 'customEmote', url_1x: 'https://example.com/custom.png', url_2x: null, url_4x: null, animated: false, provider: 'twitch', origin: 'channel', locked: false },
-        // Twitch global emotes
-        { name: 'Kappa', url_1x: 'https://static-cdn.jtvnw.net/emoticons/v2/25/default/dark/1.0', url_2x: null, url_4x: null, animated: false, provider: 'twitch', origin: 'global', locked: false },
-        { name: 'PogChamp', url_1x: 'https://static-cdn.jtvnw.net/emoticons/v2/305954156/default/dark/1.0', url_2x: null, url_4x: null, animated: false, provider: 'twitch', origin: 'global', locked: false },
-        { name: 'LUL', url_1x: 'https://static-cdn.jtvnw.net/emoticons/v2/425618/default/dark/1.0', url_2x: null, url_4x: null, animated: false, provider: 'twitch', origin: 'global', locked: false },
-        { name: 'Kreygasm', url_1x: 'https://static-cdn.jtvnw.net/emoticons/v2/41/default/dark/1.0', url_2x: null, url_4x: null, animated: false, provider: 'twitch', origin: 'global', locked: false },
+        // Logged-in user's own Twitch emotes
+        { name: 'Kappa', url_1x: 'https://static-cdn.jtvnw.net/emoticons/v2/25/default/dark/1.0', url_2x: null, url_4x: null, animated: false, provider: 'twitch', origin: 'user', locked: false },
+        { name: 'PogChamp', url_1x: 'https://static-cdn.jtvnw.net/emoticons/v2/305954156/default/dark/1.0', url_2x: null, url_4x: null, animated: false, provider: 'twitch', origin: 'user', locked: false },
+        { name: 'LUL', url_1x: 'https://static-cdn.jtvnw.net/emoticons/v2/425618/default/dark/1.0', url_2x: null, url_4x: null, animated: false, provider: 'twitch', origin: 'user', locked: false },
+        { name: 'Kreygasm', url_1x: 'https://static-cdn.jtvnw.net/emoticons/v2/41/default/dark/1.0', url_2x: null, url_4x: null, animated: false, provider: 'twitch', origin: 'user', locked: false },
         // 7TV emotes
         { name: 'GOTTEM', url_1x: 'https://cdn.7tv.app/emotes/6179ee7e9b2c2b000d57a79b/1x', url_2x: null, url_4x: null, animated: true, provider: '7tv', origin: 'global', locked: false },
         { name: 'MonkaS', url_1x: 'https://cdn.7tv.app/emotes/6166c3a1b20a1f000d8cfa95/1x', url_2x: null, url_4x: null, animated: false, provider: '7tv', origin: 'global', locked: false },
