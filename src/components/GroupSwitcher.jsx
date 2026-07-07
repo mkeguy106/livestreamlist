@@ -20,14 +20,14 @@ import { useEmbedOcclusion } from './EmbedLayer.jsx';
 
 export default function GroupSwitcher({ groups, activeId, onSwitch, onCreate, onRename, onDelete }) {
   const [open, setOpen] = useState(false);
-  // Native embeds render above the React surface — hide them while the menu
-  // (or its delete confirm) is open so the dropdown isn't hidden behind them.
-  useEmbedOcclusion(open || deleteTarget !== null);
   const [renamingId, setRenamingId] = useState(null);
   const [renameValue, setRenameValue] = useState('');
   const [creating, setCreating] = useState(false);
   const [createValue, setCreateValue] = useState('');
   const [deleteTarget, setDeleteTarget] = useState(null); // { id, name } | null
+  // Native embeds render above the React surface — hide them while the menu
+  // (or its delete confirm) is open so the dropdown isn't hidden behind them.
+  useEmbedOcclusion(open || deleteTarget !== null);
 
   const containerRef = useRef(null);
 
