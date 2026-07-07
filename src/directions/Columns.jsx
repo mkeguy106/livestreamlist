@@ -3,24 +3,36 @@
  * channel, each with its own chat. PR 1 shipped the "Live now" pseudo-group
  * (channels appear when they go live, disappear when they go offline, order
  * is stable-append). PR 2 adds named manual groups: the `GroupSwitcher`
- * toolbar control (create/rename/delete) plus rendering a manual group's
- * curated `keys` instead of the live-now order. Add-to-group and
- * drag-to-reorder land in later PR-2 tasks on top of the `ColumnView`
- * contract PR 1 established (`onRemove`/`dragProps` stay `null` here too —
- * they go live once those tasks wire real handlers).
+ * toolbar control (create/rename/delete, Task 4), and this task
+ * (`AddColumnPicker` + per-column remove + clear-all) makes curating a
+ * manual group's `keys` a first-class flow. Drag-to-reorder is still a
+ * later PR-2 task (`dragProps` stays `null` here).
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import AddColumnPicker from '../components/AddColumnPicker.jsx';
 import ColumnView from '../components/ColumnView.jsx';
+import ConfirmDialog from '../components/ConfirmDialog.jsx';
 import GroupSwitcher from '../components/GroupSwitcher.jsx';
 import Tooltip from '../components/Tooltip.jsx';
 import { usePreferences } from '../hooks/usePreferences.jsx';
 import {
+  addKeys,
   clampWidth,
+  clearKeys,
   createGroup,
   deleteGroup,
   liveNowOrder,
+  removeKey,
   renameGroup,
 } from '../utils/columnGroups.js';
+
+// Clear-all skips the confirm step below this many keys — a slip of the
+// mouse on a 1-2 column group is trivially undoable by re-adding, so the
+// extra dialog would just be friction. At 3+ keys, losing the curated set
+// is expensive enough to warrant a confirm.
+const CLEAR_ALL_CONFIRM_THRESHOLD = 3;
+
+const LIVE_NOW_DISABLED_HINT = 'Live now follows your live channels — create a group to curate';
 
 export default function Columns({ ctx }) {
   const { livestreams, openAddDialog, refresh, loading } = ctx;
@@ -169,6 +181,43 @@ export default function Columns({ ctx }) {
     [cols.groups, cols.active_group, patchColumns],
   );
 
+  // Add-column picker + per-column remove + clear-all — all scoped to the
+  // active *manual* group. Both toolbar affordances are disabled (with a
+  // themed Tooltip explaining why) while "Live now" is active, since that
+  // pseudo-group's membership is derived from live status, not curated.
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [clearConfirmOpen, setClearConfirmOpen] = useState(false);
+
+  const onAddColumns = useCallback(
+    (keys) => {
+      if (!activeManualGroup) return;
+      patchColumns({ groups: addKeys(cols.groups, activeManualGroup.id, keys) });
+    },
+    [cols.groups, activeManualGroup, patchColumns],
+  );
+
+  const onRemoveColumn = useCallback(
+    (key) => {
+      if (!activeManualGroup) return;
+      patchColumns({ groups: removeKey(cols.groups, activeManualGroup.id, key) });
+    },
+    [cols.groups, activeManualGroup, patchColumns],
+  );
+
+  const doClearAll = useCallback(() => {
+    if (!activeManualGroup) return;
+    patchColumns({ groups: clearKeys(cols.groups, activeManualGroup.id) });
+  }, [cols.groups, activeManualGroup, patchColumns]);
+
+  const onClearAllClick = useCallback(() => {
+    if (!activeManualGroup) return;
+    if (activeManualGroup.keys.length >= CLEAR_ALL_CONFIRM_THRESHOLD) {
+      setClearConfirmOpen(true);
+    } else {
+      doClearAll();
+    }
+  }, [activeManualGroup, doClearAll]);
+
   return (
     <>
       {/* Toolbar */}
@@ -192,6 +241,28 @@ export default function Columns({ ctx }) {
           onDelete={onDeleteGroup}
         />
         <div style={{ flex: 1 }} />
+        <Tooltip text={isLiveNow ? LIVE_NOW_DISABLED_HINT : 'Clear all columns from this group'}>
+          <button
+            type="button"
+            aria-label={isLiveNow ? LIVE_NOW_DISABLED_HINT : 'Clear all columns from this group'}
+            className="rx-btn rx-btn-ghost"
+            disabled={isLiveNow}
+            onClick={onClearAllClick}
+          >
+            Clear all
+          </button>
+        </Tooltip>
+        <Tooltip text={isLiveNow ? LIVE_NOW_DISABLED_HINT : 'Add columns to this group'}>
+          <button
+            type="button"
+            aria-label={isLiveNow ? LIVE_NOW_DISABLED_HINT : 'Add columns to this group'}
+            className="rx-btn rx-btn-ghost"
+            disabled={isLiveNow}
+            onClick={() => setPickerOpen(true)}
+          >
+            ＋ Add column
+          </button>
+        </Tooltip>
         <Tooltip text={loading ? 'Refreshing…' : 'Refresh now'}>
           <button
             type="button"
@@ -241,7 +312,7 @@ export default function Columns({ ctx }) {
               }}
               width={widthFor(k)}
               onResize={handleResize}
-              onRemove={null}
+              onRemove={isLiveNow ? null : onRemoveColumn}
               dragProps={null}
               ctx={ctx}
             />
@@ -263,6 +334,32 @@ export default function Columns({ ctx }) {
       >
         <span className="rx-chiclet">{visibleKeys.length} columns</span>
       </div>
+
+      <AddColumnPicker
+        open={pickerOpen && !isLiveNow}
+        onClose={() => setPickerOpen(false)}
+        livestreams={livestreams}
+        existingKeys={activeManualGroup?.keys}
+        onConfirm={onAddColumns}
+      />
+
+      <ConfirmDialog
+        open={clearConfirmOpen}
+        title="Clear all columns?"
+        body={
+          activeManualGroup
+            ? `Remove all ${activeManualGroup.keys.length} columns from "${activeManualGroup.name}"? The channels themselves are not affected.`
+            : ''
+        }
+        confirmLabel="Clear all"
+        cancelLabel="Cancel"
+        danger
+        onConfirm={() => {
+          doClearAll();
+          setClearConfirmOpen(false);
+        }}
+        onClose={() => setClearConfirmOpen(false)}
+      />
     </>
   );
 }
