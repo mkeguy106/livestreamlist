@@ -27,7 +27,7 @@ import {
   liveNowOrder,
   removeKey,
   renameGroup,
-  reorderKey,
+  reorderVisible,
 } from '../utils/columnGroups.js';
 
 // Mouse-move distance (px) before an armed column-header mousedown becomes a
@@ -149,9 +149,11 @@ export default function Columns({ ctx }) {
   // Active-group resolution: "live-now" (or an `active_group` id that no
   // longer matches any stored group — e.g. deleted from another device)
   // falls back to the live-now path. Otherwise render the stored group's
-  // `keys`, filtered to channels still present in `byKey` — unknown keys
-  // are skipped here, not pruned; pruning happens the next time a reducer
-  // saves that group (per spec).
+  // `keys`, filtered to channels still present in `byKey` — unknown ("ghost")
+  // keys are skipped here at render, not pruned. They get pruned the next
+  // time a reorder touches this group (`reorderVisible` persists the visible
+  // subset as the new `keys`, below); until then a ghost is otherwise
+  // tolerated at render.
   const activeManualGroup = useMemo(
     () => cols.groups.find((g) => g.id === cols.active_group) ?? null,
     [cols.groups, cols.active_group],
@@ -273,16 +275,24 @@ export default function Columns({ ctx }) {
         if (!prev) return null;
         if (prev.active && prev.targetKey && prev.targetKey !== prev.key && activeManualGroup) {
           // `visibleKeys` is the on-screen order (== the manual group's
-          // curated `keys`, filtered to channels still present). Translate
-          // the before/after-by-cursor-half drop into the post-removal
-          // index `reorderKey` expects: find where the target lands once
-          // the source is spliced out, then offset by one more for "after".
+          // curated `keys`, filtered to channels still present — ghost keys
+          // for channels deleted from the app are excluded). Translate the
+          // before/after-by-cursor-half drop into the post-removal index
+          // `reorderVisible` expects: find where the target lands once the
+          // source is spliced out, then offset by one more for "after".
+          // `reorderVisible` re-splices against this same `visibleKeys`
+          // array (not the full stored `keys`, which may still contain
+          // ghosts) so the computed index always lands where the user
+          // actually saw it drop, and persists the visible list as the new
+          // `keys` — pruning any ghosts in the same save.
           const sourceIdx = visibleKeys.indexOf(prev.key);
           const targetIdx = visibleKeys.indexOf(prev.targetKey);
           if (sourceIdx !== -1 && targetIdx !== -1) {
             const targetIdxAfterRemoval = targetIdx > sourceIdx ? targetIdx - 1 : targetIdx;
             const toIndex = prev.dropPosition === 'after' ? targetIdxAfterRemoval + 1 : targetIdxAfterRemoval;
-            patchColumns({ groups: reorderKey(cols.groups, activeManualGroup.id, prev.key, toIndex) });
+            patchColumns({
+              groups: reorderVisible(cols.groups, activeManualGroup.id, prev.key, visibleKeys, toIndex),
+            });
           }
         }
         return null;

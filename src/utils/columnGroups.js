@@ -58,6 +58,21 @@ export function reorderKey(groups, id, key, toIndex) {
   });
 }
 
+/**
+ * Reorder `key` to `toVisibleIndex` WITHIN the visible (existing-channel)
+ * subset of the group's keys, and persist the visible list as the new keys —
+ * pruning ghost keys (channels deleted from the app) in the same save.
+ * This is the "pruned on the next save that touches the group" behavior.
+ */
+export function reorderVisible(groups, id, key, visibleKeys, toVisibleIndex) {
+  return groups.map((g) => {
+    if (g.id !== id) return g;
+    const keys = visibleKeys.filter((k) => k !== key);
+    keys.splice(Math.max(0, Math.min(toVisibleIndex, keys.length)), 0, key);
+    return { ...g, keys };
+  });
+}
+
 export function clearKeys(groups, id) {
   return groups.map((g) => (g.id === id ? { ...g, keys: [] } : g));
 }
@@ -79,6 +94,22 @@ if (import.meta.env.DEV) {
   const g2 = addKeys(c.groups, c.id, ['k1', 'k2', 'k1']);
   console.assert(JSON.stringify(g2[0].keys) === '["k1","k2"]', 'addKeys dedups');
   console.assert(reorderKey(g2, c.id, 'k2', 0)[0].keys[0] === 'k2', 'reorder to front');
+  // reorderVisible: operates on the visible (existing-channel) subset and
+  // prunes ghosts in the same save. Reviewer traces: stored ['A','GHOST','B','C'],
+  // visible (ghost filtered) is ['A','B','C'].
+  const gv = [{ id: 'g', name: 'G', kind: 'manual', keys: ['A', 'GHOST', 'B', 'C'] }];
+  const dragAfterC = reorderVisible(gv, 'g', 'A', ['A', 'B', 'C'], 2);
+  console.assert(
+    JSON.stringify(dragAfterC[0].keys) === '["B","C","A"]',
+    'reorderVisible: drag A after C -> [B,C,A]',
+  );
+  console.assert(!dragAfterC[0].keys.includes('GHOST'), 'reorderVisible: ghost pruned (after C)');
+  const dragAfterB = reorderVisible(gv, 'g', 'A', ['A', 'B', 'C'], 1);
+  console.assert(
+    JSON.stringify(dragAfterB[0].keys) === '["B","A","C"]',
+    'reorderVisible: drag A after B -> [B,A,C]',
+  );
+  console.assert(!dragAfterB[0].keys.includes('GHOST'), 'reorderVisible: ghost pruned (after B)');
   console.assert(removeKey(g2, c.id, 'k1')[0].keys.length === 1, 'removeKey');
   console.assert(renameGroup(g2, c.id, 'B')[0].name === 'B', 'rename');
   console.assert(clearKeys(g2, c.id)[0].keys.length === 0, 'clear');
