@@ -322,9 +322,10 @@ fn default_kind_manual() -> String {
 }
 
 fn default_active_group() -> String {
-    // Empty = no group selected: Columns opens to a lightweight chooser
-    // instead of auto-mounting a chat for every live channel ("Live now"
-    // remains available in the switcher as an explicit opt-in).
+    // Empty = no group selected: Columns opens to a lightweight chooser.
+    // (Groups are user-curated only; the transient "Live now" dynamic group
+    // was removed post-ship — stale persisted "live-now" values resolve to
+    // the chooser like any unknown id.)
     String::new()
 }
 

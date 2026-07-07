@@ -1,4 +1,4 @@
-import { createContext, useCallback, useEffect, useMemo, useRef } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { embedMount, embedBounds, embedSetVisible, embedUnmount } from '../ipc.js';
 
 export const EmbedLayerContext = createContext(null);
@@ -21,6 +21,13 @@ export const EmbedLayerContext = createContext(null);
  * embedSetVisibleAll(false) singleton from before Phase 7.
  */
 export default function EmbedLayer({ children, modalOpen }) {
+    // In-React popups (dropdowns, pickers, confirms) that render over embed
+    // regions are otherwise hidden behind the NATIVE child webviews (embeds
+    // live above the React surface in the GTK overlay). Any such popup
+    // ref-counts itself here via useEmbedOcclusion(open); embeds hide while
+    // the count is non-zero, same as App-level modals.
+    const [overlayCount, setOverlayCount] = useState(0);
+    const hidden = modalOpen || overlayCount > 0;
     // key → { refs: Map<slotId, { ref, active }> }
     const registry = useRef(new Map());
     // mounted keys (in Rust) — used for cleanup
@@ -48,14 +55,14 @@ export default function EmbedLayer({ children, modalOpen }) {
             embedMount(key, x, y, w, h).then((ok) => {
                 if (ok) {
                     mountedKeys.current.add(key);
-                    if (modalOpen) embedSetVisible(key, false).catch(() => {});
+                    if (hidden) embedSetVisible(key, false).catch(() => {});
                 }
             }).catch(() => {});
         } else {
             embedBounds(key, x, y, w, h).catch(() => {});
-            embedSetVisible(key, !modalOpen).catch(() => {});
+            embedSetVisible(key, !hidden).catch(() => {});
         }
-    }, [modalOpen]);
+    }, [hidden]);
 
     const register = useCallback((key, slotId, ref, active) => {
         let entry = registry.current.get(key);
@@ -101,20 +108,39 @@ export default function EmbedLayer({ children, modalOpen }) {
         return () => window.removeEventListener('resize', onResize);
     }, [reflowKey]);
 
-    // Re-apply visibility when modalOpen toggles
+    // Re-apply visibility when modal/overlay state toggles
     useEffect(() => {
         for (const key of mountedKeys.current) {
-            embedSetVisible(key, !modalOpen).catch(() => {});
+            embedSetVisible(key, !hidden).catch(() => {});
         }
-    }, [modalOpen]);
+    }, [hidden]);
+
+    const pushOverlay = useCallback(() => {
+        setOverlayCount((c) => c + 1);
+        return () => setOverlayCount((c) => Math.max(0, c - 1));
+    }, []);
 
     const ctx = useMemo(() => ({
-        register, unregister, updateActive, reflowKey,
-    }), [register, unregister, updateActive, reflowKey]);
+        register, unregister, updateActive, reflowKey, pushOverlay,
+    }), [register, unregister, updateActive, reflowKey, pushOverlay]);
 
     return (
         <EmbedLayerContext.Provider value={ctx}>
             {children}
         </EmbedLayerContext.Provider>
     );
+}
+
+
+/**
+ * Hide native embeds while an in-React popup is open. Ref-counted, so
+ * nested/concurrent popups compose; the pop runs on close or unmount.
+ * No-ops when no EmbedLayer is mounted (e.g. isolated component tests).
+ */
+export function useEmbedOcclusion(open) {
+    const layer = useContext(EmbedLayerContext);
+    useEffect(() => {
+        if (!open || !layer?.pushOverlay) return undefined;
+        return layer.pushOverlay();
+    }, [open, layer]);
 }

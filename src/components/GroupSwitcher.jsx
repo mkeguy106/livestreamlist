@@ -1,7 +1,7 @@
-/* Columns toolbar group switcher — replaces the static "Live now" chiclet.
+/* Columns toolbar group switcher.
  *
  * Trigger button shows the active group's name + a ▾ caret. The dropdown
- * pins "Live now" (non-deletable, non-renamable) first, then the user's
+ * lists the user's
  * manual groups (double-click to rename inline, × to delete via
  * ConfirmDialog), then a "New group…" row that swaps to an inline input.
  *
@@ -16,9 +16,13 @@
 import { useEffect, useRef, useState } from 'react';
 import ConfirmDialog from './ConfirmDialog.jsx';
 import Tooltip from './Tooltip.jsx';
+import { useEmbedOcclusion } from './EmbedLayer.jsx';
 
 export default function GroupSwitcher({ groups, activeId, onSwitch, onCreate, onRename, onDelete }) {
   const [open, setOpen] = useState(false);
+  // Native embeds render above the React surface — hide them while the menu
+  // (or its delete confirm) is open so the dropdown isn't hidden behind them.
+  useEmbedOcclusion(open || deleteTarget !== null);
   const [renamingId, setRenamingId] = useState(null);
   const [renameValue, setRenameValue] = useState('');
   const [creating, setCreating] = useState(false);
@@ -39,8 +43,7 @@ export default function GroupSwitcher({ groups, activeId, onSwitch, onCreate, on
   }, []);
 
   const activeGroup = groups.find((g) => g.id === activeId);
-  const activeName =
-    activeId === 'live-now' ? 'Live now' : activeGroup ? activeGroup.name : 'Choose group…';
+  const activeName = activeGroup ? activeGroup.name : 'Choose group…';
 
   const closeMenu = () => {
     setOpen(false);
@@ -143,19 +146,6 @@ export default function GroupSwitcher({ groups, activeId, onSwitch, onCreate, on
             padding: '3px 0',
           }}
         >
-          {/* Pinned "Live now" — non-deletable, non-renamable. */}
-          <MenuRow
-            selected={activeId === 'live-now'}
-            onClick={() => {
-              onSwitch('live-now');
-              closeMenu();
-            }}
-          >
-            Live now
-          </MenuRow>
-
-          {groups.length > 0 && <Sep />}
-
           {groups.map((g) => (
             <div key={g.id}>
               {renamingId === g.id ? (

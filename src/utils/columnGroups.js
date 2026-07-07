@@ -1,12 +1,5 @@
 export const DEFAULT_COLUMN_WIDTH = 340;
 
-export function liveNowOrder(prevOrder, liveKeys) {
-  const live = new Set(liveKeys);
-  const kept = (prevOrder || []).filter((k) => live.has(k));
-  const seen = new Set(kept);
-  const appended = liveKeys.filter((k) => !seen.has(k));
-  return [...kept, ...appended];
-}
 
 export function clampWidth(w) {
   const n = Number(w);
@@ -67,13 +60,9 @@ export function clearKeys(groups, id) {
 }
 
 if (import.meta.env.DEV) {
-  // liveNowOrder: stable-append
   console.assert(
-    JSON.stringify(liveNowOrder(['a', 'b'], ['b', 'c', 'a'])) === '["a","b","c"]',
     'remaining keep order, new appended'
   );
-  console.assert(JSON.stringify(liveNowOrder([], ['x', 'y'])) === '["x","y"]', 'empty prev');
-  console.assert(JSON.stringify(liveNowOrder(['a'], [])) === '[]', 'all offline');
   // clampWidth
   console.assert(clampWidth(0) === 340 && clampWidth('nope') === 340, 'falsy -> default');
   console.assert(clampWidth(100) === 240 && clampWidth(9000) === 600, 'clamped');

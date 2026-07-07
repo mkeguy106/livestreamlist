@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { useEmbedOcclusion } from './EmbedLayer.jsx';
 import { createPortal } from 'react-dom';
 
 /**
@@ -17,6 +18,9 @@ export default function ConfirmDialog({
   onConfirm,
   onClose,
 }) {
+  // Embed-safe: hide native embeds while any confirm dialog is open
+  // (ref-counted; harmless double-count when App-level modal state also hides).
+  useEmbedOcclusion(open);
   const confirmRef = useRef(null);
 
   useEffect(() => {
