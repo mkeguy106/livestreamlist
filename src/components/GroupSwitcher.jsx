@@ -64,7 +64,7 @@ export default function GroupSwitcher({ groups, activeId, onSwitch, onCreate, on
       document.removeEventListener('mousedown', onMouseDown);
       document.removeEventListener('keydown', onKeyDown);
     };
-  }, [open]);
+  }, [open, deleteTarget]);
 
   const beginRename = (g) => {
     setCreating(false); // mutually exclusive with the "New group…" input
