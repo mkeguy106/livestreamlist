@@ -175,6 +175,7 @@ function mockSnapshot() {
 
 const mockSubscribers = new Map(); // name -> Set<handler>
 const mockChatTimers = new Map();  // channelKey -> intervalId
+const mockRoomStateTimers = new Map(); // channelKey -> timeoutId (one-shot)
 
 function mockListen(name, handler) {
   const set = mockSubscribers.get(name) ?? new Set();
@@ -222,12 +223,33 @@ function startMockChat(uniqueKey) {
   }, 900 + Math.random() * 1400);
   mockChatTimers.set(uniqueKey, id);
   mockEmit(`chat:status:${uniqueKey}`, { channel_key: uniqueKey, status: 'connected' });
+
+  // Exercise the slow-mode countdown chip in browser-dev: fire one
+  // chat:roomstate event a beat after connect, mirroring the shape Rust
+  // emits (ChatRoomStateEvent { channel_key, state: ChatRoomState }).
+  const roomStateId = setTimeout(() => {
+    mockRoomStateTimers.delete(uniqueKey);
+    mockEmit(`chat:roomstate:${uniqueKey}`, {
+      channel_key: uniqueKey,
+      state: {
+        slow_seconds: 5,
+        followers_only_minutes: -1,
+        subs_only: false,
+        emote_only: false,
+        r9k: false,
+      },
+    });
+  }, 3000);
+  mockRoomStateTimers.set(uniqueKey, roomStateId);
 }
 
 function stopMockChat(uniqueKey) {
   const id = mockChatTimers.get(uniqueKey);
   if (id) clearInterval(id);
   mockChatTimers.delete(uniqueKey);
+  const roomStateId = mockRoomStateTimers.get(uniqueKey);
+  if (roomStateId) clearTimeout(roomStateId);
+  mockRoomStateTimers.delete(uniqueKey);
   mockEmit(`chat:status:${uniqueKey}`, { channel_key: uniqueKey, status: 'closed' });
 }
 

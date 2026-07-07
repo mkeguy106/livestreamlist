@@ -1,14 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { chatOpenInBrowser, chatSend, listEmotes, listenEvent, spellcheckAddWord, spellcheckSuggest } from '../ipc.js';
 import { shouldAutocorrect, isPastWord, rangeAtCaret } from '../utils/autocorrect.js';
+import { counterState } from '../utils/charCount.js';
 import Tooltip from './Tooltip.jsx';
 import SpellcheckOverlay from './SpellcheckOverlay.jsx';
 import SpellcheckContextMenu from './SpellcheckContextMenu.jsx';
 import EmotePicker from './EmotePicker.jsx';
 import { useSpellcheck } from '../hooks/useSpellcheck.js';
 import { usePreferences } from '../hooks/usePreferences.jsx';
+import { useRoomState } from '../hooks/useRoomState.js';
+import { recordSent, historyAt } from '../utils/sentHistory.js';
 
-const MAX_LEN = 500;
 const SUGGESTION_CAP = 75;
 
 async function runAutocorrectFor(
@@ -106,6 +108,20 @@ export default function Composer({
   const [pickerOpen, setPickerOpen] = useState(false);
   const inputRef = useRef(null);
   const [caret, setCaret] = useState(0);
+  // -1 = not browsing sent-message history. >= 0 = index into the
+  // per-channel history buffer (0 = most-recently-sent).
+  const historyIndexRef = useRef(-1);
+  // Set by the history-recall branch below immediately before it mutates
+  // `text` via setText. A recalled entry can end in an un-spaced `@mention`
+  // or `:emote` token (e.g. "gg @bob"), which would otherwise cause
+  // onKeyUp's recomputePopup to reopen the autocomplete popup on the very
+  // keystroke that recalled it — hijacking the next ArrowUp for popup
+  // navigation instead of continued history browsing. onKeyUp consumes
+  // (reads + clears) this flag and skips recomputePopup for exactly that
+  // keystroke. Each recall sets it again, so browsing several entries in a
+  // row stays suppressed; normal typing never sets it, so recompute keeps
+  // working immediately once the user types a character.
+  const suppressPopupRecomputeRef = useRef(false);
 
   // Right-click menu state. null = closed; object = open.
   // { kind, word, originalWord?, start, end, x, y }
@@ -115,6 +131,54 @@ export default function Composer({
   const spellcheckEnabled = settings?.chat?.spellcheck_enabled ?? true;
   const spellcheckLanguage = settings?.chat?.spellcheck_language ?? 'en_US';
   const autocorrectEnabled = settings?.chat?.autocorrect_enabled ?? true;
+
+  // Slow-mode countdown chip. `roomState` mirrors the raw ChatRoomState
+  // payload (as-delivered field names); `useRoomState` already owns the
+  // chat:roomstate:{channelKey} subscription for the mode banner
+  // (ChatModeBanner.jsx) — reused here rather than opening a second
+  // listener on the same topic.
+  const { state: roomState } = useRoomState(channelKey);
+  const slowSeconds = roomState?.slow_seconds ?? 0;
+
+  // `cooldownUntil` is an epoch-ms deadline; 0 means no active cooldown.
+  // `remaining` is the whole-second countdown the chip renders. The 250ms
+  // tick interval below is created only while a cooldown is actually
+  // counting down — never while cooldownUntil is 0 — and is cleared the
+  // instant the countdown reaches zero, on channel change, and on unmount.
+  const [cooldownUntil, setCooldownUntil] = useState(0);
+  const [remaining, setRemaining] = useState(0);
+
+  // Switching channels invalidates any in-flight cooldown from the
+  // previous channel's slow-mode — resetting cooldownUntil to 0 here
+  // makes the tick effect below tear down its interval (if any) and not
+  // start a new one.
+  useEffect(() => {
+    setCooldownUntil(0);
+    setRemaining(0);
+  }, [channelKey]);
+
+  useEffect(() => {
+    if (!cooldownUntil) {
+      setRemaining(0);
+      return undefined;
+    }
+    const tick = () => {
+      const r = Math.ceil((cooldownUntil - Date.now()) / 1000);
+      if (r <= 0) {
+        // Reaching zero clears cooldownUntil, which re-runs this effect
+        // (dep changed) — the cleanup below clears THIS interval, and the
+        // re-run's guard (`if (!cooldownUntil)`) returns before scheduling
+        // a new one. No interval survives past the countdown reaching 0.
+        setRemaining(0);
+        setCooldownUntil(0);
+      } else {
+        setRemaining(r);
+      }
+    };
+    tick(); // compute immediately so the chip doesn't show a stale value for the first 250ms
+    const id = setInterval(tick, 250);
+    return () => clearInterval(id);
+  }, [cooldownUntil]);
 
   const platformAuth =
     platform === 'twitch' ? auth?.twitch : platform === 'kick' ? auth?.kick : null;
@@ -206,10 +270,14 @@ export default function Composer({
     channelEmotes: emoteNames,
   });
 
-  // Per-channel reset of autocorrect memory.
+  // Per-channel reset of autocorrect memory. Sent-message history buffers
+  // themselves are NOT cleared here — they persist per channel by design
+  // (module-level Map in sentHistory.js) — only the "currently browsing"
+  // cursor resets so switching channels doesn't leave stale index state.
   useEffect(() => {
     clearRecent();
     clearIgnored();
+    historyIndexRef.current = -1;
   }, [channelKey, clearRecent, clearIgnored]);
 
   // Auto-focus the input when reply mode arms — user clicked Reply on a
@@ -275,7 +343,10 @@ export default function Composer({
   );
 
   const onChange = (e) => {
-    const value = e.target.value.slice(0, MAX_LEN);
+    const value = e.target.value;
+    // Real user typing (as opposed to a history-recall setText, which
+    // never runs through this native onChange) always exits browsing mode.
+    historyIndexRef.current = -1;
     setText(value);
     setCaret(e.target.selectionStart ?? value.length);
     recomputePopup(value, e.target.selectionStart);
@@ -289,7 +360,7 @@ export default function Composer({
     const before = text.slice(0, popup.start);
     const caret = inputRef.current?.selectionStart ?? popup.start + popup.query.length + 1;
     const after = text.slice(caret);
-    const next = `${before}${insertion} ${after}`.slice(0, MAX_LEN);
+    const next = `${before}${insertion} ${after}`;
     setText(next);
     setPopup(null);
     // Reset caret after the inserted token + trailing space.
@@ -316,7 +387,11 @@ export default function Composer({
     const before = text.slice(0, pos);
     const after = text.slice(pos);
     const insertion = `${name} `;
-    const next = `${before}${insertion}${after}`.slice(0, MAX_LEN);
+    const next = `${before}${insertion}${after}`;
+    // A picker-inserted emote is a draft mutation just like typing — exit
+    // history-browsing mode so a subsequent ArrowUp doesn't silently
+    // overwrite this edited draft with an older history entry.
+    historyIndexRef.current = -1;
     setText(next);
     const newCaret = (before + insertion).length;
     setCaret(newCaret);
@@ -450,7 +525,8 @@ export default function Composer({
   const submit = async (e) => {
     e?.preventDefault?.();
     const body = text.trim();
-    if (!body || !authed || busy || !channelKey) return;
+    const counter = counterState(text.length);
+    if (!body || !authed || busy || !channelKey || counter?.over || remaining > 0) return;
     setBusy(true);
     setError(null);
     try {
@@ -463,6 +539,11 @@ export default function Composer({
           }
         : null;
       await chatSend(channelKey, body, replyArg);
+      recordSent(channelKey, body);
+      if (slowSeconds > 0) {
+        setCooldownUntil(Date.now() + slowSeconds * 1000);
+      }
+      historyIndexRef.current = -1;
       setText('');
       setPopup(null);
       clearIgnored();
@@ -497,6 +578,50 @@ export default function Composer({
       if (e.key === 'Escape') {
         e.preventDefault();
         setPopup(null);
+        return;
+      }
+    }
+    // Sent-message history recall (↑/↓). Gated on: no autocomplete popup
+    // (it owns arrows above — this only runs when that branch didn't
+    // return) and the emote picker closed (it owns its own search-box
+    // navigation; `pickerOpen` is a defensive guard in case focus is
+    // briefly still on this input right after the toggle). Recall itself
+    // only engages when the draft is empty OR we're already browsing —
+    // a non-empty, never-browsed draft leaves ↑/↓ alone (native no-op in
+    // a single-line input) so in-progress typing is never clobbered.
+    if (!popup && !pickerOpen) {
+      if (e.key === 'ArrowUp' && (text === '' || historyIndexRef.current >= 0)) {
+        e.preventDefault();
+        const nextIndex = historyIndexRef.current + 1;
+        const entry = historyAt(channelKey, nextIndex);
+        if (entry == null) {
+          // Already at the oldest entry — nothing further to recall.
+          return;
+        }
+        historyIndexRef.current = nextIndex;
+        suppressPopupRecomputeRef.current = true;
+        setText(entry);
+        setCaret(entry.length);
+        requestAnimationFrame(() => {
+          const el = inputRef.current;
+          if (!el) return;
+          el.setSelectionRange(entry.length, entry.length);
+        });
+        return;
+      }
+      if (e.key === 'ArrowDown' && historyIndexRef.current >= 0) {
+        e.preventDefault();
+        const nextIndex = historyIndexRef.current - 1;
+        historyIndexRef.current = nextIndex;
+        suppressPopupRecomputeRef.current = true;
+        const value = nextIndex < 0 ? '' : (historyAt(channelKey, nextIndex) ?? '');
+        setText(value);
+        setCaret(value.length);
+        requestAnimationFrame(() => {
+          const el = inputRef.current;
+          if (!el) return;
+          el.setSelectionRange(value.length, value.length);
+        });
         return;
       }
     }
@@ -608,6 +733,16 @@ export default function Composer({
             onKeyDown={onKey}
             onKeyUp={(e) => {
               setCaret(e.currentTarget.selectionStart ?? 0);
+              // History-recall keystroke: onKeyDown just set `text` to a
+              // recalled entry (which may end in an un-spaced `@mention`
+              // or `:emote` token). Skip recompute for exactly this
+              // keystroke so the popup doesn't reopen and hijack the next
+              // ArrowUp/Down from continued history browsing. Consume
+              // (read + clear) so normal typing right after is unaffected.
+              if (suppressPopupRecomputeRef.current) {
+                suppressPopupRecomputeRef.current = false;
+                return;
+              }
               // Popup-navigation keys (↑↓ Tab Enter Esc) are handled by
               // onKeyDown — recomputing here would clobber the index
               // increment with a fresh `index: 0`.
@@ -628,7 +763,6 @@ export default function Composer({
               recomputePopup(e.currentTarget.value, e.currentTarget.selectionStart);
             }}
             disabled={!authed || busy}
-            maxLength={MAX_LEN}
           />
           {spellcheckEnabled && authed && (
             <SpellcheckOverlay
@@ -681,9 +815,23 @@ export default function Composer({
             </button>
           </Tooltip>
         )}
-        <span className="rx-mono" style={{ fontSize: 10, color: 'var(--zinc-600)', minWidth: 54, textAlign: 'right' }}>
-          {text.length} / {MAX_LEN}
-        </span>
+        {remaining > 0 && (
+          <span
+            className="rx-chiclet rx-mono"
+            aria-label="Slow mode cooldown"
+            style={{ alignSelf: 'center' }}
+          >
+            ⏱ {remaining}s
+          </span>
+        )}
+        {(() => {
+          const counter = counterState(text.length);
+          return counter && (
+            <span className="rx-mono" style={{ fontSize: 10, color: counter.over ? 'var(--live)' : 'var(--zinc-500)', alignSelf: 'center' }}>
+              {counter.text}
+            </span>
+          );
+        })()}
       </div>
       {error && (
         <div style={{ color: '#f87171', fontSize: 'var(--t-11)' }}>{error}</div>
