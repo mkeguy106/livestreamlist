@@ -281,12 +281,12 @@ After every Chaturbate embed `PageLoadEvent::Finished`, read the `sessionid` coo
 - Login popups (`auth/youtube.rs::login_via_webview`, `auth/chaturbate.rs::login_via_webview`) use the same `data_directory` as the embeds → cookies persist on disk and the embed picks them up automatically.
 - Logout (`auth::*::clear()`) calls `EmbedHost::unmount_platform(platform)` first, THEN `remove_dir_all(profile_dir)`. This ordering matters — wiping the dir while an embed is still loading against it crashes WebKit. The Chaturbate flow has a `clear_stamp_only()` variant for the auth-drift case where the embed is mid-load and we just want to flip the stamp without touching the profile dir.
 
-**Multi-embed**: the HashMap-keyed model means N concurrent embeds is a first-class feature, not a workaround. Once the Columns redesign lands it will show one embed per visible YT/CB column, all rendering simultaneously (Columns is currently stubbed — see "The three layouts"). The pre-rewrite single-`Option<CurrentEmbed>` ceiling is gone.
+**Multi-embed**: the HashMap-keyed model means N concurrent embeds is a first-class feature, not a workaround. The Columns layout shows one embed per visible YT/CB column, all rendering simultaneously. The pre-rewrite single-`Option<CurrentEmbed>` ceiling is gone.
 
 ### The three layouts
 
 - **Command** — selected-channel workflow. Sidebar rail shows all channels (live first, then offline alpha). Main pane shows the selected channel's header + chat.
-- **Columns** — parallel-monitoring workflow. **Currently a stub** (`src/directions/Columns.jsx`): the previous TweetDeck-style live-column layout is disabled pending the Phase 6 redesign, so this view renders no channels and mounts no chat tasks — it only keeps the layout switcher functional (an "Add channel" button + a "redesign in progress" chiclet). The description below is the intended shape once the redesign lands: one compact column per **live** channel, each with its own chat.
+- **Columns** — parallel-monitoring workspace (Phase 6 slice 1). A built-in dynamic **"Live now"** group mirrors live channels (stable-append ordering); user-created **manual groups** (named, switchable, persisted in `settings.columns`) hold curated channel sets incl. offline channels. Per-column resize (240–600 px, persisted per channel), add-column picker, header-drag reorder (mouse pattern), clear-all. Each column is a full compact-variant `ChatView`; YT/CB columns mount embeds via `EmbedSlot`.
 - **Focus** — single-stream reader mode. Tab strip of all channels across the top; split 60/40 with video placeholder / chat.
 
 All three share the same data hook (`useLivestreams`). Each has its own chat binding: Command/Focus use one `ChatView` for the selected/featured channel; Columns mounts one `ChatView` per visible column.

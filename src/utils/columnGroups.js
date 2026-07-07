@@ -46,17 +46,6 @@ export function removeKey(groups, id, key) {
   return groups.map((g) => (g.id === id ? { ...g, keys: g.keys.filter((k) => k !== key) } : g));
 }
 
-export function reorderKey(groups, id, key, toIndex) {
-  return groups.map((g) => {
-    if (g.id !== id) return g;
-    const from = g.keys.indexOf(key);
-    if (from === -1) return g;
-    const keys = [...g.keys];
-    keys.splice(from, 1);
-    keys.splice(Math.max(0, Math.min(toIndex, keys.length)), 0, key);
-    return { ...g, keys };
-  });
-}
 
 /**
  * Reorder `key` to `toVisibleIndex` WITHIN the visible (existing-channel)
@@ -93,7 +82,6 @@ if (import.meta.env.DEV) {
   console.assert(c.groups.length === 1 && c.groups[0].kind === 'manual' && c.id, 'create');
   const g2 = addKeys(c.groups, c.id, ['k1', 'k2', 'k1']);
   console.assert(JSON.stringify(g2[0].keys) === '["k1","k2"]', 'addKeys dedups');
-  console.assert(reorderKey(g2, c.id, 'k2', 0)[0].keys[0] === 'k2', 'reorder to front');
   // reorderVisible: operates on the visible (existing-channel) subset and
   // prunes ghosts in the same save. Reviewer traces: stored ['A','GHOST','B','C'],
   // visible (ghost filtered) is ['A','B','C'].
