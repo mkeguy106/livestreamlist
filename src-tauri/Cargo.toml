@@ -1,6 +1,6 @@
 [package]
 name = "livestreamlist"
-version = "0.1.0"
+version = "0.2.0"
 description = "Livestream monitor"
 authors = ["mkeguy106"]
 license = "MIT"
