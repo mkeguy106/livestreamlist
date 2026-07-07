@@ -56,7 +56,7 @@ export default function GroupSwitcher({ groups, activeId, onSwitch, onCreate, on
       if (containerRef.current && !containerRef.current.contains(e.target)) closeMenu();
     };
     const onKeyDown = (e) => {
-      if (e.key === 'Escape') closeMenu();
+      if (e.key === 'Escape' && deleteTarget === null) closeMenu();
     };
     document.addEventListener('mousedown', onMouseDown);
     document.addEventListener('keydown', onKeyDown);
@@ -105,7 +105,7 @@ export default function GroupSwitcher({ groups, activeId, onSwitch, onCreate, on
           type="button"
           aria-label="Switch group"
           aria-haspopup="menu"
-          onClick={() => setOpen((v) => !v)}
+          onClick={() => (open ? closeMenu() : setOpen(true))}
           className="rx-btn rx-btn-ghost"
           style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '3px 8px' }}
         >
@@ -181,11 +181,13 @@ export default function GroupSwitcher({ groups, activeId, onSwitch, onCreate, on
                   selected={activeId === g.id}
                   onClick={() => {
                     if (clickTimerRef.current) clearTimeout(clickTimerRef.current);
+                    // 400ms matches GTK's gtk-double-click-time default; avoids interpreting
+                    // moderately-paced double-clicks as single-click-then-switch.
                     clickTimerRef.current = setTimeout(() => {
                       onSwitch(g.id);
                       closeMenu();
                       clickTimerRef.current = null;
-                    }, 220);
+                    }, 400);
                   }}
                   onDoubleClick={(e) => {
                     e.stopPropagation();
