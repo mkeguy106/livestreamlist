@@ -10,7 +10,6 @@ import { useSpellcheck } from '../hooks/useSpellcheck.js';
 import { usePreferences } from '../hooks/usePreferences.jsx';
 import { recordSent, historyAt } from '../utils/sentHistory.js';
 
-const MAX_LEN = 500;
 const SUGGESTION_CAP = 75;
 
 async function runAutocorrectFor(
@@ -339,7 +338,7 @@ export default function Composer({
     const before = text.slice(0, pos);
     const after = text.slice(pos);
     const insertion = `${name} `;
-    const next = `${before}${insertion}${after}`.slice(0, MAX_LEN);
+    const next = `${before}${insertion}${after}`;
     // A picker-inserted emote is a draft mutation just like typing — exit
     // history-browsing mode so a subsequent ArrowUp doesn't silently
     // overwrite this edited draft with an older history entry.
