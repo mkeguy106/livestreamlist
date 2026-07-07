@@ -110,6 +110,17 @@ export default function Composer({
   // -1 = not browsing sent-message history. >= 0 = index into the
   // per-channel history buffer (0 = most-recently-sent).
   const historyIndexRef = useRef(-1);
+  // Set by the history-recall branch below immediately before it mutates
+  // `text` via setText. A recalled entry can end in an un-spaced `@mention`
+  // or `:emote` token (e.g. "gg @bob"), which would otherwise cause
+  // onKeyUp's recomputePopup to reopen the autocomplete popup on the very
+  // keystroke that recalled it — hijacking the next ArrowUp for popup
+  // navigation instead of continued history browsing. onKeyUp consumes
+  // (reads + clears) this flag and skips recomputePopup for exactly that
+  // keystroke. Each recall sets it again, so browsing several entries in a
+  // row stays suppressed; normal typing never sets it, so recompute keeps
+  // working immediately once the user types a character.
+  const suppressPopupRecomputeRef = useRef(false);
 
   // Right-click menu state. null = closed; object = open.
   // { kind, word, originalWord?, start, end, x, y }
@@ -328,6 +339,10 @@ export default function Composer({
     const after = text.slice(pos);
     const insertion = `${name} `;
     const next = `${before}${insertion}${after}`.slice(0, MAX_LEN);
+    // A picker-inserted emote is a draft mutation just like typing — exit
+    // history-browsing mode so a subsequent ArrowUp doesn't silently
+    // overwrite this edited draft with an older history entry.
+    historyIndexRef.current = -1;
     setText(next);
     const newCaret = (before + insertion).length;
     setCaret(newCaret);
@@ -531,6 +546,7 @@ export default function Composer({
           return;
         }
         historyIndexRef.current = nextIndex;
+        suppressPopupRecomputeRef.current = true;
         setText(entry);
         setCaret(entry.length);
         requestAnimationFrame(() => {
@@ -544,6 +560,7 @@ export default function Composer({
         e.preventDefault();
         const nextIndex = historyIndexRef.current - 1;
         historyIndexRef.current = nextIndex;
+        suppressPopupRecomputeRef.current = true;
         const value = nextIndex < 0 ? '' : (historyAt(channelKey, nextIndex) ?? '');
         setText(value);
         setCaret(value.length);
@@ -663,6 +680,16 @@ export default function Composer({
             onKeyDown={onKey}
             onKeyUp={(e) => {
               setCaret(e.currentTarget.selectionStart ?? 0);
+              // History-recall keystroke: onKeyDown just set `text` to a
+              // recalled entry (which may end in an un-spaced `@mention`
+              // or `:emote` token). Skip recompute for exactly this
+              // keystroke so the popup doesn't reopen and hijack the next
+              // ArrowUp/Down from continued history browsing. Consume
+              // (read + clear) so normal typing right after is unaffected.
+              if (suppressPopupRecomputeRef.current) {
+                suppressPopupRecomputeRef.current = false;
+                return;
+              }
               // Popup-navigation keys (↑↓ Tab Enter Esc) are handled by
               // onKeyDown — recomputing here would clobber the index
               // increment with a fresh `index: 0`.
