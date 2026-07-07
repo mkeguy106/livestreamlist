@@ -1,21 +1,60 @@
 /* Direction B — "Columns"
  * TweetDeck-style parallel-monitoring layout: one compact column per live
- * channel, each with its own chat. PR 1 ships only the "Live now" pseudo-group
+ * channel, each with its own chat. PR 1 shipped the "Live now" pseudo-group
  * (channels appear when they go live, disappear when they go offline, order
- * is stable-append). Manual groups (create/rename/reorder, Add-to-group,
- * GroupSwitcher tabs) land in PR 2 on top of the `ColumnView` contract this
- * file establishes.
+ * is stable-append). PR 2 adds named manual groups: the `GroupSwitcher`
+ * toolbar control (create/rename/delete, Task 4), `AddColumnPicker` +
+ * per-column remove + clear-all (Task 5), and drag-to-reorder columns
+ * (Task 6, this file) — mouse-event drag mirroring TabStrip's canonical
+ * pattern (src/components/TabStrip.jsx), since HTML5 dnd doesn't work on
+ * WebKitGTK. Reorder is manual-groups-only; Live-now's order is derived
+ * from live status, not curated, so `dragProps` stays `null` for those
+ * columns.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import AddColumnPicker from '../components/AddColumnPicker.jsx';
 import ColumnView from '../components/ColumnView.jsx';
+import ConfirmDialog from '../components/ConfirmDialog.jsx';
+import GroupSwitcher from '../components/GroupSwitcher.jsx';
 import Tooltip from '../components/Tooltip.jsx';
 import { usePreferences } from '../hooks/usePreferences.jsx';
-import { clampWidth, liveNowOrder } from '../utils/columnGroups.js';
+import {
+  addKeys,
+  clampWidth,
+  clearKeys,
+  createGroup,
+  deleteGroup,
+  liveNowOrder,
+  removeKey,
+  renameGroup,
+  reorderVisible,
+} from '../utils/columnGroups.js';
+
+// Mouse-move distance (px) before an armed column-header mousedown becomes a
+// real drag rather than a click — same threshold TabStrip uses.
+const DRAG_THRESHOLD_PX = 5;
+
+// Clear-all skips the confirm step below this many keys — a slip of the
+// mouse on a 1-2 column group is trivially undoable by re-adding, so the
+// extra dialog would just be friction. At 3+ keys, losing the curated set
+// is expensive enough to warrant a confirm.
+const CLEAR_ALL_CONFIRM_THRESHOLD = 3;
+
+const LIVE_NOW_DISABLED_HINT = 'Live now follows your live channels — create a group to curate';
 
 export default function Columns({ ctx }) {
   const { livestreams, openAddDialog, refresh, loading } = ctx;
   const { settings, patch } = usePreferences();
   const cols = settings?.columns || { groups: [], active_group: 'live-now', column_widths: {} };
+
+  // Shared helper for every group mutation (switch/create/rename/delete,
+  // plus the existing per-column width commit below) — one `patch` call
+  // that merges the given fields into `settings.columns` without clobbering
+  // sibling fields.
+  const patchColumns = useCallback(
+    (fields) => patch((prev) => ({ ...prev, columns: { ...prev.columns, ...fields } })),
+    [patch],
+  );
 
   // Live-now ordering: stable-append. `liveNowOrder` is a pure function of
   // (previous order, current live keys) — kept channels retain their
@@ -84,6 +123,12 @@ export default function Columns({ ctx }) {
         delete next[key];
         return next;
       });
+      // Functional-updater form (reads `prev` directly, same as
+      // `Command.jsx`'s `DragResizeHandle`) rather than routing through
+      // `patchColumns` — that helper's `fields` argument is a plain object
+      // computed from the render closure, which is fine for the low-
+      // frequency, human-menu-driven group CRUD below, but resize commits
+      // deserve the same never-stale guarantee the original code had.
       patch((prev) => ({
         ...prev,
         columns: {
@@ -101,6 +146,189 @@ export default function Columns({ ctx }) {
     [widthOverrides, cols.column_widths],
   );
 
+  // Active-group resolution: "live-now" (or an `active_group` id that no
+  // longer matches any stored group — e.g. deleted from another device)
+  // falls back to the live-now path. Otherwise render the stored group's
+  // `keys`, filtered to channels still present in `byKey` — unknown ("ghost")
+  // keys are skipped here at render, not pruned. They get pruned the next
+  // time a reorder touches this group (`reorderVisible` persists the visible
+  // subset as the new `keys`, below); until then a ghost is otherwise
+  // tolerated at render.
+  const activeManualGroup = useMemo(
+    () => cols.groups.find((g) => g.id === cols.active_group) ?? null,
+    [cols.groups, cols.active_group],
+  );
+  const isLiveNow = cols.active_group === 'live-now' || !activeManualGroup;
+
+  const manualKeys = useMemo(() => {
+    if (isLiveNow) return null;
+    return activeManualGroup.keys.filter((k) => byKey.has(k));
+  }, [isLiveNow, activeManualGroup, byKey]);
+
+  const visibleKeys = isLiveNow ? order : manualKeys;
+
+  const onSwitchGroup = useCallback(
+    (id) => patchColumns({ active_group: id }),
+    [patchColumns],
+  );
+  const onCreateGroup = useCallback(
+    (name) => {
+      const { groups, id } = createGroup(cols.groups, name);
+      patchColumns({ groups, active_group: id });
+    },
+    [cols.groups, patchColumns],
+  );
+  const onRenameGroup = useCallback(
+    (id, name) => patchColumns({ groups: renameGroup(cols.groups, id, name) }),
+    [cols.groups, patchColumns],
+  );
+  const onDeleteGroup = useCallback(
+    (id) => {
+      const groups = deleteGroup(cols.groups, id);
+      const active_group = cols.active_group === id ? 'live-now' : cols.active_group;
+      patchColumns({ groups, active_group });
+    },
+    [cols.groups, cols.active_group, patchColumns],
+  );
+
+  // Add-column picker + per-column remove + clear-all — all scoped to the
+  // active *manual* group. Both toolbar affordances are disabled (with a
+  // themed Tooltip explaining why) while "Live now" is active, since that
+  // pseudo-group's membership is derived from live status, not curated.
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [clearConfirmOpen, setClearConfirmOpen] = useState(false);
+
+  const onAddColumns = useCallback(
+    (keys) => {
+      if (!activeManualGroup) return;
+      patchColumns({ groups: addKeys(cols.groups, activeManualGroup.id, keys) });
+    },
+    [cols.groups, activeManualGroup, patchColumns],
+  );
+
+  const onRemoveColumn = useCallback(
+    (key) => {
+      if (!activeManualGroup) return;
+      patchColumns({ groups: removeKey(cols.groups, activeManualGroup.id, key) });
+    },
+    [cols.groups, activeManualGroup, patchColumns],
+  );
+
+  const doClearAll = useCallback(() => {
+    if (!activeManualGroup) return;
+    patchColumns({ groups: clearKeys(cols.groups, activeManualGroup.id) });
+  }, [cols.groups, activeManualGroup, patchColumns]);
+
+  const onClearAllClick = useCallback(() => {
+    if (!activeManualGroup) return;
+    if (activeManualGroup.keys.length >= CLEAR_ALL_CONFIRM_THRESHOLD) {
+      setClearConfirmOpen(true);
+    } else {
+      doClearAll();
+    }
+  }, [activeManualGroup, doClearAll]);
+
+  // Drag-to-reorder (manual groups only) — mouse-event pattern mirroring
+  // TabStrip's canonical drag: mousedown on a column's header arms
+  // `{ key, startX, startY, active, targetKey, dropPosition }`; document-level
+  // mousemove/mouseup (attached only while armed, so the drag survives the
+  // cursor leaving the column) track the cursor, and Esc cancels. The
+  // hover target is found via `elementFromPoint(...).closest('[data-col-key]')`
+  // — the same attribute ColumnView's resize handle already relies on.
+  const [drag, setDrag] = useState(null);
+
+  const onColumnHeaderMouseDown = useCallback((key) => (e) => {
+    if (e.button !== 0) return;
+    // Don't arm a drag when the mousedown lands on the × remove button in
+    // the header — only a plain header-background press should start a
+    // reorder (mirrors TabStrip's `closest('button')` guard).
+    if (e.target.closest('button')) return;
+    e.preventDefault();
+    setDrag({ key, startX: e.clientX, startY: e.clientY, active: false, targetKey: null, dropPosition: null });
+  }, []);
+
+  useEffect(() => {
+    if (!drag) return undefined;
+
+    const onMove = (e) => {
+      const dx = Math.abs(e.clientX - drag.startX);
+      const dy = Math.abs(e.clientY - drag.startY);
+      const moved = dx + dy >= DRAG_THRESHOLD_PX;
+      const el = document.elementFromPoint(e.clientX, e.clientY);
+      const targetEl = el && el.closest && el.closest('[data-col-key]');
+      const targetKey = targetEl ? targetEl.getAttribute('data-col-key') : null;
+      // Cursor on the left half of the target column -> drop before it;
+      // right half -> drop after it (reaches the trailing position by
+      // hovering the right edge of the rightmost column).
+      let dropPosition = 'before';
+      if (targetEl) {
+        const rect = targetEl.getBoundingClientRect();
+        dropPosition = e.clientX >= rect.left + rect.width / 2 ? 'after' : 'before';
+      }
+      setDrag((prev) =>
+        prev ? { ...prev, active: prev.active || moved, targetKey, dropPosition } : prev,
+      );
+    };
+
+    const onUp = () => {
+      setDrag((prev) => {
+        if (!prev) return null;
+        if (prev.active && prev.targetKey && prev.targetKey !== prev.key && activeManualGroup) {
+          // `visibleKeys` is the on-screen order (== the manual group's
+          // curated `keys`, filtered to channels still present — ghost keys
+          // for channels deleted from the app are excluded). Translate the
+          // before/after-by-cursor-half drop into the post-removal index
+          // `reorderVisible` expects: find where the target lands once the
+          // source is spliced out, then offset by one more for "after".
+          // `reorderVisible` re-splices against this same `visibleKeys`
+          // array (not the full stored `keys`, which may still contain
+          // ghosts) so the computed index always lands where the user
+          // actually saw it drop, and persists the visible list as the new
+          // `keys` — pruning any ghosts in the same save.
+          const sourceIdx = visibleKeys.indexOf(prev.key);
+          const targetIdx = visibleKeys.indexOf(prev.targetKey);
+          if (sourceIdx !== -1 && targetIdx !== -1) {
+            const targetIdxAfterRemoval = targetIdx > sourceIdx ? targetIdx - 1 : targetIdx;
+            const toIndex = prev.dropPosition === 'after' ? targetIdxAfterRemoval + 1 : targetIdxAfterRemoval;
+            patchColumns({
+              groups: reorderVisible(cols.groups, activeManualGroup.id, prev.key, visibleKeys, toIndex),
+            });
+          }
+        }
+        return null;
+      });
+    };
+
+    const onKey = (e) => {
+      if (e.key === 'Escape') setDrag(null);
+    };
+
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [drag, visibleKeys, activeManualGroup, cols.groups, patchColumns]);
+
+  // Lock the document cursor + disable text selection while a real drag is
+  // active, same as TabStrip and Command.jsx's DragResizeHandle — otherwise
+  // the cursor flickers to text-selection over neighboring chat text as it
+  // crosses column boundaries.
+  useEffect(() => {
+    if (!drag?.active) return undefined;
+    const prevCursor = document.body.style.cursor;
+    const prevUserSelect = document.body.style.userSelect;
+    document.body.style.cursor = 'grabbing';
+    document.body.style.userSelect = 'none';
+    return () => {
+      document.body.style.cursor = prevCursor;
+      document.body.style.userSelect = prevUserSelect;
+    };
+  }, [drag?.active]);
+
   return (
     <>
       {/* Toolbar */}
@@ -115,10 +343,37 @@ export default function Columns({ ctx }) {
           flexShrink: 0,
         }}
       >
-        {/* Static for PR 1 — the GroupSwitcher (tabs for manual groups +
-            this "Live now" pseudo-group) lands in PR 2. */}
-        <span className="rx-chiclet">Live now</span>
+        <GroupSwitcher
+          groups={cols.groups}
+          activeId={cols.active_group}
+          onSwitch={onSwitchGroup}
+          onCreate={onCreateGroup}
+          onRename={onRenameGroup}
+          onDelete={onDeleteGroup}
+        />
         <div style={{ flex: 1 }} />
+        <Tooltip text={isLiveNow ? LIVE_NOW_DISABLED_HINT : 'Clear all columns from this group'}>
+          <button
+            type="button"
+            aria-label={isLiveNow ? LIVE_NOW_DISABLED_HINT : 'Clear all columns from this group'}
+            className="rx-btn rx-btn-ghost"
+            disabled={isLiveNow}
+            onClick={onClearAllClick}
+          >
+            Clear all
+          </button>
+        </Tooltip>
+        <Tooltip text={isLiveNow ? LIVE_NOW_DISABLED_HINT : 'Add columns to this group'}>
+          <button
+            type="button"
+            aria-label={isLiveNow ? LIVE_NOW_DISABLED_HINT : 'Add columns to this group'}
+            className="rx-btn rx-btn-ghost"
+            disabled={isLiveNow}
+            onClick={() => setPickerOpen(true)}
+          >
+            ＋ Add column
+          </button>
+        </Tooltip>
         <Tooltip text={loading ? 'Refreshing…' : 'Refresh now'}>
           <button
             type="button"
@@ -134,7 +389,7 @@ export default function Columns({ ctx }) {
       </div>
 
       {/* Column row */}
-      {order.length === 0 ? (
+      {visibleKeys.length === 0 ? (
         <div
           style={{
             flex: 1,
@@ -147,22 +402,40 @@ export default function Columns({ ctx }) {
             fontSize: 'var(--t-12)',
           }}
         >
-          <div>No channels are live right now.</div>
-          <span className="rx-chiclet">columns appear here as channels go live</span>
+          {isLiveNow ? (
+            <>
+              <div>No channels are live right now.</div>
+              <span className="rx-chiclet">columns appear here as channels go live</span>
+            </>
+          ) : (
+            <div>This group is empty.</div>
+          )}
         </div>
       ) : (
         <div style={{ flex: 1, display: 'flex', overflowX: 'auto', minHeight: 0 }}>
-          {order.map((k) => (
-            <ColumnView
-              key={k}
-              column={{ key: k, live: true, channel: byKey.get(k) }}
-              width={widthFor(k)}
-              onResize={handleResize}
-              onRemove={null}
-              dragProps={null}
-              ctx={ctx}
-            />
-          ))}
+          {visibleKeys.map((k) => {
+            const isDragSource = !isLiveNow && drag?.active === true && drag.key === k;
+            const isDropTarget =
+              !isLiveNow && drag?.active === true && drag.targetKey === k && drag.key !== k;
+            const dropEdge = isDropTarget ? (drag.dropPosition === 'after' ? 'right' : 'left') : null;
+            return (
+              <ColumnView
+                key={k}
+                column={{
+                  key: k,
+                  live: isLiveNow ? true : !!byKey.get(k)?.is_live,
+                  channel: byKey.get(k),
+                }}
+                width={widthFor(k)}
+                onResize={handleResize}
+                onRemove={isLiveNow ? null : onRemoveColumn}
+                dragProps={isLiveNow ? null : { onMouseDown: onColumnHeaderMouseDown(k) }}
+                isDragSource={isDragSource}
+                dropEdge={dropEdge}
+                ctx={ctx}
+              />
+            );
+          })}
         </div>
       )}
 
@@ -178,8 +451,34 @@ export default function Columns({ ctx }) {
           flexShrink: 0,
         }}
       >
-        <span className="rx-chiclet">{order.length} columns</span>
+        <span className="rx-chiclet">{visibleKeys.length} columns</span>
       </div>
+
+      <AddColumnPicker
+        open={pickerOpen && !isLiveNow}
+        onClose={() => setPickerOpen(false)}
+        livestreams={livestreams}
+        existingKeys={activeManualGroup?.keys}
+        onConfirm={onAddColumns}
+      />
+
+      <ConfirmDialog
+        open={clearConfirmOpen}
+        title="Clear all columns?"
+        body={
+          activeManualGroup
+            ? `Remove all ${activeManualGroup.keys.length} columns from "${activeManualGroup.name}"? The channels themselves are not affected.`
+            : ''
+        }
+        confirmLabel="Clear all"
+        cancelLabel="Cancel"
+        danger
+        onConfirm={() => {
+          doClearAll();
+          setClearConfirmOpen(false);
+        }}
+        onClose={() => setClearConfirmOpen(false)}
+      />
     </>
   );
 }

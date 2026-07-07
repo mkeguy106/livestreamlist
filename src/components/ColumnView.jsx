@@ -1,14 +1,21 @@
 /* Single live-channel column for the Columns layout.
  *
- * Contract (reused by Task 5's manual groups):
- *   <ColumnView column={{key, live, channel}} width onResize onRemove={null} dragProps={null} ctx />
+ * Contract (reused by Task 5's manual groups + Task 6's reorder):
+ *   <ColumnView column={{key, live, channel}} width onResize onRemove={null}
+ *     dragProps={null} isDragSource={false} dropEdge={null} ctx />
  *
- * - `onRemove`: null in PR 1 (live-now columns can't be individually removed —
- *   they disappear when the channel goes offline). Manual groups (PR 2+) pass
- *   a real handler, which is when the × button in the header appears.
- * - `dragProps`: null in PR 1 (no column reordering yet). Manual groups will
- *   spread `{ onMouseDown }` here to arm a column-reorder drag, mirroring
- *   TabStrip's canonical mouse-drag pattern.
+ * - `onRemove`: null for Live-now columns (can't be individually removed —
+ *   they disappear when the channel goes offline). Manual groups pass a real
+ *   handler, which is when the × button in the header appears.
+ * - `dragProps`: null for Live-now columns (that pseudo-group's order is
+ *   derived from live status, not curated). Manual groups spread
+ *   `{ onMouseDown }` here — arms a column-reorder drag in `Columns.jsx`,
+ *   mirroring TabStrip's canonical mouse-drag pattern. Spread directly onto
+ *   the header div below (not the resize handle at the section's trailing
+ *   edge), so the two drags never fight over the same mousedown.
+ * - `isDragSource` / `dropEdge`: purely visual, driven by `Columns.jsx`'s
+ *   drag state — dim the column being dragged, and show a 2px insertion
+ *   indicator on the side of the hovered target column.
  *
  * ChatView already branches on platform (YouTube/Chaturbate mount an
  * EmbedSlot internally) — this component never special-cases embeds.
@@ -19,7 +26,16 @@ import Tooltip from './Tooltip.jsx';
 import { clampWidth } from '../utils/columnGroups.js';
 import { formatViewers, platformLetter } from '../utils/format.js';
 
-export default function ColumnView({ column, width, onResize, onRemove, dragProps, ctx }) {
+export default function ColumnView({
+  column,
+  width,
+  onResize,
+  onRemove,
+  dragProps,
+  isDragSource = false,
+  dropEdge = null,
+  ctx,
+}) {
   const { key, live, channel } = column;
   const letter = platformLetter(channel?.platform);
 
@@ -95,6 +111,18 @@ export default function ColumnView({ column, width, onResize, onRemove, dragProp
         borderRight: 'var(--hair)',
         position: 'relative',
         minWidth: 0,
+        opacity: isDragSource ? 0.4 : 1,
+        // Insertion indicator: a 2px inset line on the leading (left) or
+        // trailing (right) edge of the column currently hovered during a
+        // reorder drag — same inset-boxShadow technique TabStrip uses for
+        // its tab drop indicator, recolored to zinc-400 to read as a
+        // column-level (not tab-level) affordance.
+        boxShadow:
+          dropEdge === 'left'
+            ? 'inset 2px 0 0 0 var(--zinc-400)'
+            : dropEdge === 'right'
+            ? 'inset -2px 0 0 0 var(--zinc-400)'
+            : undefined,
       }}
     >
       <div
@@ -107,6 +135,7 @@ export default function ColumnView({ column, width, onResize, onRemove, dragProp
           gap: 8,
           padding: '0 10px',
           borderBottom: 'var(--hair)',
+          cursor: dragProps ? 'grab' : undefined,
         }}
       >
         {live ? <span className="rx-live-dot pulse" /> : <span className="rx-status-dot off" />}
