@@ -54,6 +54,11 @@ export default function Columns({ ctx }) {
     [patch],
   );
 
+  // Live per-drag width overrides (uncommitted resize state), keyed by
+  // channel key. Persisted widths live in settings; this map only bridges
+  // the drag itself and is pruned when a column leaves the visible set.
+  const [widthOverrides, setWidthOverrides] = useState({});
+
   const handleResize = useCallback((key, px, opts) => {
     const clamped = clampWidth(px);
     if (opts?.commit) {
