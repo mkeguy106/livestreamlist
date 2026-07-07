@@ -21,6 +21,8 @@ pub struct Settings {
     pub chat: ChatSettings,
     #[serde(default)]
     pub notifications: NotificationSettings,
+    #[serde(default)]
+    pub columns: ColumnsSettings,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -304,6 +306,45 @@ impl Default for NotificationSettings {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ColumnGroup {
+    pub id: String,
+    pub name: String,
+    /// "manual" today; a future dynamic kind won't need a migration.
+    #[serde(default = "default_kind_manual")]
+    pub kind: String,
+    #[serde(default)]
+    pub keys: Vec<String>,
+}
+
+fn default_kind_manual() -> String {
+    "manual".into()
+}
+
+fn default_active_group() -> String {
+    "live-now".into()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ColumnsSettings {
+    #[serde(default)]
+    pub groups: Vec<ColumnGroup>,
+    #[serde(default = "default_active_group")]
+    pub active_group: String,
+    #[serde(default)]
+    pub column_widths: std::collections::HashMap<String, u32>,
+}
+
+impl Default for ColumnsSettings {
+    fn default() -> Self {
+        Self {
+            groups: Vec::new(),
+            active_group: default_active_group(),
+            column_widths: std::collections::HashMap::new(),
+        }
+    }
+}
+
 /// Shared in-memory handle. Clone cheaply, read/write under the RwLock.
 pub type SharedSettings = Arc<RwLock<Settings>>;
 
@@ -545,5 +586,37 @@ mod tests {
         assert!(!back.kinds.subgift);
         assert!(back.kinds.bitsbadgetier);
         assert!(back.kinds.announcement);
+    }
+
+    #[test]
+    fn columns_settings_defaults_when_missing() {
+        let s: Settings = serde_json::from_str("{}").unwrap();
+        assert!(s.columns.groups.is_empty());
+        assert_eq!(s.columns.active_group, "live-now");
+        assert!(s.columns.column_widths.is_empty());
+    }
+
+    #[test]
+    fn columns_settings_round_trip() {
+        let mut s = Settings::default();
+        s.columns.groups.push(ColumnGroup {
+            id: "g1".into(),
+            name: "Racing".into(),
+            kind: "manual".into(),
+            keys: vec!["twitch:a".into(), "kick:b".into()],
+        });
+        s.columns.active_group = "g1".into();
+        s.columns.column_widths.insert("twitch:a".into(), 420);
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        assert_eq!(back.columns.groups.len(), 1);
+        assert_eq!(back.columns.groups[0].keys, vec!["twitch:a", "kick:b"]);
+        assert_eq!(back.columns.active_group, "g1");
+        assert_eq!(back.columns.column_widths["twitch:a"], 420);
+    }
+
+    #[test]
+    fn column_group_kind_defaults_manual() {
+        let g: ColumnGroup = serde_json::from_str(r#"{"id":"x","name":"n","keys":[]}"#).unwrap();
+        assert_eq!(g.kind, "manual");
     }
 }
