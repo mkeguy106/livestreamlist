@@ -1331,7 +1331,7 @@ fn list_user_nicknames(state: State<'_, AppState>) -> Vec<UserMetadata> {
 }
 
 #[tauri::command]
-fn list_emotes(unique_key: String, chat: State<'_, Arc<ChatManager>>) -> Vec<chat::Emote> {
+fn list_emotes(unique_key: String, chat: State<'_, Arc<ChatManager>>) -> Vec<chat::PickerEmote> {
     chat.list_emotes(&unique_key)
 }
 
