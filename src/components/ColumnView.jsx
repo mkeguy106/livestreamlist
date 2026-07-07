@@ -160,7 +160,7 @@ export default function ColumnView({ column, width, onResize, onRemove, dragProp
 
       <ChatView
         channelKey={key}
-        variant="irc"
+        variant="compact"
         isLive={live}
         onUsernameOpen={ctx.onUsernameOpen}
         onUsernameContext={ctx.onUsernameContext}

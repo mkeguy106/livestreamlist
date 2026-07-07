@@ -61,6 +61,20 @@ export default function Columns({ ctx }) {
   // truth again via `cols.column_widths`.
   const [widthOverrides, setWidthOverrides] = useState({});
 
+  // Prune stale overrides for channels that are no longer in the order.
+  // Without this, if a column unmounts mid-drag (channel goes offline), the
+  // stale override lingers and silently beats the persisted width when the
+  // channel returns.
+  useEffect(() => {
+    setWidthOverrides((prev) => {
+      const keys = Object.keys(prev).filter((k) => !order.includes(k));
+      if (keys.length === 0) return prev;   // no change -> no re-render loop
+      const next = { ...prev };
+      for (const k of keys) delete next[k];
+      return next;
+    });
+  }, [order]);
+
   const handleResize = useCallback((key, px, opts) => {
     const clamped = clampWidth(px);
     if (opts?.commit) {
