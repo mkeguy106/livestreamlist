@@ -306,6 +306,9 @@ export default function Composer({
   // but sourced from the picker's click/Enter rather than the `:`-trigger
   // popup. `keepOpen` (Shift+click "spree") skips the close+refocus so the
   // user can drop several emotes in a row without reopening the panel.
+  // When keepOpen, the picker retains DOM focus (via closePicker NOT being
+  // called). Only update text/caret state; the close+refocus is handled
+  // by closePicker's onClose callback in the non-spree path.
   const insertEmote = (name, { keepOpen } = {}) => {
     const pos = inputRef.current?.selectionStart ?? caret;
     const before = text.slice(0, pos);
@@ -315,15 +318,15 @@ export default function Composer({
     setText(next);
     const newCaret = (before + insertion).length;
     setCaret(newCaret);
-    requestAnimationFrame(() => {
-      const el = inputRef.current;
-      if (!el) return;
-      el.focus();
-      el.setSelectionRange(newCaret, newCaret);
-    });
+    // Only touch DOM focus/caret in the non-spree path — when keepOpen,
+    // leave focus in the picker so the user can insert again.
     if (!keepOpen) {
-      setPickerOpen(false);
-      inputRef.current?.focus();
+      requestAnimationFrame(() => {
+        const el = inputRef.current;
+        if (!el) return;
+        el.setSelectionRange(newCaret, newCaret);
+      });
+      closePicker();
     }
   };
 
