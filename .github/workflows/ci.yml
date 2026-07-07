@@ -23,6 +23,7 @@ jobs:
             libjavascriptcoregtk-4.1-dev \
             libhunspell-dev \
             libclang-dev \
+            libasound2-dev \
             build-essential
 
       - uses: dtolnay/rust-toolchain@stable
