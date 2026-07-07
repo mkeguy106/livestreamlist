@@ -295,7 +295,7 @@ export default function Composer({
   );
 
   const onChange = (e) => {
-    const value = e.target.value.slice(0, MAX_LEN);
+    const value = e.target.value;
     // Real user typing (as opposed to a history-recall setText, which
     // never runs through this native onChange) always exits browsing mode.
     historyIndexRef.current = -1;
@@ -312,7 +312,7 @@ export default function Composer({
     const before = text.slice(0, popup.start);
     const caret = inputRef.current?.selectionStart ?? popup.start + popup.query.length + 1;
     const after = text.slice(caret);
-    const next = `${before}${insertion} ${after}`.slice(0, MAX_LEN);
+    const next = `${before}${insertion} ${after}`;
     setText(next);
     setPopup(null);
     // Reset caret after the inserted token + trailing space.
@@ -712,7 +712,6 @@ export default function Composer({
               recomputePopup(e.currentTarget.value, e.currentTarget.selectionStart);
             }}
             disabled={!authed || busy}
-            maxLength={MAX_LEN}
           />
           {spellcheckEnabled && authed && (
             <SpellcheckOverlay
