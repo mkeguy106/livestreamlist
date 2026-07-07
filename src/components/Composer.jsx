@@ -310,7 +310,8 @@ export default function Composer({
   // called). Only update text/caret state; the close+refocus is handled
   // by closePicker's onClose callback in the non-spree path.
   const insertEmote = (name, { keepOpen } = {}) => {
-    const pos = inputRef.current?.selectionStart ?? caret;
+    const el = inputRef.current;
+    const pos = el && document.activeElement === el ? el.selectionStart : caret;
     const before = text.slice(0, pos);
     const after = text.slice(pos);
     const insertion = `${name} `;
@@ -318,16 +319,18 @@ export default function Composer({
     setText(next);
     const newCaret = (before + insertion).length;
     setCaret(newCaret);
-    // Only touch DOM focus/caret in the non-spree path — when keepOpen,
-    // leave focus in the picker so the user can insert again.
-    if (!keepOpen) {
-      requestAnimationFrame(() => {
-        const el = inputRef.current;
-        if (!el) return;
-        el.setSelectionRange(newCaret, newCaret);
-      });
-      closePicker();
-    }
+    // Always sync DOM caret; gate focus/close to the non-spree path so the
+    // user can drop several emotes in a row without focus bouncing back to
+    // the input (and reopening/closing the picker).
+    requestAnimationFrame(() => {
+      const inputEl = inputRef.current;
+      if (!inputEl) return;
+      inputEl.setSelectionRange(newCaret, newCaret);
+      if (!keepOpen) {
+        inputEl.focus();
+        closePicker();
+      }
+    });
   };
 
   // Referentially stable across renders — EmotePicker's outside-click
@@ -545,7 +548,11 @@ export default function Composer({
       // shortcut — preventDefault unconditionally so the picker toggle
       // always wins inside the composer.
       e.preventDefault();
-      setPickerOpen((v) => !v);
+      if (pickerOpen) {
+        closePicker();
+      } else {
+        setPickerOpen(true);
+      }
     }
   };
 
