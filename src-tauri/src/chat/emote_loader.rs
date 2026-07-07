@@ -174,5 +174,6 @@ fn twitch_to_emote(e: &twitch::TwitchEmote) -> Emote {
         url_2x: Some(emotes::twitch_cdn_url(&e.id, 2)),
         url_4x: Some(emotes::twitch_cdn_url(&e.id, 4)),
         animated: e.animated,
+        provider: "twitch".to_string(),
     }
 }

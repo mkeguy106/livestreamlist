@@ -16,6 +16,10 @@ pub struct Emote {
     pub url_2x: Option<String>,
     pub url_4x: Option<String>,
     pub animated: bool,
+    /// Which provider supplied this emote: "twitch" | "7tv" | "bttv" | "ffz" | "kick".
+    /// Serde-defaulted for data cached before this field existed.
+    #[serde(default)]
+    pub provider: String,
 }
 
 impl Emote {
@@ -235,6 +239,7 @@ fn parse_seventv(root: &Value) -> Vec<Emote> {
                 url_2x: pick("2x.webp").or_else(|| pick("2x.avif")),
                 url_4x: pick("4x.webp").or_else(|| pick("4x.avif")),
                 animated,
+                provider: "7tv".to_string(),
             })
         })
         .collect()
@@ -294,6 +299,7 @@ fn parse_bttv(root: &Value, _host_hint: &[&str]) -> Vec<Emote> {
                 url_2x: Some(format!("{base}/2x")),
                 url_4x: Some(format!("{base}/3x")),
                 animated,
+                provider: "bttv".to_string(),
             })
         })
         .collect()
@@ -346,6 +352,7 @@ fn parse_ffz(root: &Value) -> Vec<Emote> {
                 url_2x: grab("2"),
                 url_4x: grab("4"),
                 animated: false,
+                provider: "ffz".to_string(),
             });
         }
     }
@@ -395,6 +402,7 @@ mod tests {
                 url_2x: None,
                 url_4x: None,
                 animated: false,
+                provider: "twitch".to_string(),
             },
         );
         cache.merge_globals(m);
@@ -412,6 +420,7 @@ mod tests {
             url_2x: None,
             url_4x: None,
             animated: false,
+            provider: String::new(),
         }
     }
 
@@ -541,5 +550,35 @@ mod tests {
 
         assert!(cache.lookup("any", "Old").is_none());
         assert!(cache.lookup("any", "New").is_some());
+    }
+
+    #[test]
+    fn emote_provider_defaults_empty_on_deserialize() {
+        let e: Emote = serde_json::from_str(
+            r#"{"name":"Kappa","url_1x":"u1","url_2x":null,"url_4x":null,"animated":false}"#,
+        )
+        .unwrap();
+        assert_eq!(e.provider, "");
+    }
+
+    #[test]
+    fn scan_message_ranges_carry_provider() {
+        let cache = EmoteCache::default();
+        let mut g = HashMap::new();
+        g.insert(
+            "PogU".to_string(),
+            Emote {
+                provider: "7tv".to_string(),
+                ..emote("PogU")
+            },
+        );
+        cache.merge_globals(g);
+
+        let hits = cache.scan_message("some:channel", "hello PogU world", &[]);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].name, "PogU");
+
+        let cached = cache.lookup("some:channel", "PogU").unwrap();
+        assert_eq!(cached.provider, "7tv");
     }
 }
