@@ -322,7 +322,10 @@ fn default_kind_manual() -> String {
 }
 
 fn default_active_group() -> String {
-    "live-now".into()
+    // Empty = no group selected: Columns opens to a lightweight chooser
+    // instead of auto-mounting a chat for every live channel ("Live now"
+    // remains available in the switcher as an explicit opt-in).
+    String::new()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -592,7 +595,7 @@ mod tests {
     fn columns_settings_defaults_when_missing() {
         let s: Settings = serde_json::from_str("{}").unwrap();
         assert!(s.columns.groups.is_empty());
-        assert_eq!(s.columns.active_group, "live-now");
+        assert_eq!(s.columns.active_group, "");
         assert!(s.columns.column_widths.is_empty());
     }
 

@@ -40,12 +40,13 @@ const DRAG_THRESHOLD_PX = 5;
 // is expensive enough to warrant a confirm.
 const CLEAR_ALL_CONFIRM_THRESHOLD = 3;
 
+const NO_GROUP_HINT = 'Select or create a group first';
 const LIVE_NOW_DISABLED_HINT = 'Live now follows your live channels — create a group to curate';
 
 export default function Columns({ ctx }) {
   const { livestreams, openAddDialog, refresh, loading } = ctx;
   const { settings, patch } = usePreferences();
-  const cols = settings?.columns || { groups: [], active_group: 'live-now', column_widths: {} };
+  const cols = settings?.columns || { groups: [], active_group: '', column_widths: {} };
 
   // Shared helper for every group mutation (switch/create/rename/delete,
   // plus the existing per-column width commit below) — one `patch` call
@@ -158,14 +159,18 @@ export default function Columns({ ctx }) {
     () => cols.groups.find((g) => g.id === cols.active_group) ?? null,
     [cols.groups, cols.active_group],
   );
-  const isLiveNow = cols.active_group === 'live-now' || !activeManualGroup;
+  const isLiveNow = cols.active_group === 'live-now';
+  // No group selected (fresh install, or the active id no longer exists):
+  // render the chooser empty-state instead of auto-mounting a chat per live
+  // channel. "Live now" is an explicit opt-in via the switcher.
+  const isNone = !isLiveNow && !activeManualGroup;
 
   const manualKeys = useMemo(() => {
-    if (isLiveNow) return null;
+    if (isLiveNow || !activeManualGroup) return null;
     return activeManualGroup.keys.filter((k) => byKey.has(k));
   }, [isLiveNow, activeManualGroup, byKey]);
 
-  const visibleKeys = isLiveNow ? order : manualKeys;
+  const visibleKeys = isLiveNow ? order : (manualKeys ?? []);
 
   const onSwitchGroup = useCallback(
     (id) => patchColumns({ active_group: id }),
@@ -185,7 +190,7 @@ export default function Columns({ ctx }) {
   const onDeleteGroup = useCallback(
     (id) => {
       const groups = deleteGroup(cols.groups, id);
-      const active_group = cols.active_group === id ? 'live-now' : cols.active_group;
+      const active_group = cols.active_group === id ? '' : cols.active_group;
       patchColumns({ groups, active_group });
     },
     [cols.groups, cols.active_group, patchColumns],
@@ -352,23 +357,23 @@ export default function Columns({ ctx }) {
           onDelete={onDeleteGroup}
         />
         <div style={{ flex: 1 }} />
-        <Tooltip text={isLiveNow ? LIVE_NOW_DISABLED_HINT : 'Clear all columns from this group'}>
+        <Tooltip text={isLiveNow ? LIVE_NOW_DISABLED_HINT : isNone ? NO_GROUP_HINT : 'Clear all columns from this group'}>
           <button
             type="button"
-            aria-label={isLiveNow ? LIVE_NOW_DISABLED_HINT : 'Clear all columns from this group'}
+            aria-label={isLiveNow ? LIVE_NOW_DISABLED_HINT : isNone ? NO_GROUP_HINT : 'Clear all columns from this group'}
             className="rx-btn rx-btn-ghost"
-            disabled={isLiveNow}
+            disabled={isLiveNow || isNone}
             onClick={onClearAllClick}
           >
             Clear all
           </button>
         </Tooltip>
-        <Tooltip text={isLiveNow ? LIVE_NOW_DISABLED_HINT : 'Add columns to this group'}>
+        <Tooltip text={isLiveNow ? LIVE_NOW_DISABLED_HINT : isNone ? NO_GROUP_HINT : 'Add columns to this group'}>
           <button
             type="button"
-            aria-label={isLiveNow ? LIVE_NOW_DISABLED_HINT : 'Add columns to this group'}
+            aria-label={isLiveNow ? LIVE_NOW_DISABLED_HINT : isNone ? NO_GROUP_HINT : 'Add columns to this group'}
             className="rx-btn rx-btn-ghost"
-            disabled={isLiveNow}
+            disabled={isLiveNow || isNone}
             onClick={() => setPickerOpen(true)}
           >
             ＋ Add column
@@ -402,7 +407,19 @@ export default function Columns({ ctx }) {
             fontSize: 'var(--t-12)',
           }}
         >
-          {isLiveNow ? (
+          {isNone ? (
+            <>
+              <div>No column group selected.</div>
+              <button
+                type="button"
+                className="rx-btn"
+                onClick={() => onSwitchGroup('live-now')}
+              >
+                Show live channels ({order.length} live)
+              </button>
+              <span className="rx-chiclet">or create a group from the dropdown</span>
+            </>
+          ) : isLiveNow ? (
             <>
               <div>No channels are live right now.</div>
               <span className="rx-chiclet">columns appear here as channels go live</span>
