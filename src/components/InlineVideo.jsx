@@ -505,28 +505,18 @@ export default function InlineVideo({ channelKey, thumbnailUrl, variant = 'colum
   const toggleMute = () => {
     const next = !muted;
     setMuted(next);
-    // Set the ref synchronously so the queued createPlayer below reads the new
+    // Set the ref synchronously so any subsequent createPlayer reads the new
     // value (the muted→ref effect only runs after this render commits).
     mutedRef.current = next;
     if (videoRef.current) videoRef.current.muted = next;
     patchChannel({ muted: next });
-    // Column videos swap MSE profiles on mute change (Item 3b): a muted
-    // background column uses the relaxed stash profile, an audible one the
-    // ultra-low-latency profile. Recreate the pipeline through the creation
-    // queue so the new profile takes effect. Reuse the existing passthrough
-    // URL and keep phase 'playing' (a brief black flash during the swap is
-    // acceptable). Focus always stays low-latency, so it never swaps.
-    if (variant === 'column' && phase === 'playing' && urlRef.current) {
-      // Claim a fresh incarnation at commit time (file rule) so any queued
-      // wedge-rebuild that captured the old gen self-aborts.
-      const gen = ++genRef.current;
-      wdRef.current = { lastFrames: undefined, frozenTicks: 0 };
-      // Same failure-visibility rule as the watchdog rebuild: a synchronous
-      // throw inside the queued creation fn rejects this chain — warn so
-      // there's a trace instead of a silently dead player.
-      createPlayer(gen, urlRef.current)
-        .catch((e) => { console.warn('[InlineVideo] profile swap failed:', e?.message); });
-    }
+    // Seamless mute (Item 2): NO pipeline swap. The owner reported that
+    // recreating the player on mute made the stream visibly stop and resume.
+    // The playback profile is chosen once at player-creation time from the
+    // muted state at that moment (see createPlayer). Tradeoff: a stream created
+    // muted keeps the lazier muted profile (≤6 s latency) after unmuting until
+    // its next natural recreation — seamless mute wins over instant
+    // low-latency, per owner feedback.
   };
   const onVolume = (v) => {
     setVolume(v);
