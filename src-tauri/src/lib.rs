@@ -21,6 +21,7 @@ mod spellcheck;
 mod streamlink;
 mod tray;
 mod users;
+mod video;
 mod window_state;
 
 use channels::{Channel, ChannelStore, Livestream, SharedStore};
