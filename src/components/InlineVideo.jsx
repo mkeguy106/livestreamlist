@@ -16,10 +16,11 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import mpegts from 'mpegts.js';
 import { videoStart, videoStop, launchStream, listenEvent } from '../ipc.js';
 import { usePreferences } from '../hooks/usePreferences.jsx';
+import { usePlayerState } from '../hooks/usePlayerState.js';
 import { enqueuePipelineCreation } from '../utils/videoQueue.js';
 import Tooltip from './Tooltip.jsx';
 
-const QUALITIES = ['720p60', '720p', '480p', 'best'];
+const QUALITIES = ['best', '1080p60', '720p60', '720p', '480p'];
 const WATCHDOG_TICK_MS = 1500;
 const MAX_REBUILDS = 3;
 
@@ -35,12 +36,22 @@ const MPEGTS_CONFIG = {
 export default function InlineVideo({ channelKey, thumbnailUrl, variant = 'column', onClose }) {
   const { settings, patch } = usePreferences();
   const chan = settings?.video?.channels?.[channelKey] || {};
+  // Set of unique_keys with a live external (mpv) player — drives the popout
+  // hand-off UI so the poster shows "starting external player" until mpv is up.
+  const playing = usePlayerState();
 
-  const [phase, setPhase] = useState('starting'); // starting|playing|ended|error|cap
+  const [phase, setPhase] = useState('starting'); // starting|playing|ended|error|cap|popout|popped
   const [errMsg, setErrMsg] = useState('');
   const [hover, setHover] = useState(false);
   const [qualityOpen, setQualityOpen] = useState(false);
-  const [muted, setMuted] = useState(variant === 'focus' ? false : (chan.muted ?? true));
+  // Columns default muted; unless the user has a per-channel persisted mute
+  // (which always wins), fall back to the autoplay_unmuted preference. Focus
+  // always starts unmuted.
+  const [muted, setMuted] = useState(
+    variant === 'focus'
+      ? false
+      : (chan.muted ?? ((settings?.video?.autoplay_unmuted ?? true) ? false : true)),
+  );
   const [volume, setVolume] = useState(chan.volume ?? 0.5);
 
   const wrapRef = useRef(null);
@@ -57,6 +68,21 @@ export default function InlineVideo({ channelKey, thumbnailUrl, variant = 'colum
   // channel's stream. Every async resumption point instead compares the gen
   // it captured at kickoff against genRef.current and bails on mismatch.
   const genRef = useRef(0);
+  // Transient-startup auto-retry budget (Item 1b). NetworkError before any
+  // frame is decoded auto-retries with backoff instead of showing the error
+  // chip; reset at mount + on manual retry / quality change.
+  const autoRetriesRef = useRef(0);
+  // `createPlayer` is defined above `startSession` but its ERROR handler needs
+  // to re-kick a session on transient-startup auto-retry. Route through a ref
+  // (assigned right after startSession) to sidestep the definition-order /
+  // circular-useCallback-dependency between the two.
+  const startSessionRef = useRef(null);
+  // Mirror of `phase` for the async status-event listener, whose closure
+  // otherwise captures a stale value. Used to ignore backend 'ended'/'error'
+  // events while we're intentionally popping out (popout() calls video_stop,
+  // which emits 'ended' — that must not clobber the popout/popped UI).
+  const phaseRef = useRef(phase);
+  useEffect(() => { phaseRef.current = phase; }, [phase]);
   // True while a watchdog-triggered rebuild is queued or executing. Without
   // it, a backed-up creation queue lets consecutive ticks enqueue a second
   // rebuild of the same still-wedged element — double-counting rebuilds and
@@ -108,6 +134,39 @@ export default function InlineVideo({ channelKey, thumbnailUrl, variant = 'colum
         // capture gen and bail if a newer generation has taken over.
         player.on(mpegts.Events.ERROR, (type, detail) => {
           if (genRef.current !== gen) return;
+          // Transient startup NetworkError (e.g. HttpStatusCodeInvalid) that
+          // arrives BEFORE any frame has been decoded: streamlink's server
+          // occasionally refuses the very first fetch when several columns
+          // start at once (see the Rust readiness-probe fix). Auto-retry with
+          // backoff instead of surfacing the error chip. Errors after frames
+          // have decoded — or past the retry budget — fall through to the
+          // terminal path below.
+          const decoded = nv.getVideoPlaybackQuality
+            ? nv.getVideoPlaybackQuality().totalVideoFrames
+            : 0;
+          const isNetwork =
+            type === mpegts?.ErrorTypes?.NETWORK_ERROR ||
+            String(type).toLowerCase() === 'networkerror';
+          if (isNetwork && decoded === 0 && autoRetriesRef.current < 3) {
+            const attempt = autoRetriesRef.current;
+            autoRetriesRef.current += 1;
+            const backoff = [500, 1000, 2000][attempt] ?? 2000;
+            console.warn(
+              `[InlineVideo] transient startup ${type}/${detail}; ` +
+                `auto-retry ${attempt + 1}/3 in ${backoff}ms`,
+            );
+            destroyPlayer();
+            setPhase('starting');
+            // Capture the gen current at error time; bail if it moved (unmount,
+            // channel switch, manual retry, terminal Rust event) before firing.
+            const scheduledGen = genRef.current;
+            setTimeout(() => {
+              if (genRef.current !== scheduledGen) return;
+              const g = ++genRef.current;
+              startSessionRef.current?.(g, null);
+            }, backoff);
+            return;
+          }
           // Terminal phase: bump gen so any already-queued rebuild self-aborts
           // instead of spinning up a zombie player under the error overlay.
           genRef.current += 1;
@@ -165,6 +224,9 @@ export default function InlineVideo({ channelKey, thumbnailUrl, variant = 'colum
     },
     [channelKey, createPlayer],
   );
+  // Keep the ref pointed at the latest startSession for createPlayer's ERROR
+  // handler (assigned during render — the "latest value" ref idiom).
+  startSessionRef.current = startSession;
 
   // Mount -> start. Unmount -> destroy player only (linger handles Rust side).
   // Bumping genRef in cleanup invalidates every in-flight continuation from
@@ -172,6 +234,7 @@ export default function InlineVideo({ channelKey, thumbnailUrl, variant = 'colum
   useEffect(() => {
     const gen = ++genRef.current;
     rebuildsRef.current = 0;
+    autoRetriesRef.current = 0;
     rebuildPendingRef.current = false; // new channel = fresh slate
     startSession(gen, null);
     return () => {
@@ -193,6 +256,10 @@ export default function InlineVideo({ channelKey, thumbnailUrl, variant = 'colum
     (async () => {
       const un = await listenEvent(`video:status:${channelKey}`, (payload) => {
         const state = payload?.state;
+        // While popping out we deliberately called video_stop, which emits
+        // 'ended' — ignore backend teardown so it doesn't clobber the
+        // popout/popped hand-off UI.
+        if (phaseRef.current === 'popout' || phaseRef.current === 'popped') return;
         // Terminal phases bump gen so any queued rebuild self-aborts.
         if (state === 'ended') { genRef.current += 1; setPhase('ended'); destroyPlayer(); }
         else if (state === 'error') {
@@ -253,6 +320,30 @@ export default function InlineVideo({ channelKey, thumbnailUrl, variant = 'colum
     return () => clearInterval(id);
   }, [phase, createPlayer, destroyPlayer]);
 
+  // Popout hand-off: once mpv reports live for this channel, drop the poster.
+  // Column variant unmounts (onClose); Focus variant shows a "playing in
+  // external player" resting state with a "Play inline" affordance.
+  useEffect(() => {
+    if (phase !== 'popout') return undefined;
+    if (!playing.has(channelKey)) return undefined;
+    if (variant === 'column') onClose?.();
+    else setPhase('popped');
+    return undefined;
+  }, [phase, playing, channelKey, variant, onClose]);
+
+  // Safety net: if mpv never comes up, don't spin forever. Gen-guarded so an
+  // unmount / channel switch between scheduling and firing cancels cleanly.
+  useEffect(() => {
+    if (phase !== 'popout') return undefined;
+    const scheduledGen = genRef.current;
+    const id = setTimeout(() => {
+      if (genRef.current !== scheduledGen) return;
+      setErrMsg('external player did not start');
+      setPhase('error');
+    }, 10000);
+    return () => clearTimeout(id);
+  }, [phase]);
+
   // ── control handlers ──
   const toggleMute = () => {
     const next = !muted;
@@ -269,6 +360,7 @@ export default function InlineVideo({ channelKey, thumbnailUrl, variant = 'colum
     setQualityOpen(false);
     patchChannel({ quality: q });
     destroyPlayer();
+    autoRetriesRef.current = 0;
     // Claim a fresh incarnation before respawning. Rule of thumb: any action
     // that starts a new session claims a new generation, so the superseded
     // in-flight start's "stopped before ready" rejection fails the gen guard
@@ -276,10 +368,17 @@ export default function InlineVideo({ channelKey, thumbnailUrl, variant = 'colum
     const gen = ++genRef.current;
     startSession(gen, q); // distinct quality -> Rust respawns the session
   };
+  // Hand off to the external mpv player. Don't call onClose yet — hold the
+  // panel on a 'popout' poster (spinner) until usePlayerState confirms mpv is
+  // live, so there's no dead gap between the inline panel stopping and mpv
+  // appearing. Set phaseRef synchronously so the status listener's popout
+  // guard beats the 'ended' event that video_stop is about to emit.
   const popout = () => {
-    launchStream(channelKey);
+    phaseRef.current = 'popout';
+    setPhase('popout');
+    destroyPlayer();
     videoStop(channelKey).catch(() => {});
-    onClose?.();
+    launchStream(channelKey);
   };
   const stop = () => {
     destroyPlayer();
@@ -288,13 +387,14 @@ export default function InlineVideo({ channelKey, thumbnailUrl, variant = 'colum
   };
   const retry = () => {
     rebuildsRef.current = 0;
+    autoRetriesRef.current = 0;
     // Fresh incarnation (same rule as pickQuality): a stale continuation from
     // the failed run can't clobber this retry's state.
     const gen = ++genRef.current;
     startSession(gen, null);
   };
 
-  const currentQuality = chan.quality || settings?.video?.default_quality || '720p60';
+  const currentQuality = chan.quality || settings?.video?.default_quality || 'best';
   const wrapStyle =
     variant === 'focus'
       ? { position: 'absolute', inset: 0 }
@@ -335,10 +435,12 @@ export default function InlineVideo({ channelKey, thumbnailUrl, variant = 'colum
               color: 'var(--zinc-400)', fontSize: 'var(--t-11)', textAlign: 'center', padding: 12,
             }}
           >
-            {phase === 'starting' && (
+            {(phase === 'starting' || phase === 'popout') && (
               <span className="rx-mono" style={{ animation: 'rx-spin 800ms linear infinite', display: 'inline-block' }}>◌</span>
             )}
             {phase === 'starting' && <span>starting stream…</span>}
+            {phase === 'popout' && <span>Starting external player…</span>}
+            {phase === 'popped' && <span>Playing in external player</span>}
             {phase === 'cap' && (
               <span>
                 Max simultaneous videos reached — raise it in Preferences → Video.
@@ -350,6 +452,9 @@ export default function InlineVideo({ channelKey, thumbnailUrl, variant = 'colum
             )}
             {(phase === 'ended' || phase === 'error') && (
               <button type="button" className="rx-btn" onClick={retry}>Retry</button>
+            )}
+            {phase === 'popped' && (
+              <button type="button" className="rx-btn" onClick={retry}>Play inline</button>
             )}
           </div>
         </div>
