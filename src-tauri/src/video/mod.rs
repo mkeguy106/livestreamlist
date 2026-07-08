@@ -6,5 +6,6 @@
 
 #![allow(dead_code)] // removed in the manager task
 
+pub(crate) mod passthrough;
 pub(crate) mod session;
 pub(crate) mod spawn;
