@@ -339,6 +339,10 @@ pub struct ColumnsSettings {
     pub active_group: String,
     #[serde(default)]
     pub column_widths: std::collections::HashMap<String, u32>,
+    /// Auto-grow/shrink the window to fit the visible column set (Columns
+    /// layout only, skipped while maximized). Consumed by `Columns.jsx`.
+    #[serde(default = "default_true")]
+    pub auto_fit_width: bool,
 }
 
 impl Default for ColumnsSettings {
@@ -347,6 +351,7 @@ impl Default for ColumnsSettings {
             groups: Vec::new(),
             active_group: default_active_group(),
             column_widths: std::collections::HashMap::new(),
+            auto_fit_width: true,
         }
     }
 }
@@ -688,6 +693,17 @@ mod tests {
         assert!(s.columns.groups.is_empty());
         assert_eq!(s.columns.active_group, "");
         assert!(s.columns.column_widths.is_empty());
+        assert!(s.columns.auto_fit_width, "auto_fit_width default true");
+    }
+
+    /// Old configs written before `auto_fit_width` existed still parse and pick
+    /// up the new default-true.
+    #[test]
+    fn columns_settings_auto_fit_default_for_partial_json() {
+        let json = r#"{"columns":{"active_group":"g1"}}"#;
+        let s: Settings = serde_json::from_str(json).unwrap();
+        assert_eq!(s.columns.active_group, "g1");
+        assert!(s.columns.auto_fit_width);
     }
 
     #[test]
@@ -701,11 +717,13 @@ mod tests {
         });
         s.columns.active_group = "g1".into();
         s.columns.column_widths.insert("twitch:a".into(), 420);
+        s.columns.auto_fit_width = false;
         let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
         assert_eq!(back.columns.groups.len(), 1);
         assert_eq!(back.columns.groups[0].keys, vec!["twitch:a", "kick:b"]);
         assert_eq!(back.columns.active_group, "g1");
         assert_eq!(back.columns.column_widths["twitch:a"], 420);
+        assert!(!back.columns.auto_fit_width);
     }
 
     #[test]

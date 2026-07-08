@@ -963,6 +963,21 @@ function AppearanceTab({ settings, patch }) {
       </Row>
 
       <Divider />
+      <GroupLabel>Columns layout</GroupLabel>
+
+      <Row
+        label="Auto-fit window width to columns"
+        hint="Grows or shrinks the window when columns are added or removed. Columns layout only; skipped while maximized."
+      >
+        <Toggle
+          checked={settings.columns?.auto_fit_width !== false}
+          onChange={(v) =>
+            patch((prev) => ({ ...prev, columns: { ...prev.columns, auto_fit_width: v } }))
+          }
+        />
+      </Row>
+
+      <Divider />
       <GroupLabel>Colors</GroupLabel>
 
       <Row

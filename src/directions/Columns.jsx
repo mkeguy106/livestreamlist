@@ -36,6 +36,21 @@ const CLEAR_ALL_CONFIRM_THRESHOLD = 3;
 
 const NO_GROUP_HINT = 'Select or create a group first';
 
+// Native-window resize (auto-fit) only makes sense inside the Tauri shell; in
+// browser-dev the window API is absent, so every auto-fit code path bails here.
+const inTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+
+// Auto-fit clamps (logical px): never shrink below this, and only resize when
+// the desired width differs from the current window width by more than the
+// deadband (so a reorder — which changes key order but not total width — and
+// rounding noise never nudge the window).
+const AUTO_FIT_MIN_W = 720;
+const AUTO_FIT_DEADBAND_PX = 24;
+const AUTO_FIT_DEBOUNCE_MS = 300;
+// Per-column hairline fudge added to each column's width so the summed target
+// accounts for the 1 px borders between columns without clipping the last one.
+const AUTO_FIT_COL_FUDGE_PX = 2;
+
 export default function Columns({ ctx }) {
   const { livestreams, refresh, loading } = ctx;
   const { settings, patch } = usePreferences();
@@ -293,6 +308,56 @@ export default function Columns({ ctx }) {
       document.body.style.userSelect = prevUserSelect;
     };
   }, [drag?.active]);
+
+  // Auto-fit the window width to the visible column set. Fires ONLY when the
+  // visible key set changes (group open/switch, add, remove) — the dep is the
+  // joined key list, NOT the widths — so it never fights a manual window resize
+  // or a live width-drag (both change widths, not the set). Debounced; cancels
+  // on unmount. A `fitRef` supplies the freshest widths at fire time without
+  // adding widths to the dep array.
+  const autoFitEnabled = cols.auto_fit_width !== false; // default true
+  const fitRef = useRef({ visibleKeys, widthFor });
+  fitRef.current = { visibleKeys, widthFor };
+
+  useEffect(() => {
+    // Skip entirely: not in Tauri, disabled by setting, chooser (no group), or
+    // an empty group. The maximized check is async, done inside the debounce.
+    if (!inTauri || !autoFitEnabled || isNone || visibleKeys.length === 0) {
+      return undefined;
+    }
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      try {
+        const { getCurrentWindow, currentMonitor, LogicalSize } = await import(
+          '@tauri-apps/api/window'
+        );
+        if (cancelled) return;
+        const win = getCurrentWindow();
+        if (await win.isMaximized()) return; // never fight a maximized window
+        if (cancelled) return;
+        const monitor = await currentMonitor();
+        const scaleFactor = monitor?.scaleFactor ?? 1;
+        const { visibleKeys: keys, widthFor: wf } = fitRef.current;
+        const desired = keys.reduce((sum, k) => sum + wf(k) + AUTO_FIT_COL_FUDGE_PX, 0);
+        // Clamp: min 720 logical; max 95% of the monitor's logical width.
+        const maxLogical = monitor
+          ? (monitor.size.width / scaleFactor) * 0.95
+          : Infinity;
+        const target = Math.max(AUTO_FIT_MIN_W, Math.min(desired, maxLogical));
+        const innerLogical = (await win.innerSize()).toLogical(scaleFactor);
+        if (cancelled) return;
+        if (Math.abs(target - innerLogical.width) <= AUTO_FIT_DEADBAND_PX) return;
+        await win.setSize(new LogicalSize(target, innerLogical.height));
+      } catch (e) {
+        console.warn('[Columns] auto-fit width failed:', e?.message);
+      }
+    }, AUTO_FIT_DEBOUNCE_MS);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visibleKeys.join('|'), autoFitEnabled, isNone]);
 
   return (
     <>
