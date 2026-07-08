@@ -34,8 +34,13 @@ pub(crate) async fn serve(
     events: UnboundedSender<ConsumerEvent>,
 ) {
     loop {
-        let Ok((client, _)) = listener.accept().await else {
-            continue;
+        let (client, _) = match listener.accept().await {
+            Ok(conn) => conn,
+            Err(e) => {
+                log::warn!("video passthrough accept error: {e}");
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                continue;
+            }
         };
         let ports = Arc::clone(&ports);
         let events = events.clone();
