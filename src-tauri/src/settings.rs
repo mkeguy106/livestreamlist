@@ -339,6 +339,10 @@ pub struct ColumnsSettings {
     pub active_group: String,
     #[serde(default)]
     pub column_widths: std::collections::HashMap<String, u32>,
+    /// Auto-grow/shrink the window to fit the visible column set (Columns
+    /// layout only, skipped while maximized). Consumed by `Columns.jsx`.
+    #[serde(default = "default_true")]
+    pub auto_fit_width: bool,
 }
 
 impl Default for ColumnsSettings {
@@ -347,6 +351,7 @@ impl Default for ColumnsSettings {
             groups: Vec::new(),
             active_group: default_active_group(),
             column_widths: std::collections::HashMap::new(),
+            auto_fit_width: true,
         }
     }
 }
@@ -413,12 +418,14 @@ pub struct VideoSettings {
     /// Start autoplayed columns unmuted. A per-channel persisted mute still wins.
     #[serde(default = "default_true")]
     pub autoplay_unmuted: bool,
-    /// Opt-in (Linux): keep the WebKitGTK dmabuf renderer ON — i.e. skip the
-    /// historical `WEBKIT_DISABLE_DMABUF_RENDERER=1` NVIDIA crash workaround.
-    /// The spike measured ~4x cheaper video painting with it enabled and no
-    /// crash on WebKit 2.52. Off by default; requires restart. Consumed by
+    /// (Linux) Keep the WebKitGTK dmabuf renderer ON — i.e. skip the historical
+    /// `WEBKIT_DISABLE_DMABUF_RENDERER=1` NVIDIA crash workaround. The inline-
+    /// video spike measured ~4x cheaper video painting with it enabled and no
+    /// crash on WebKit 2.52, so it is **on by default** now (round 4) to give
+    /// video decode more headroom. Set false (or export the env var yourself)
+    /// to restore the old workaround; requires restart. Consumed by
     /// `lib.rs::apply_linux_webkit_workarounds`.
-    #[serde(default)]
+    #[serde(default = "default_true")]
     pub dmabuf_renderer: bool,
 }
 
@@ -432,7 +439,7 @@ impl Default for VideoSettings {
             use_twitch_auth: true,
             autoplay_columns: true,
             autoplay_unmuted: true,
-            dmabuf_renderer: false,
+            dmabuf_renderer: true,
         }
     }
 }
@@ -686,6 +693,17 @@ mod tests {
         assert!(s.columns.groups.is_empty());
         assert_eq!(s.columns.active_group, "");
         assert!(s.columns.column_widths.is_empty());
+        assert!(s.columns.auto_fit_width, "auto_fit_width default true");
+    }
+
+    /// Old configs written before `auto_fit_width` existed still parse and pick
+    /// up the new default-true.
+    #[test]
+    fn columns_settings_auto_fit_default_for_partial_json() {
+        let json = r#"{"columns":{"active_group":"g1"}}"#;
+        let s: Settings = serde_json::from_str(json).unwrap();
+        assert_eq!(s.columns.active_group, "g1");
+        assert!(s.columns.auto_fit_width);
     }
 
     #[test]
@@ -699,11 +717,13 @@ mod tests {
         });
         s.columns.active_group = "g1".into();
         s.columns.column_widths.insert("twitch:a".into(), 420);
+        s.columns.auto_fit_width = false;
         let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
         assert_eq!(back.columns.groups.len(), 1);
         assert_eq!(back.columns.groups[0].keys, vec!["twitch:a", "kick:b"]);
         assert_eq!(back.columns.active_group, "g1");
         assert_eq!(back.columns.column_widths["twitch:a"], 420);
+        assert!(!back.columns.auto_fit_width);
     }
 
     #[test]
@@ -722,7 +742,7 @@ mod tests {
         assert!(s.video.use_twitch_auth);
         assert!(s.video.autoplay_columns, "autoplay_columns default true");
         assert!(s.video.autoplay_unmuted, "autoplay_unmuted default true");
-        assert!(!s.video.dmabuf_renderer, "dmabuf_renderer default false");
+        assert!(s.video.dmabuf_renderer, "dmabuf_renderer default true");
     }
 
     /// Old configs written before the autoplay fields existed still parse and
@@ -734,6 +754,8 @@ mod tests {
         assert_eq!(s.video.default_quality, "720p");
         assert!(s.video.autoplay_columns);
         assert!(s.video.autoplay_unmuted);
+        // dmabuf_renderer absent from old JSON → picks up the new default-true.
+        assert!(s.video.dmabuf_renderer);
     }
 
     #[test]
@@ -751,7 +773,9 @@ mod tests {
         s.video.max_concurrent = 3;
         s.video.autoplay_columns = false;
         s.video.autoplay_unmuted = false;
-        s.video.dmabuf_renderer = true;
+        // dmabuf_renderer now defaults true — flip to false so the round trip
+        // proves a non-default value survives serialization.
+        s.video.dmabuf_renderer = false;
         let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
         let c = &back.video.channels["twitch:gems"];
         assert!(c.on);
@@ -761,7 +785,7 @@ mod tests {
         assert_eq!(back.video.max_concurrent, 3);
         assert!(!back.video.autoplay_columns);
         assert!(!back.video.autoplay_unmuted);
-        assert!(back.video.dmabuf_renderer);
+        assert!(!back.video.dmabuf_renderer);
     }
 
     #[test]

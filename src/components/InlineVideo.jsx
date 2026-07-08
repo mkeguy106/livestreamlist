@@ -14,7 +14,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import mpegts from 'mpegts.js';
-import { videoStart, videoStop, launchStream, listenEvent } from '../ipc.js';
+import { videoStart, videoStop, launchStream, listenEvent, frontendLog } from '../ipc.js';
 import { usePreferences } from '../hooks/usePreferences.jsx';
 import { usePlayerState } from '../hooks/usePlayerState.js';
 import { enqueuePipelineCreation } from '../utils/videoQueue.js';
@@ -24,40 +24,61 @@ const QUALITIES = ['best', '1080p60', '720p60', '720p', '480p'];
 const WATCHDOG_TICK_MS = 1500;
 const MAX_REBUILDS = 3;
 
-// Tight SourceBuffer back-buffer cleanup (Item 3a). mpegts.js defaults keep
-// ~3 min of back-buffer before pruning; on WebKitGTK the MSE append/remove
-// cost grows with the buffered-range size — this is the "fine at first, choppy
-// after a few minutes" degradation the owner reported. Live playback never
-// seeks backward, so a 15–30 s window is safe. Applied to every profile below.
+// SourceBuffer back-buffer cleanup, shared by every profile. mpegts.js
+// defaults keep ~3 min of back-buffer before pruning; on WebKitGTK the MSE
+// append/remove cost grows with the buffered-range size — live playback never
+// seeks backward, so a bounded window is safe.
+//
+// Jank correlation (round 4): the previous round set 30/15 here and the
+// stutter *onset* moved from ~3 min (mpegts's default cleanup cadence) to
+// ~20 s — i.e. SourceBuffer.remove() is the thing that stalls playback.
+// WebKitGTK's MSE blocks appends while a remove() is in flight; a batched
+// remove every ~15 s was starving the zero-stash ultra-low-latency profile
+// (tiny appends every ~100 ms, minRemain 0.5 s) into a latency-chase stutter.
+// 60/30 halves the remove() frequency vs 30/15 while still keeping the
+// buffered span bounded — fewer, still-cheap prunes.
 const CLEANUP_CONFIG = {
   autoCleanupSourceBuffer: true,
-  autoCleanupMaxBackwardDuration: 30,
-  autoCleanupMinBackwardDuration: 15,
+  autoCleanupMaxBackwardDuration: 60,
+  autoCleanupMinBackwardDuration: 30,
 };
 
-// Ultra-low-latency profile: zero stash + aggressive latency chasing. Smallest
-// end-to-end delay but the highest per-stream CPU cost (continuous tiny
-// appends — the biggest decode cost measured in the spike). Used for audible
-// players: any unmuted column, and Focus always.
-const LOW_LATENCY_CONFIG = {
-  enableWorker: true,
-  enableStashBuffer: false,
-  liveBufferLatencyChasing: true,
-  liveBufferLatencyMaxLatency: 2.5,
-  liveBufferLatencyMinRemain: 0.5,
-  ...CLEANUP_CONFIG,
-};
-
-// Relaxed profile (Item 3b): a muted background column doesn't need zero-stash
-// latency, so re-enable the default stash buffer (fewer, larger appends ⇒ less
-// decode churn) and chase latency more lazily. Column variant only.
-const RELAXED_CONFIG = {
+// Cushioned base shared by all three profiles (round 4). The stash buffer is
+// ON everywhere now (fewer, larger appends ⇒ less decode churn), latency
+// chasing stays on, and each profile keeps a ≥1 s min-remain cushion so a
+// SourceBuffer.remove() pause doesn't starve the pipeline dry (WebKit blocks
+// appends during remove; the old zero-stash / 0.5 s-remain profile ran the
+// buffer to empty and chase-stuttered). The deliberate tradeoff: end-to-end
+// latency grows ~1–3 s vs the previous zero-stash profile.
+const BASE_CONFIG = {
   enableWorker: true,
   enableStashBuffer: true,
   liveBufferLatencyChasing: true,
+  ...CLEANUP_CONFIG,
+};
+
+// Audible column: a tighter cushion since the user is actively watching, but
+// still stash-buffered + ≥1.5 s min-remain.
+const COLUMN_UNMUTED_CONFIG = {
+  ...BASE_CONFIG,
+  liveBufferLatencyMaxLatency: 4,
+  liveBufferLatencyMinRemain: 1.5,
+};
+
+// Muted background column: the laziest cushion — a muted grid tile tolerates
+// more latency for the sturdiest playback.
+const COLUMN_MUTED_CONFIG = {
+  ...BASE_CONFIG,
   liveBufferLatencyMaxLatency: 6,
   liveBufferLatencyMinRemain: 2,
-  ...CLEANUP_CONFIG,
+};
+
+// Focus: the single featured stream — tightest latency of the three but still
+// cushioned (stash on, 1 s min-remain) rather than the old zero-stash chase.
+const FOCUS_CONFIG = {
+  ...BASE_CONFIG,
+  liveBufferLatencyMaxLatency: 3,
+  liveBufferLatencyMinRemain: 1,
 };
 
 export default function InlineVideo({ channelKey, thumbnailUrl, variant = 'column', onClose }) {
@@ -119,11 +140,12 @@ export default function InlineVideo({ channelKey, thumbnailUrl, variant = 'colum
   const volumeRef = useRef(volume);
   useEffect(() => { mutedRef.current = muted; }, [muted]);
   useEffect(() => { volumeRef.current = volume; }, [volume]);
-  // Perf diagnostics (Item 3d). `statsRef` holds the latest mpegts
+  // Perf diagnostics (Item 3d + round 4). `statsRef` holds the latest mpegts
   // STATISTICS_INFO payload (network `speed` in KB/s); `perfRef` is the
-  // dropped-frame sampling window baseline + last-warn throttle timestamp.
+  // dropped-frame sampling window baseline + last-warn / last-info throttle
+  // timestamps (the info line is emitted to the Rust log once per 60 s).
   const statsRef = useRef(null);
-  const perfRef = useRef({ decoded: 0, dropped: 0, lastWarnAt: 0 });
+  const perfRef = useRef({ decoded: 0, dropped: 0, lastWarnAt: 0, lastInfoAt: 0 });
 
   const patchChannel = useCallback(
     (fields) =>
@@ -161,12 +183,19 @@ export default function InlineVideo({ channelKey, thumbnailUrl, variant = 'colum
         videoRef.current = nv;
         nv.muted = mutedRef.current;
         nv.volume = volumeRef.current;
-        // Profile selection (Item 3b): a muted background COLUMN uses the
-        // relaxed stash profile; audible columns and Focus always use the
-        // ultra-low-latency profile. mutedRef is read at execution time so a
-        // mute toggle that queued this rebuild picks the right profile.
+        // Profile selection (round 4): chosen ONCE, here at player-creation
+        // time, from the current variant + muted state. Focus always uses its
+        // own profile; a column picks muted-vs-unmuted from mutedRef, read at
+        // execution time so the muted state at *creation* wins. There is no
+        // longer a mute-toggle pipeline swap (seamless mute, Item 2) — a stream
+        // created muted keeps the lazier muted profile after unmuting until its
+        // next natural recreation.
         const config =
-          variant === 'column' && mutedRef.current ? RELAXED_CONFIG : LOW_LATENCY_CONFIG;
+          variant === 'focus'
+            ? FOCUS_CONFIG
+            : mutedRef.current
+              ? COLUMN_MUTED_CONFIG
+              : COLUMN_UNMUTED_CONFIG;
         const player = mpegts.createPlayer({ type: 'mpegts', isLive: true, url }, config);
         // Latest download stats for the perf watchdog (Item 3d).
         player.on(mpegts.Events.STATISTICS_INFO, (stats) => {
@@ -370,11 +399,17 @@ export default function InlineVideo({ channelKey, thumbnailUrl, variant = 'colum
     return () => clearInterval(id);
   }, [phase, createPlayer, destroyPlayer]);
 
-  // ── Perf diagnostics (Item 3d) ──
+  // ── Perf diagnostics (Item 3d + round 4) ──
   // Every 10 s while playing, sample dropped vs total decoded frames over the
-  // window. If dropped frames exceed 5% of the window's total decode, warn —
-  // throttled to at most one warn per video per 30 s. No UI; this exists so the
-  // next "it got choppy" report is actionable (dropped ratio + buffered span).
+  // window. Two outputs, both routed to the Rust log via `frontend_log` so
+  // they land in the `tauri:dev` terminal (nobody opens the WebKit inspector —
+  // the old console.warn-only diagnostics were invisible):
+  //   • WARN when window dropped frames exceed 5% of the window's decode,
+  //     throttled to at most one per video per 30 s.
+  //   • INFO heartbeat once per 60 s per playing video: cumulative dropped /
+  //     decoded, buffered span, and current latency (buffered.end − currentTime)
+  //     — this is what makes the NEXT "it got choppy ~20 s in" report
+  //     diagnosable without a rebuild.
   useEffect(() => {
     if (phase !== 'playing') return undefined;
     const v0 = videoRef.current;
@@ -383,6 +418,7 @@ export default function InlineVideo({ channelKey, thumbnailUrl, variant = 'colum
       decoded: q0?.totalVideoFrames ?? 0,
       dropped: q0?.droppedVideoFrames ?? 0,
       lastWarnAt: 0,
+      lastInfoAt: 0,
     };
     const id = setInterval(() => {
       const v = videoRef.current;
@@ -393,27 +429,48 @@ export default function InlineVideo({ channelKey, thumbnailUrl, variant = 'colum
       const prev = perfRef.current;
       const totalDelta = decoded - prev.decoded;
       const droppedDelta = dropped - prev.dropped;
-      // The <video> element is replaced on rebuild (frame counters reset); a
-      // non-positive delta means we crossed a rebuild — just re-baseline.
+      const now = Date.now();
+
+      // Buffered span + live latency (shared by both the warn and the info
+      // line). `buffered` can throw before the pipeline is ready.
+      let bufferedEnd = 0;
+      let bufferedSpan = 0;
+      try {
+        const b = v.buffered;
+        if (b && b.length) {
+          bufferedEnd = b.end(b.length - 1);
+          bufferedSpan = bufferedEnd - b.start(b.length - 1);
+        }
+      } catch { /* not ready */ }
+      const latency = bufferedEnd ? bufferedEnd - v.currentTime : 0;
+
+      // WARN path — the <video> element is replaced on rebuild (frame counters
+      // reset); a non-positive delta means we crossed a rebuild — just
+      // re-baseline without warning.
       if (totalDelta > 0 && droppedDelta > totalDelta * 0.05) {
-        const now = Date.now();
         if (now - prev.lastWarnAt >= 30000) {
           prev.lastWarnAt = now;
-          let bufferedSpan = 0;
-          try {
-            const b = v.buffered;
-            if (b && b.length) bufferedSpan = b.end(b.length - 1) - b.start(b.length - 1);
-          } catch { /* buffered can throw before the pipeline is ready */ }
+          const msg =
+            `[InlineVideo:perf] ${channelKey} DROPPED ${droppedDelta}/${totalDelta} ` +
+            `in window (decoded=${decoded} speed=${statsRef.current?.speed ?? '?'}KB/s ` +
+            `span=${bufferedSpan.toFixed(1)}s latency=${latency.toFixed(1)}s)`;
           // eslint-disable-next-line no-console
-          console.warn('[InlineVideo:perf]', channelKey, {
-            droppedDelta,
-            totalDelta,
-            decodedFrames: decoded,
-            speed: statsRef.current?.speed,
-            bufferedSpan,
-          });
+          console.warn(msg);
+          frontendLog('warn', msg).catch(() => {});
         }
       }
+
+      // INFO heartbeat — once per 60 s per playing video (first fires on the
+      // 10 s tick after mount, since lastInfoAt starts at epoch 0).
+      if (now - prev.lastInfoAt >= 60000) {
+        prev.lastInfoAt = now;
+        frontendLog(
+          'info',
+          `[InlineVideo:perf] ${channelKey} dropped=${dropped}/${decoded} ` +
+            `span=${bufferedSpan.toFixed(1)}s latency=${latency.toFixed(1)}s`,
+        ).catch(() => {});
+      }
+
       prev.decoded = decoded;
       prev.dropped = dropped;
     }, 10000);
@@ -448,28 +505,18 @@ export default function InlineVideo({ channelKey, thumbnailUrl, variant = 'colum
   const toggleMute = () => {
     const next = !muted;
     setMuted(next);
-    // Set the ref synchronously so the queued createPlayer below reads the new
+    // Set the ref synchronously so any subsequent createPlayer reads the new
     // value (the muted→ref effect only runs after this render commits).
     mutedRef.current = next;
     if (videoRef.current) videoRef.current.muted = next;
     patchChannel({ muted: next });
-    // Column videos swap MSE profiles on mute change (Item 3b): a muted
-    // background column uses the relaxed stash profile, an audible one the
-    // ultra-low-latency profile. Recreate the pipeline through the creation
-    // queue so the new profile takes effect. Reuse the existing passthrough
-    // URL and keep phase 'playing' (a brief black flash during the swap is
-    // acceptable). Focus always stays low-latency, so it never swaps.
-    if (variant === 'column' && phase === 'playing' && urlRef.current) {
-      // Claim a fresh incarnation at commit time (file rule) so any queued
-      // wedge-rebuild that captured the old gen self-aborts.
-      const gen = ++genRef.current;
-      wdRef.current = { lastFrames: undefined, frozenTicks: 0 };
-      // Same failure-visibility rule as the watchdog rebuild: a synchronous
-      // throw inside the queued creation fn rejects this chain — warn so
-      // there's a trace instead of a silently dead player.
-      createPlayer(gen, urlRef.current)
-        .catch((e) => { console.warn('[InlineVideo] profile swap failed:', e?.message); });
-    }
+    // Seamless mute (Item 2): NO pipeline swap. The owner reported that
+    // recreating the player on mute made the stream visibly stop and resume.
+    // The playback profile is chosen once at player-creation time from the
+    // muted state at that moment (see createPlayer). Tradeoff: a stream created
+    // muted keeps the lazier muted profile (≤6 s latency) after unmuting until
+    // its next natural recreation — seamless mute wins over instant
+    // low-latency, per owner feedback.
   };
   const onVolume = (v) => {
     setVolume(v);

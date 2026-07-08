@@ -345,6 +345,7 @@ fn list_handlers() -> Vec<String> {
         "list_playing",
         "video_start",
         "video_stop",
+        "frontend_log",
         "open_in_browser",
         "open_url",
         "list_socials",
