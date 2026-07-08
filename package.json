@@ -23,5 +23,8 @@
     "@tauri-apps/cli": "^2.10.1",
     "@vitejs/plugin-react": "^4.3.4",
     "vite": "^5.4.11"
+  },
+  "overrides": {
+    "webworkify-webpack": "https://codeload.github.com/xqq/webworkify-webpack/tar.gz/24d1e719b4a6cac37a518b2bb10fe124527ef4ef"
   }
 }
