@@ -291,6 +291,16 @@ After every Chaturbate embed `PageLoadEvent::Finished`, read the `sessionid` coo
 
 **Multi-embed**: the HashMap-keyed model means N concurrent embeds is a first-class feature, not a workaround. The Columns layout shows one embed per visible YT/CB column, all rendering simultaneously. The pre-rewrite single-`Option<CurrentEmbed>` ceiling is gone.
 
+### Inline video (Phase 6 slice 2)
+
+Twitch-only inline playback: one streamlink child per playing channel serving MPEG-TS over a localhost port, bridged to the webview by the CORS passthrough (`video/passthrough.rs`); `InlineVideo.jsx` is the only mpegts.js consumer. See the module tree (`video/`) and the two video pitfall rows.
+
+**Settings** (`settings.rs::VideoSettings`, all serde-defaulted): `default_quality` (default **`"best"`**; options `best` / `1080p60` / `720p60` / `720p` / `480p`), `max_concurrent` (6), `linger_seconds` (60), `use_twitch_auth` (true), `autoplay_columns` (**true** — live Twitch columns auto-start on group-open / column-add; the header ⏹ / `InlineVideo` onClose stops one for that mount only via a local `sessionStopped` flag, never touching the persisted `channels[key].on` flag), `autoplay_unmuted` (**true** — autoplayed columns start unmuted unless a per-channel persisted `muted` wins). `channels: HashMap<unique_key, ChannelVideoState { on, volume, muted, quality }>`.
+
+**Readiness probe**: `start()` waits for the streamlink port before returning the URL. On Linux the probe is **passive** (`video/mod.rs::port_is_listening` reads `/proc/net/tcp` for a `0100007F:<port>` LISTEN row) — never a `TcpStream::connect`, because streamlink's single-threaded HTTP server (listen backlog 1) would accept the probe as a client and race the real fetch into a refused window (the transient `networkError/HttpStatusCodeInvalid` on the 2nd+ video). `InlineVideo.jsx` also auto-retries (500/1000/2000 ms, ≤3) a NetworkError that arrives before any frame is decoded.
+
+**Popout hand-off**: `InlineVideo.popout()` stops the inline session and launches mpv, holding a `popout` poster ("Starting external player…") until `usePlayerState` reports the external player live — then the column unmounts and Focus shows a `popped` resting state with a "Play inline" button.
+
 ### The three layouts
 
 - **Command** — selected-channel workflow. Sidebar rail shows all channels (live first, then offline alpha). Main pane shows the selected channel's header + chat.
