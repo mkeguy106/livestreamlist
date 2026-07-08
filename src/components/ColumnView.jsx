@@ -52,6 +52,12 @@ export default function ColumnView({
   //     column key in Columns.jsx, so `sessionStopped` naturally resets then.
   //   • autoplay OFF — classic click-to-play driven by the persisted
   //     per-channel `on` flag, toggled by the header button.
+  //
+  // `videoOn` recomputes per render, so flipping the autoplay_columns
+  // preference applies MID-SESSION: off immediately stops autoplay-started
+  // videos, on immediately starts every live column. That instant-apply is
+  // deliberate — a playback toggle that visibly acts now is less surprising
+  // than one that appears dead until columns happen to remount.
   const autoplay = settings?.video?.autoplay_columns ?? true;
   const persistedOn = !!settings?.video?.channels?.[key]?.on;
   const [sessionStopped, setSessionStopped] = useState(false);

@@ -655,21 +655,27 @@ mod tests {
         use super::listening_in_table;
         // Real-shape /proc/net/tcp: header + rows. Columns after `sl`:
         //   local_address rem_address st ...
-        // 127.0.0.1 == 0100007F (LE). Port 9001 == 0x2329, LISTEN == 0A.
+        // 127.0.0.1 == 0100007F (LE). LISTEN == 0A.
+        // Row 0: 127.0.0.1:9001 (0x2329) LISTEN — the match target.
+        // Row 1: 127.0.0.1:8080 (0x1F90) ESTABLISHED — wrong state.
+        // Row 2: 0.0.0.0:4242  (0x1092) LISTEN — right state, wrong IP; 4242
+        //        appears ONLY on this row so the non-loopback rejection is
+        //        genuinely exercised (not just "port absent").
         let table = "\
   sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
    0: 0100007F:2329 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 12345 1 0000 100
    1: 0100007F:1F90 0100007F:C000 01 00000000:00000000 00:00000000 00000000  1000        0 22222 1 0000 100
-   2: 00000000:2329 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 33333 1 0000 100
+   2: 00000000:1092 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 33333 1 0000 100
 ";
         // 9001 is loopback + LISTEN -> match.
         assert!(listening_in_table(table, 9001));
-        // 8080 (0x1F90) is loopback but ESTABLISHED (01) -> no match.
+        // 8080 is loopback but ESTABLISHED (01) -> no match.
         assert!(!listening_in_table(table, 8080));
-        // A port present only on 0.0.0.0 (all-interfaces) is not loopback.
-        // (row 2 is 0.0.0.0:9001; loopback 9001 already matched via row 0, so
-        // test a port that ONLY appears on 0.0.0.0.)
+        // 4242 IS listed in LISTEN state, but on 0.0.0.0 (all interfaces),
+        // not 127.0.0.1 -> no match.
         assert!(!listening_in_table(table, 4242));
+        // A port absent from the table entirely -> no match.
+        assert!(!listening_in_table(table, 5555));
         // Empty table -> no match, no panic.
         assert!(!listening_in_table("", 9001));
     }

@@ -1359,14 +1359,14 @@ function VideoTab({ settings, patch }) {
         />
       </Row>
 
-      <Row label="Auto-play videos in Columns" hint="Live Twitch columns start playing when a group opens or a column is added; the ⏹ stops one until the column remounts.">
+      <Row label="Auto-play videos in Columns" hint="Live Twitch columns start playing when a group opens or a column is added; the ⏹ stops one until the column remounts. Takes effect immediately.">
         <Toggle
           checked={v.autoplay_columns ?? true}
           onChange={(next) => patchVideo({ autoplay_columns: next })}
         />
       </Row>
 
-      <Row label="Start columns unmuted" hint="Autoplayed columns start with sound. Per-channel mute choices still stick.">
+      <Row label="Start columns unmuted" hint="Applies to newly started videos. Per-channel mute choices still stick.">
         <Toggle
           checked={v.autoplay_unmuted ?? true}
           onChange={(next) => patchVideo({ autoplay_unmuted: next })}

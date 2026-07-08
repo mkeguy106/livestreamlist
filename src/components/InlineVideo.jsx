@@ -157,13 +157,20 @@ export default function InlineVideo({ channelKey, thumbnailUrl, variant = 'colum
             );
             destroyPlayer();
             setPhase('starting');
-            // Capture the gen current at error time; bail if it moved (unmount,
-            // channel switch, manual retry, terminal Rust event) before firing.
-            const scheduledGen = genRef.current;
+            // Claim a fresh incarnation NOW, at scheduling time — the file's
+            // rule: any action that commits to a new session claims a new
+            // generation at commit time, not at execution time (same as
+            // pickQuality/retry). Bumping here invalidates any already-queued
+            // wedge-rebuild that captured the old gen; without it, that
+            // rebuild (stale URL) and this retry's fresh startSession would
+            // both pass the same gen-guard and race through the creation
+            // queue. The timeout re-checks the claimed gen so anything newer
+            // (unmount, channel switch, manual retry, terminal Rust event)
+            // cancels the pending retry.
+            const retryGen = ++genRef.current;
             setTimeout(() => {
-              if (genRef.current !== scheduledGen) return;
-              const g = ++genRef.current;
-              startSessionRef.current?.(g, null);
+              if (genRef.current !== retryGen) return;
+              startSessionRef.current?.(retryGen, null);
             }, backoff);
             return;
           }
