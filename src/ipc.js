@@ -26,6 +26,9 @@ export const refreshChannel = (uniqueKey) => invoke('refresh_channel', { uniqueK
 export const launchStream = (uniqueKey, quality) => invoke('launch_stream', { uniqueKey, quality });
 export const stopStream = (uniqueKey) => invoke('stop_stream', { uniqueKey });
 export const listPlaying = () => invoke('list_playing');
+export const videoStart = (uniqueKey, quality = null) =>
+  invoke('video_start', { uniqueKey, quality });
+export const videoStop = (uniqueKey) => invoke('video_stop', { uniqueKey });
 export const openInBrowser = (uniqueKey) => invoke('open_in_browser', { uniqueKey });
 export const chatConnect = (uniqueKey) => invoke('chat_connect', { uniqueKey });
 export const chatDisconnect = (uniqueKey) => invoke('chat_disconnect', { uniqueKey });
@@ -450,6 +453,10 @@ async function mockInvoke(name, args) {
       return false;
     case 'list_playing':
       return [...mockPlaying];
+    case 'video_start':
+      return Promise.reject(new Error('inline video requires the desktop app'));
+    case 'video_stop':
+      return Promise.resolve(null);
     case 'open_in_browser': {
       const c = mockChannels.find((c) => `${c.platform}:${c.channel_id}` === args.uniqueKey);
       if (c) {

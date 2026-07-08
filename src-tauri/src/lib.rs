@@ -363,6 +363,33 @@ fn list_playing(player: State<'_, Arc<PlayerManager>>) -> Vec<String> {
 }
 
 #[derive(serde::Serialize)]
+struct VideoStartResult {
+    url: String,
+}
+
+#[tauri::command]
+async fn video_start(
+    unique_key: String,
+    quality: Option<String>,
+    video: State<'_, Arc<video::VideoManager>>,
+) -> Result<VideoStartResult, String> {
+    video
+        .start(&unique_key, quality)
+        .await
+        .map(|url| VideoStartResult { url })
+        .map_err(err_string)
+}
+
+#[tauri::command]
+fn video_stop(
+    unique_key: String,
+    video: State<'_, Arc<video::VideoManager>>,
+) -> Result<(), String> {
+    video.stop(&unique_key);
+    Ok(())
+}
+
+#[derive(serde::Serialize)]
 struct ImportResult {
     added: u32,
     skipped: u32,
@@ -1939,6 +1966,8 @@ macro_rules! register_handlers {
             $crate::launch_stream,
             $crate::stop_stream,
             $crate::list_playing,
+            $crate::video_start,
+            $crate::video_stop,
             $crate::open_in_browser,
             $crate::open_url,
             $crate::list_socials,
@@ -2018,6 +2047,9 @@ pub(crate) fn manage_all_state(app: &mut tauri::App) -> anyhow::Result<()> {
     let player_mgr = Arc::new(PlayerManager::new(handle.clone()));
     app.manage(player_mgr);
 
+    let video_mgr = Arc::new(video::VideoManager::new(handle.clone()));
+    app.manage(video_mgr);
+
     let embed_mgr = embed::EmbedHost::new();
     app.manage(embed_mgr);
 
@@ -2063,6 +2095,8 @@ pub fn run() {
                 )?;
             }
             crate::manage_all_state(app)?;
+            let video_mgr = app.state::<Arc<video::VideoManager>>().inner().clone();
+            tauri::async_runtime::spawn(video_mgr.run_background());
             #[cfg(target_os = "linux")]
             {
                 let main = app
