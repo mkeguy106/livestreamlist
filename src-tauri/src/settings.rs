@@ -352,7 +352,7 @@ impl Default for ColumnsSettings {
 }
 
 fn default_video_quality() -> String {
-    "720p60".into()
+    "best".into()
 }
 fn default_video_max_concurrent() -> u32 {
     6
@@ -406,6 +406,13 @@ pub struct VideoSettings {
     /// Pass the captured Twitch web token to streamlink (ad-free for subs/Turbo).
     #[serde(default = "default_true")]
     pub use_twitch_auth: bool,
+    /// Auto-start inline video for live Twitch columns when a group opens or a
+    /// column is added (until the user stops one for that mount).
+    #[serde(default = "default_true")]
+    pub autoplay_columns: bool,
+    /// Start autoplayed columns unmuted. A per-channel persisted mute still wins.
+    #[serde(default = "default_true")]
+    pub autoplay_unmuted: bool,
 }
 
 impl Default for VideoSettings {
@@ -416,6 +423,8 @@ impl Default for VideoSettings {
             max_concurrent: default_video_max_concurrent(),
             linger_seconds: default_video_linger_seconds(),
             use_twitch_auth: true,
+            autoplay_columns: true,
+            autoplay_unmuted: true,
         }
     }
 }
@@ -699,10 +708,23 @@ mod tests {
     fn video_settings_defaults_when_missing() {
         let s: Settings = serde_json::from_str("{}").unwrap();
         assert!(s.video.channels.is_empty());
-        assert_eq!(s.video.default_quality, "720p60");
+        assert_eq!(s.video.default_quality, "best");
         assert_eq!(s.video.max_concurrent, 6);
         assert_eq!(s.video.linger_seconds, 60);
         assert!(s.video.use_twitch_auth);
+        assert!(s.video.autoplay_columns, "autoplay_columns default true");
+        assert!(s.video.autoplay_unmuted, "autoplay_unmuted default true");
+    }
+
+    /// Old configs written before the autoplay fields existed still parse and
+    /// pick up the new defaults (both on).
+    #[test]
+    fn video_settings_autoplay_defaults_for_partial_json() {
+        let json = r#"{"video":{"default_quality":"720p","max_concurrent":4}}"#;
+        let s: Settings = serde_json::from_str(json).unwrap();
+        assert_eq!(s.video.default_quality, "720p");
+        assert!(s.video.autoplay_columns);
+        assert!(s.video.autoplay_unmuted);
     }
 
     #[test]
@@ -718,6 +740,8 @@ mod tests {
             },
         );
         s.video.max_concurrent = 3;
+        s.video.autoplay_columns = false;
+        s.video.autoplay_unmuted = false;
         let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
         let c = &back.video.channels["twitch:gems"];
         assert!(c.on);
@@ -725,6 +749,8 @@ mod tests {
         assert!(!c.muted);
         assert_eq!(c.quality.as_deref(), Some("480p"));
         assert_eq!(back.video.max_concurrent, 3);
+        assert!(!back.video.autoplay_columns);
+        assert!(!back.video.autoplay_unmuted);
     }
 
     #[test]

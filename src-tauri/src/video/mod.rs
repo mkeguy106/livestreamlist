@@ -376,10 +376,7 @@ impl VideoManager {
         // Readiness: poll the session port. No sessions lock held across awaits.
         let deadline = Instant::now() + READINESS_TIMEOUT;
         loop {
-            if tokio::net::TcpStream::connect(("127.0.0.1", port))
-                .await
-                .is_ok()
-            {
+            if probe_port_ready(port).await {
                 break;
             }
             // Child death during startup (channel offline, bad auth, …).
@@ -549,6 +546,56 @@ fn drain_all_sessions(
     drained
 }
 
+/// Readiness probe for a freshly-spawned streamlink child's HTTP port.
+///
+/// On Linux this is PASSIVE: it reads the kernel's `/proc/net/tcp` table
+/// instead of opening a connection. streamlink's `--player-external-http`
+/// server is single-threaded with a listen backlog of 1 (`LISTEN 0 1`), so a
+/// `TcpStream::connect` probe is ACCEPTED and consumed as a client — which
+/// races the webview's real fetch into a refused/error window (the transient
+/// `networkError/HttpStatusCodeInvalid` seen when starting the 2nd+ video).
+/// The passive check never touches the accept queue. Elsewhere we keep the
+/// original connect probe (no `/proc` on macOS / Windows).
+#[cfg(target_os = "linux")]
+async fn probe_port_ready(port: u16) -> bool {
+    port_is_listening(port)
+}
+
+#[cfg(not(target_os = "linux"))]
+async fn probe_port_ready(port: u16) -> bool {
+    tokio::net::TcpStream::connect(("127.0.0.1", port))
+        .await
+        .is_ok()
+}
+
+/// True if `127.0.0.1:port` is in the LISTEN state. Reads `/proc/net/tcp`;
+/// the pure parsing lives in `listening_in_table` so it's unit-testable.
+#[cfg(target_os = "linux")]
+fn port_is_listening(port: u16) -> bool {
+    match std::fs::read_to_string("/proc/net/tcp") {
+        Ok(table) => listening_in_table(&table, port),
+        Err(_) => false,
+    }
+}
+
+/// Pure `/proc/net/tcp` scan: is `127.0.0.1:port` present in LISTEN state?
+///
+/// Each data row's second whitespace field is `local_address` formatted as
+/// `<hex-ip>:<hex-port>`; loopback `127.0.0.1` is the little-endian hex
+/// `0100007F`, and the fourth field (`st`) is `0A` for TCP LISTEN. The header
+/// line is skipped.
+#[cfg(target_os = "linux")]
+fn listening_in_table(table: &str, port: u16) -> bool {
+    let needle = format!("0100007F:{port:04X}");
+    table.lines().skip(1).any(|line| {
+        let mut fields = line.split_whitespace();
+        let local = fields.nth(1).unwrap_or(""); // field 1: local_address
+        let _remote = fields.next(); // field 2: rem_address
+        let state = fields.next().unwrap_or(""); // field 3: st
+        local == needle && state == "0A"
+    })
+}
+
 impl Drop for VideoManager {
     fn drop(&mut self) {
         // Drain under the lock; kill the children after the guard drops.
@@ -598,5 +645,38 @@ mod tests {
 
         assert!(sessions.lock().is_empty(), "sessions map should be empty");
         assert!(ports.lock().is_empty(), "ports map should be empty");
+    }
+
+    /// The passive readiness parser recognizes a loopback LISTEN row for the
+    /// target port and rejects other ports / non-LISTEN states / other IPs.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn listening_in_table_matches_loopback_listen() {
+        use super::listening_in_table;
+        // Real-shape /proc/net/tcp: header + rows. Columns after `sl`:
+        //   local_address rem_address st ...
+        // 127.0.0.1 == 0100007F (LE). LISTEN == 0A.
+        // Row 0: 127.0.0.1:9001 (0x2329) LISTEN — the match target.
+        // Row 1: 127.0.0.1:8080 (0x1F90) ESTABLISHED — wrong state.
+        // Row 2: 0.0.0.0:4242  (0x1092) LISTEN — right state, wrong IP; 4242
+        //        appears ONLY on this row so the non-loopback rejection is
+        //        genuinely exercised (not just "port absent").
+        let table = "\
+  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
+   0: 0100007F:2329 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 12345 1 0000 100
+   1: 0100007F:1F90 0100007F:C000 01 00000000:00000000 00:00000000 00000000  1000        0 22222 1 0000 100
+   2: 00000000:1092 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 33333 1 0000 100
+";
+        // 9001 is loopback + LISTEN -> match.
+        assert!(listening_in_table(table, 9001));
+        // 8080 is loopback but ESTABLISHED (01) -> no match.
+        assert!(!listening_in_table(table, 8080));
+        // 4242 IS listed in LISTEN state, but on 0.0.0.0 (all interfaces),
+        // not 127.0.0.1 -> no match.
+        assert!(!listening_in_table(table, 4242));
+        // A port absent from the table entirely -> no match.
+        assert!(!listening_in_table(table, 5555));
+        // Empty table -> no match, no panic.
+        assert!(!listening_in_table("", 9001));
     }
 }
