@@ -15,17 +15,23 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc::UnboundedSender;
 
-/// unique_key -> streamlink session port. Written by VideoManager.
-pub(crate) type PortMap = Arc<parking_lot::Mutex<HashMap<String, u16>>>;
+/// unique_key -> (streamlink session port, incarnation generation). Written by
+/// VideoManager. The generation is captured at connection time and echoed on
+/// the consumer events so the manager can drop events belonging to an
+/// incarnation that was replaced (quality switch) under the same key.
+pub(crate) type PortMap = Arc<parking_lot::Mutex<HashMap<String, (u16, u64)>>>;
 
-/// Consumer lifecycle notifications, keyed by unique_key. The manager's
-/// background task turns these into Serving/Lingering transitions — a new
-/// connection also cancels linger for watchdog rebuilds, which reconnect
-/// without a fresh video_start.
+/// Consumer lifecycle notifications, keyed by unique_key and tagged with the
+/// incarnation generation the connection was serving. The manager's background
+/// task turns these into Serving/Lingering transitions — a new connection also
+/// cancels linger for watchdog rebuilds, which reconnect without a fresh
+/// video_start. Events whose generation no longer matches the live session are
+/// ignored (a prior incarnation's dropped connection must not push its
+/// successor into linger).
 #[derive(Debug)]
 pub(crate) enum ConsumerEvent {
-    Connected(String),
-    Dropped(String),
+    Connected { key: String, generation: u64 },
+    Dropped { key: String, generation: u64 },
 }
 
 pub(crate) async fn serve(
@@ -79,8 +85,8 @@ async fn handle_conn(
     let Some(key) = path.strip_prefix("/video/") else {
         return respond(&mut client, "404 Not Found").await;
     };
-    let port = ports.lock().get(key).copied();
-    let Some(port) = port else {
+    let entry = ports.lock().get(key).copied();
+    let Some((port, generation)) = entry else {
         return respond(&mut client, "404 Not Found").await;
     };
 
@@ -118,9 +124,12 @@ async fn handle_conn(
 
     // ── Streaming phase: consumer is officially attached ──
     let key = key.to_string();
-    let _ = events.send(ConsumerEvent::Connected(key.clone()));
+    let _ = events.send(ConsumerEvent::Connected {
+        key: key.clone(),
+        generation,
+    });
     let result = tokio::io::copy(&mut upstream, &mut client).await;
-    let _ = events.send(ConsumerEvent::Dropped(key));
+    let _ = events.send(ConsumerEvent::Dropped { key, generation });
     result.map(|_| ())
 }
 
@@ -160,7 +169,10 @@ mod tests {
         });
 
         let ports: PortMap = Arc::new(parking_lot::Mutex::new(HashMap::new()));
-        ports.lock().insert("twitch:test".into(), upstream_port);
+        // Register with a nonzero generation; the events must round-trip it.
+        ports
+            .lock()
+            .insert("twitch:test".into(), (upstream_port, 7));
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
 
         let listener = tauri::async_runtime::block_on(async {
@@ -185,8 +197,14 @@ mod tests {
         assert!(response.ends_with("TSBYTES"));
 
         std::thread::sleep(std::time::Duration::from_millis(200));
-        assert!(matches!(rx.try_recv(), Ok(ConsumerEvent::Connected(k)) if k == "twitch:test"));
-        assert!(matches!(rx.try_recv(), Ok(ConsumerEvent::Dropped(k)) if k == "twitch:test"));
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(ConsumerEvent::Connected { key, generation }) if key == "twitch:test" && generation == 7
+        ));
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(ConsumerEvent::Dropped { key, generation }) if key == "twitch:test" && generation == 7
+        ));
     }
 
     #[test]

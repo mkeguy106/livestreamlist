@@ -15,6 +15,13 @@ pub(crate) enum SessionState {
 
 pub(crate) struct VideoSession {
     pub(crate) port: u16,
+    /// Incarnation identity. Every session creation (fresh start or
+    /// quality-switch placeholder) gets a fresh, monotonically-increasing
+    /// generation from `VideoManager::next_generation`. Consumer events and
+    /// readiness teardown carry the generation of the incarnation they belong
+    /// to, so a stale event/teardown from a replaced incarnation under the
+    /// same key is ignored rather than clobbering the live successor.
+    pub(crate) generation: u64,
     pub(crate) quality: String,
     pub(crate) state: SessionState,
     /// Live passthrough consumers. Refcounted so overlapping reconnects
@@ -26,9 +33,15 @@ pub(crate) struct VideoSession {
 }
 
 impl VideoSession {
-    pub(crate) fn new(port: u16, quality: String, child: Option<std::process::Child>) -> Self {
+    pub(crate) fn new(
+        port: u16,
+        quality: String,
+        child: Option<std::process::Child>,
+        generation: u64,
+    ) -> Self {
         Self {
             port,
+            generation,
             quality,
             state: SessionState::Starting,
             consumers: 0,
@@ -79,7 +92,9 @@ mod tests {
 
     #[test]
     fn linger_then_reap_after_deadline() {
-        let mut s = VideoSession::new(9000, "720p60".into(), None);
+        let mut s = VideoSession::new(9000, "720p60".into(), None, 42);
+        // new() stores the generation verbatim (incarnation identity).
+        assert_eq!(s.generation, 42);
         let t0 = Instant::now();
         s.on_consumer_dropped(t0, Duration::from_secs(60));
         assert!(!s.should_reap(t0));
@@ -89,7 +104,7 @@ mod tests {
 
     #[test]
     fn reconnect_cancels_linger() {
-        let mut s = VideoSession::new(9000, "720p60".into(), None);
+        let mut s = VideoSession::new(9000, "720p60".into(), None, 0);
         let t0 = Instant::now();
         s.on_consumer_dropped(t0, Duration::from_secs(60));
         s.on_consumer_connected();
@@ -99,7 +114,7 @@ mod tests {
 
     #[test]
     fn zero_linger_reaps_immediately() {
-        let mut s = VideoSession::new(9000, "720p60".into(), None);
+        let mut s = VideoSession::new(9000, "720p60".into(), None, 0);
         let t0 = Instant::now();
         s.on_consumer_dropped(t0, Duration::from_secs(0));
         assert!(s.should_reap(t0));
@@ -107,7 +122,7 @@ mod tests {
 
     #[test]
     fn starting_and_serving_never_reap() {
-        let mut s = VideoSession::new(9000, "720p60".into(), None);
+        let mut s = VideoSession::new(9000, "720p60".into(), None, 0);
         let far = Instant::now() + Duration::from_secs(100_000);
         assert!(!s.should_reap(far));
         s.on_consumer_connected();
@@ -118,7 +133,7 @@ mod tests {
     /// The stale Dropped must not push a still-consumed session into linger.
     #[test]
     fn overlapping_reconnect_stays_serving() {
-        let mut s = VideoSession::new(9000, "720p60".into(), None);
+        let mut s = VideoSession::new(9000, "720p60".into(), None, 0);
         let t0 = Instant::now();
         s.on_consumer_connected();
         s.on_consumer_connected();
@@ -131,7 +146,7 @@ mod tests {
     /// still finds a count of zero and lingers immediately.
     #[test]
     fn mark_serving_does_not_count() {
-        let mut s = VideoSession::new(9000, "720p60".into(), None);
+        let mut s = VideoSession::new(9000, "720p60".into(), None, 0);
         let t0 = Instant::now();
         s.mark_serving();
         assert_eq!(s.state, SessionState::Serving);
