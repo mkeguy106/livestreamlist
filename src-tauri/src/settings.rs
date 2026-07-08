@@ -23,6 +23,8 @@ pub struct Settings {
     pub notifications: NotificationSettings,
     #[serde(default)]
     pub columns: ColumnsSettings,
+    #[serde(default)]
+    pub video: VideoSettings,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -349,6 +351,75 @@ impl Default for ColumnsSettings {
     }
 }
 
+fn default_video_quality() -> String {
+    "720p60".into()
+}
+fn default_video_max_concurrent() -> u32 {
+    6
+}
+fn default_video_linger_seconds() -> u32 {
+    60
+}
+fn default_video_volume() -> f32 {
+    0.5
+}
+
+/// Per-channel inline-video state, keyed by unique_key in `VideoSettings::channels`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChannelVideoState {
+    /// Click-to-play memory: video resumes when the column is visible + live.
+    #[serde(default)]
+    pub on: bool,
+    #[serde(default = "default_video_volume")]
+    pub volume: f32,
+    /// Columns default muted; the Focus layout starts unmuted regardless.
+    #[serde(default = "default_true")]
+    pub muted: bool,
+    /// Per-channel override of `default_quality`. None = use the default.
+    #[serde(default)]
+    pub quality: Option<String>,
+}
+
+impl Default for ChannelVideoState {
+    fn default() -> Self {
+        Self {
+            on: false,
+            volume: default_video_volume(),
+            muted: true,
+            quality: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VideoSettings {
+    #[serde(default)]
+    pub channels: std::collections::HashMap<String, ChannelVideoState>,
+    #[serde(default = "default_video_quality")]
+    pub default_quality: String,
+    /// Soft cap on simultaneously running video sessions (Starting/Serving/Lingering all count).
+    #[serde(default = "default_video_max_concurrent")]
+    pub max_concurrent: u32,
+    /// Seconds a session outlives its last consumer. 0 = reaped on the next sweep.
+    #[serde(default = "default_video_linger_seconds")]
+    pub linger_seconds: u32,
+    /// Pass the captured Twitch web token to streamlink (ad-free for subs/Turbo).
+    #[serde(default = "default_true")]
+    pub use_twitch_auth: bool,
+}
+
+impl Default for VideoSettings {
+    fn default() -> Self {
+        Self {
+            channels: std::collections::HashMap::new(),
+            default_quality: default_video_quality(),
+            max_concurrent: default_video_max_concurrent(),
+            linger_seconds: default_video_linger_seconds(),
+            use_twitch_auth: true,
+        }
+    }
+}
+
 /// Shared in-memory handle. Clone cheaply, read/write under the RwLock.
 pub type SharedSettings = Arc<RwLock<Settings>>;
 
@@ -622,5 +693,46 @@ mod tests {
     fn column_group_kind_defaults_manual() {
         let g: ColumnGroup = serde_json::from_str(r#"{"id":"x","name":"n","keys":[]}"#).unwrap();
         assert_eq!(g.kind, "manual");
+    }
+
+    #[test]
+    fn video_settings_defaults_when_missing() {
+        let s: Settings = serde_json::from_str("{}").unwrap();
+        assert!(s.video.channels.is_empty());
+        assert_eq!(s.video.default_quality, "720p60");
+        assert_eq!(s.video.max_concurrent, 6);
+        assert_eq!(s.video.linger_seconds, 60);
+        assert!(s.video.use_twitch_auth);
+    }
+
+    #[test]
+    fn video_settings_round_trip() {
+        let mut s = Settings::default();
+        s.video.channels.insert(
+            "twitch:gems".into(),
+            ChannelVideoState {
+                on: true,
+                volume: 0.8,
+                muted: false,
+                quality: Some("480p".into()),
+            },
+        );
+        s.video.max_concurrent = 3;
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        let c = &back.video.channels["twitch:gems"];
+        assert!(c.on);
+        assert!((c.volume - 0.8).abs() < f32::EPSILON);
+        assert!(!c.muted);
+        assert_eq!(c.quality.as_deref(), Some("480p"));
+        assert_eq!(back.video.max_concurrent, 3);
+    }
+
+    #[test]
+    fn channel_video_state_partial_json_gets_defaults() {
+        let c: ChannelVideoState = serde_json::from_str(r#"{"on": true}"#).unwrap();
+        assert!(c.on);
+        assert!((c.volume - 0.5).abs() < f32::EPSILON);
+        assert!(c.muted);
+        assert!(c.quality.is_none());
     }
 }
