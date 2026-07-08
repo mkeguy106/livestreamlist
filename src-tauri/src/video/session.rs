@@ -17,6 +17,10 @@ pub(crate) struct VideoSession {
     pub(crate) port: u16,
     pub(crate) quality: String,
     pub(crate) state: SessionState,
+    /// Live passthrough consumers. Refcounted so overlapping reconnects
+    /// (watchdog rebuild: new consumer connects before the old one drops,
+    /// or the inverse) never let a stale Dropped clobber a live session.
+    pub(crate) consumers: usize,
     /// None only in unit tests — production sessions always hold the child.
     pub(crate) child: Option<std::process::Child>,
 }
@@ -27,21 +31,34 @@ impl VideoSession {
             port,
             quality,
             state: SessionState::Starting,
+            consumers: 0,
             child,
         }
+    }
+
+    /// Mark the session Serving WITHOUT claiming a consumer — used where no
+    /// real passthrough connection exists yet (start()'s resume path and
+    /// readiness success). The consumer count moves only on real
+    /// Connected/Dropped passthrough events.
+    pub(crate) fn mark_serving(&mut self) {
+        self.state = SessionState::Serving;
     }
 
     /// A consumer connected — initial fetch, linger resume, or a watchdog
     /// rebuild reconnecting WITHOUT a fresh video_start. Cancels any linger.
     pub(crate) fn on_consumer_connected(&mut self) {
+        self.consumers += 1;
         self.state = SessionState::Serving;
     }
 
-    /// The consumer dropped: start the linger clock.
+    /// A consumer dropped: start the linger clock once the last one is gone.
     pub(crate) fn on_consumer_dropped(&mut self, now: Instant, linger: Duration) {
-        self.state = SessionState::Lingering {
-            deadline: now + linger,
-        };
+        self.consumers = self.consumers.saturating_sub(1);
+        if self.consumers == 0 {
+            self.state = SessionState::Lingering {
+                deadline: now + linger,
+            };
+        }
     }
 
     pub(crate) fn should_reap(&self, now: Instant) -> bool {
@@ -95,5 +112,30 @@ mod tests {
         assert!(!s.should_reap(far));
         s.on_consumer_connected();
         assert!(!s.should_reap(far));
+    }
+
+    /// Watchdog rebuild: the new consumer connects before the old one drops.
+    /// The stale Dropped must not push a still-consumed session into linger.
+    #[test]
+    fn overlapping_reconnect_stays_serving() {
+        let mut s = VideoSession::new(9000, "720p60".into(), None);
+        let t0 = Instant::now();
+        s.on_consumer_connected();
+        s.on_consumer_connected();
+        s.on_consumer_dropped(t0, Duration::from_secs(60));
+        assert_eq!(s.state, SessionState::Serving);
+        assert!(!s.should_reap(t0 + Duration::from_secs(3600)));
+    }
+
+    /// mark_serving flips state but claims no consumer: the first real drop
+    /// still finds a count of zero and lingers immediately.
+    #[test]
+    fn mark_serving_does_not_count() {
+        let mut s = VideoSession::new(9000, "720p60".into(), None);
+        let t0 = Instant::now();
+        s.mark_serving();
+        assert_eq!(s.state, SessionState::Serving);
+        s.on_consumer_dropped(t0, Duration::from_secs(60));
+        assert!(matches!(s.state, SessionState::Lingering { .. }));
     }
 }

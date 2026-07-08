@@ -15,7 +15,7 @@ use std::process::Stdio;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use anyhow::{anyhow, bail, Context};
+use anyhow::{anyhow, bail};
 use parking_lot::Mutex;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
@@ -106,6 +106,12 @@ impl VideoManager {
     }
 
     /// One reaper pass: reap expired lingers; surface dead children as errors.
+    ///
+    /// Two-phase with re-verification: the scan collects candidates, then each
+    /// removal re-checks its condition under a fresh lock (a consumer may have
+    /// resumed a lingering session, or the session been replaced, in between).
+    /// Sessions are taken OUT of the map under the lock and killed after the
+    /// guard drops — never kill while holding the sessions lock.
     fn sweep(&self) {
         let now = Instant::now();
         let mut reap = Vec::new();
@@ -123,12 +129,42 @@ impl VideoManager {
             }
         }
         for key in reap {
-            self.remove_session(&key);
-            self.emit(&key, "ended", None);
+            let taken = {
+                let mut sessions = self.sessions.lock();
+                if sessions
+                    .get(&key)
+                    .is_some_and(|s| s.should_reap(Instant::now()))
+                {
+                    sessions.remove(&key)
+                } else {
+                    None
+                }
+            };
+            if let Some(mut s) = taken {
+                self.ports.lock().remove(&key);
+                s.kill();
+                self.emit(&key, "ended", None);
+            }
         }
         for key in died {
-            self.remove_session(&key);
-            self.emit(&key, "error", Some("streamlink exited unexpectedly"));
+            let taken = {
+                let mut sessions = self.sessions.lock();
+                let still_dead = sessions
+                    .get_mut(&key)
+                    .and_then(|s| s.child.as_mut())
+                    .map(|c| matches!(c.try_wait(), Ok(Some(_))))
+                    .unwrap_or(false);
+                if still_dead {
+                    sessions.remove(&key)
+                } else {
+                    None
+                }
+            };
+            if let Some(mut s) = taken {
+                self.ports.lock().remove(&key);
+                s.kill();
+                self.emit(&key, "error", Some("streamlink exited unexpectedly"));
+            }
         }
     }
 
@@ -160,59 +196,104 @@ impl VideoManager {
             .or(per_channel_quality)
             .unwrap_or(default_quality);
 
-        // Resume / quality-switch / cap — one lock scope, no awaits inside.
-        {
+        // Resume / quality-switch / cap / slot reservation — one lock scope,
+        // no awaits inside. Inserting a placeholder before releasing the lock
+        // makes check+claim atomic: concurrent starts see the reserved slot
+        // (cap + duplicate) and cannot double-spawn.
+        let stale = {
             let mut sessions = self.sessions.lock();
             if let Some(s) = sessions.get_mut(unique_key) {
                 if s.quality == quality {
                     // Resume from linger (or duplicate start): cancel linger.
-                    s.on_consumer_connected();
+                    s.mark_serving();
                     return self.url_for(unique_key);
                 }
-                // Quality change: kill and fall through to a fresh spawn.
-                s.kill();
-                sessions.remove(unique_key);
-                self.ports.lock().remove(unique_key);
             }
-            if sessions.len() >= max_concurrent {
+            // Cap check ignores the same-key session we're about to replace,
+            // so a quality switch never trips the cap it already occupies —
+            // and a cap bail leaves that old session untouched (still runs).
+            let replacing = usize::from(sessions.contains_key(unique_key));
+            if sessions.len() - replacing >= max_concurrent {
                 bail!("cap: max simultaneous videos ({max_concurrent}) reached");
             }
+            // Quality change: pull the old session out; killed after the lock
+            // drops (never kill while holding the sessions lock).
+            let stale = sessions.remove(unique_key);
+            if stale.is_some() {
+                self.ports.lock().remove(unique_key);
+            }
+            // Reserve the slot (no port mapping, no child yet).
+            sessions.insert(
+                unique_key.to_string(),
+                VideoSession::new(0, quality.clone(), None),
+            );
+            stale
+        };
+        if let Some(mut old) = stale {
+            old.kill();
         }
 
         let token = if use_auth {
-            crate::auth::twitch_web::stored_token().ok().flatten()
+            match crate::auth::twitch_web::stored_token() {
+                Ok(t) => t,
+                Err(e) => {
+                    log::warn!("twitch web token unavailable for video auth: {e}");
+                    None
+                }
+            }
         } else {
             None
         };
 
         // Spawn with port-collision retry (alloc races streamlink's bind).
-        let mut spawned = None;
-        for _ in 0..3 {
-            let port = spawn::alloc_port()?;
-            let args = spawn::build_streamlink_args(&login, port, &quality, token.as_deref());
-            match std::process::Command::new("streamlink")
-                .args(&args)
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn()
-            {
-                Ok(child) => {
-                    spawned = Some((port, child));
-                    break;
+        let spawn_attempt = || -> anyhow::Result<(u16, std::process::Child)> {
+            for _ in 0..3 {
+                let port = spawn::alloc_port()?;
+                let args = spawn::build_streamlink_args(&login, port, &quality, token.as_deref());
+                match std::process::Command::new("streamlink")
+                    .args(&args)
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn()
+                {
+                    Ok(child) => return Ok((port, child)),
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => bail!(
+                        "streamlink not found on PATH — install streamlink to use inline video"
+                    ),
+                    Err(_) => continue,
                 }
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                    bail!("streamlink not found on PATH — install streamlink to use inline video")
+            }
+            bail!("spawning streamlink failed after retries")
+        };
+        let (port, child) = match spawn_attempt() {
+            Ok(v) => v,
+            Err(e) => {
+                // Release the reservation (placeholder has no child; kill no-ops).
+                self.remove_session(unique_key);
+                return Err(e);
+            }
+        };
+
+        // Fill the reserved slot. If it vanished, a concurrent stop() won:
+        // clean up the just-spawned child and bail silently (stop already
+        // removed the session and emitted "ended").
+        {
+            let mut sessions = self.sessions.lock();
+            match sessions.get_mut(unique_key) {
+                Some(s) => {
+                    s.port = port;
+                    s.child = Some(child);
                 }
-                Err(_) => continue,
+                None => {
+                    drop(sessions);
+                    let mut child = child;
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    bail!("stopped before ready");
+                }
             }
         }
-        let (port, child) = spawned.context("spawning streamlink failed after retries")?;
-
-        self.sessions.lock().insert(
-            unique_key.to_string(),
-            VideoSession::new(port, quality.clone(), Some(child)),
-        );
         self.ports.lock().insert(unique_key.to_string(), port);
         self.emit(unique_key, "starting", None);
 
@@ -226,12 +307,20 @@ impl VideoManager {
                 break;
             }
             // Child death during startup (channel offline, bad auth, …).
+            // None = session gone (concurrent stop) — distinct from death.
             let child_dead = {
                 let mut sessions = self.sessions.lock();
-                match sessions.get_mut(unique_key).and_then(|s| s.child.as_mut()) {
-                    Some(c) => matches!(c.try_wait(), Ok(Some(_))),
-                    None => true, // stopped concurrently
-                }
+                sessions
+                    .get_mut(unique_key)
+                    .map(|s| match s.child.as_mut() {
+                        Some(c) => matches!(c.try_wait(), Ok(Some(_))),
+                        None => false,
+                    })
+            };
+            let Some(child_dead) = child_dead else {
+                // Concurrent stop(): it already removed the session and
+                // emitted "ended" — bail without a second status event.
+                bail!("stopped before ready");
             };
             if child_dead || Instant::now() >= deadline {
                 self.remove_session(unique_key);
@@ -247,9 +336,10 @@ impl VideoManager {
         }
 
         // Consumer will attach momentarily; mark Serving so a mount->fetch gap
-        // never looks like an abandoned Starting session.
+        // never looks like an abandoned Starting session. mark_serving claims
+        // no consumer — the count moves only on passthrough Connected/Dropped.
         if let Some(s) = self.sessions.lock().get_mut(unique_key) {
-            s.on_consumer_connected();
+            s.mark_serving();
         }
         self.emit(unique_key, "serving", None);
         self.url_for(unique_key)
@@ -264,7 +354,10 @@ impl VideoManager {
 
     fn remove_session(&self, unique_key: &str) -> bool {
         self.ports.lock().remove(unique_key);
-        match self.sessions.lock().remove(unique_key) {
+        // Take the session out into a local so the lock guard (a temporary
+        // that would otherwise live for a whole match) drops before kill().
+        let taken = self.sessions.lock().remove(unique_key);
+        match taken {
             Some(mut s) => {
                 s.kill();
                 true
@@ -300,7 +393,9 @@ impl VideoManager {
 
 impl Drop for VideoManager {
     fn drop(&mut self) {
-        for (_, s) in self.sessions.lock().iter_mut() {
+        // Drain under the lock; kill the children after the guard drops.
+        let drained: Vec<_> = self.sessions.lock().drain().collect();
+        for (_, mut s) in drained {
             s.kill();
         }
     }
