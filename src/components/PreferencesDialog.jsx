@@ -1372,6 +1372,17 @@ function VideoTab({ settings, patch }) {
           onChange={(next) => patchVideo({ autoplay_unmuted: next })}
         />
       </Row>
+
+      <GroupLabel>Performance</GroupLabel>
+      <Row
+        label="Use GPU dmabuf renderer"
+        hint="App-wide renderer change, requires restart. Can massively reduce video CPU use; if the app misbehaves after enabling, turn it back off."
+      >
+        <Toggle
+          checked={v.dmabuf_renderer ?? false}
+          onChange={(next) => patchVideo({ dmabuf_renderer: next })}
+        />
+      </Row>
     </div>
   );
 }

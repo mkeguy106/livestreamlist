@@ -1918,6 +1918,13 @@ fn open_in_browser(unique_key: String, state: State<'_, AppState>) -> Result<(),
 ///    Plasma) crashes with "Error 71 (Protocol error) dispatching to Wayland
 ///    display" when the DMABUF renderer is enabled. Disabling it falls back
 ///    to a software path that renders correctly.
+///    **Opt-out**: the `video.dmabuf_renderer` setting, when true, skips this
+///    so the GPU path stays on. The inline-video spike
+///    (`docs/superpowers/spikes/2026-07-07-inline-video-playback-spike.md`)
+///    measured ~4x cheaper video painting with the renderer enabled and no
+///    crash on WebKit 2.52. A user who exported the env var themselves always
+///    wins either way (`set_if_unset` never overrides; when the flag is on we
+///    simply don't set it, so an existing export is preserved).
 /// 2. `GDK_BACKEND=x11` — Wayland's protocol does not expose absolute window
 ///    position to clients (`outer_position` always returns `(0, 0)`), so
 ///    `tauri-plugin-window-state` cannot persist or restore position on a
@@ -1939,7 +1946,15 @@ fn apply_linux_webkit_workarounds() {
             std::env::set_var(key, val);
         }
     }
-    set_if_unset("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+    // Cheap file read; this runs before the Tauri builder so the env is set
+    // before WebKit/GTK initialize. Falls back to defaults (renderer disabled)
+    // if settings can't be loaded.
+    let dmabuf_opt_in = settings::load()
+        .map(|s| s.video.dmabuf_renderer)
+        .unwrap_or(false);
+    if !dmabuf_opt_in {
+        set_if_unset("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+    }
     set_if_unset("GDK_BACKEND", "x11");
 }
 

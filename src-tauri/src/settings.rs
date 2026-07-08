@@ -413,6 +413,13 @@ pub struct VideoSettings {
     /// Start autoplayed columns unmuted. A per-channel persisted mute still wins.
     #[serde(default = "default_true")]
     pub autoplay_unmuted: bool,
+    /// Opt-in (Linux): keep the WebKitGTK dmabuf renderer ON — i.e. skip the
+    /// historical `WEBKIT_DISABLE_DMABUF_RENDERER=1` NVIDIA crash workaround.
+    /// The spike measured ~4x cheaper video painting with it enabled and no
+    /// crash on WebKit 2.52. Off by default; requires restart. Consumed by
+    /// `lib.rs::apply_linux_webkit_workarounds`.
+    #[serde(default)]
+    pub dmabuf_renderer: bool,
 }
 
 impl Default for VideoSettings {
@@ -425,6 +432,7 @@ impl Default for VideoSettings {
             use_twitch_auth: true,
             autoplay_columns: true,
             autoplay_unmuted: true,
+            dmabuf_renderer: false,
         }
     }
 }
@@ -714,6 +722,7 @@ mod tests {
         assert!(s.video.use_twitch_auth);
         assert!(s.video.autoplay_columns, "autoplay_columns default true");
         assert!(s.video.autoplay_unmuted, "autoplay_unmuted default true");
+        assert!(!s.video.dmabuf_renderer, "dmabuf_renderer default false");
     }
 
     /// Old configs written before the autoplay fields existed still parse and
@@ -742,6 +751,7 @@ mod tests {
         s.video.max_concurrent = 3;
         s.video.autoplay_columns = false;
         s.video.autoplay_unmuted = false;
+        s.video.dmabuf_renderer = true;
         let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
         let c = &back.video.channels["twitch:gems"];
         assert!(c.on);
@@ -751,6 +761,7 @@ mod tests {
         assert_eq!(back.video.max_concurrent, 3);
         assert!(!back.video.autoplay_columns);
         assert!(!back.video.autoplay_unmuted);
+        assert!(back.video.dmabuf_renderer);
     }
 
     #[test]

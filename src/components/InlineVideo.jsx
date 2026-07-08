@@ -24,13 +24,40 @@ const QUALITIES = ['best', '1080p60', '720p60', '720p', '480p'];
 const WATCHDOG_TICK_MS = 1500;
 const MAX_REBUILDS = 3;
 
-const MPEGTS_CONFIG = {
+// Tight SourceBuffer back-buffer cleanup (Item 3a). mpegts.js defaults keep
+// ~3 min of back-buffer before pruning; on WebKitGTK the MSE append/remove
+// cost grows with the buffered-range size — this is the "fine at first, choppy
+// after a few minutes" degradation the owner reported. Live playback never
+// seeks backward, so a 15–30 s window is safe. Applied to every profile below.
+const CLEANUP_CONFIG = {
+  autoCleanupSourceBuffer: true,
+  autoCleanupMaxBackwardDuration: 30,
+  autoCleanupMinBackwardDuration: 15,
+};
+
+// Ultra-low-latency profile: zero stash + aggressive latency chasing. Smallest
+// end-to-end delay but the highest per-stream CPU cost (continuous tiny
+// appends — the biggest decode cost measured in the spike). Used for audible
+// players: any unmuted column, and Focus always.
+const LOW_LATENCY_CONFIG = {
   enableWorker: true,
   enableStashBuffer: false,
   liveBufferLatencyChasing: true,
   liveBufferLatencyMaxLatency: 2.5,
   liveBufferLatencyMinRemain: 0.5,
-  autoCleanupSourceBuffer: true,
+  ...CLEANUP_CONFIG,
+};
+
+// Relaxed profile (Item 3b): a muted background column doesn't need zero-stash
+// latency, so re-enable the default stash buffer (fewer, larger appends ⇒ less
+// decode churn) and chase latency more lazily. Column variant only.
+const RELAXED_CONFIG = {
+  enableWorker: true,
+  enableStashBuffer: true,
+  liveBufferLatencyChasing: true,
+  liveBufferLatencyMaxLatency: 6,
+  liveBufferLatencyMinRemain: 2,
+  ...CLEANUP_CONFIG,
 };
 
 export default function InlineVideo({ channelKey, thumbnailUrl, variant = 'column', onClose }) {
@@ -92,6 +119,11 @@ export default function InlineVideo({ channelKey, thumbnailUrl, variant = 'colum
   const volumeRef = useRef(volume);
   useEffect(() => { mutedRef.current = muted; }, [muted]);
   useEffect(() => { volumeRef.current = volume; }, [volume]);
+  // Perf diagnostics (Item 3d). `statsRef` holds the latest mpegts
+  // STATISTICS_INFO payload (network `speed` in KB/s); `perfRef` is the
+  // dropped-frame sampling window baseline + last-warn throttle timestamp.
+  const statsRef = useRef(null);
+  const perfRef = useRef({ decoded: 0, dropped: 0, lastWarnAt: 0 });
 
   const patchChannel = useCallback(
     (fields) =>
@@ -129,7 +161,18 @@ export default function InlineVideo({ channelKey, thumbnailUrl, variant = 'colum
         videoRef.current = nv;
         nv.muted = mutedRef.current;
         nv.volume = volumeRef.current;
-        const player = mpegts.createPlayer({ type: 'mpegts', isLive: true, url }, MPEGTS_CONFIG);
+        // Profile selection (Item 3b): a muted background COLUMN uses the
+        // relaxed stash profile; audible columns and Focus always use the
+        // ultra-low-latency profile. mutedRef is read at execution time so a
+        // mute toggle that queued this rebuild picks the right profile.
+        const config =
+          variant === 'column' && mutedRef.current ? RELAXED_CONFIG : LOW_LATENCY_CONFIG;
+        const player = mpegts.createPlayer({ type: 'mpegts', isLive: true, url }, config);
+        // Latest download stats for the perf watchdog (Item 3d).
+        player.on(mpegts.Events.STATISTICS_INFO, (stats) => {
+          if (genRef.current !== gen) return;
+          statsRef.current = stats;
+        });
         // The mpegts callbacks belong to THIS player incarnation — they
         // capture gen and bail if a newer generation has taken over.
         player.on(mpegts.Events.ERROR, (type, detail) => {
@@ -204,7 +247,7 @@ export default function InlineVideo({ channelKey, thumbnailUrl, variant = 'colum
         });
         playerRef.current = player;
       }),
-    [channelKey, destroyPlayer],
+    [channelKey, destroyPlayer, variant],
   );
 
   const startSession = useCallback(
@@ -327,6 +370,56 @@ export default function InlineVideo({ channelKey, thumbnailUrl, variant = 'colum
     return () => clearInterval(id);
   }, [phase, createPlayer, destroyPlayer]);
 
+  // ── Perf diagnostics (Item 3d) ──
+  // Every 10 s while playing, sample dropped vs total decoded frames over the
+  // window. If dropped frames exceed 5% of the window's total decode, warn —
+  // throttled to at most one warn per video per 30 s. No UI; this exists so the
+  // next "it got choppy" report is actionable (dropped ratio + buffered span).
+  useEffect(() => {
+    if (phase !== 'playing') return undefined;
+    const v0 = videoRef.current;
+    const q0 = v0?.getVideoPlaybackQuality?.();
+    perfRef.current = {
+      decoded: q0?.totalVideoFrames ?? 0,
+      dropped: q0?.droppedVideoFrames ?? 0,
+      lastWarnAt: 0,
+    };
+    const id = setInterval(() => {
+      const v = videoRef.current;
+      if (!v || !v.getVideoPlaybackQuality) return;
+      const q = v.getVideoPlaybackQuality();
+      const decoded = q.totalVideoFrames ?? 0;
+      const dropped = q.droppedVideoFrames ?? 0;
+      const prev = perfRef.current;
+      const totalDelta = decoded - prev.decoded;
+      const droppedDelta = dropped - prev.dropped;
+      // The <video> element is replaced on rebuild (frame counters reset); a
+      // non-positive delta means we crossed a rebuild — just re-baseline.
+      if (totalDelta > 0 && droppedDelta > totalDelta * 0.05) {
+        const now = Date.now();
+        if (now - prev.lastWarnAt >= 30000) {
+          prev.lastWarnAt = now;
+          let bufferedSpan = 0;
+          try {
+            const b = v.buffered;
+            if (b && b.length) bufferedSpan = b.end(b.length - 1) - b.start(b.length - 1);
+          } catch { /* buffered can throw before the pipeline is ready */ }
+          // eslint-disable-next-line no-console
+          console.warn('[InlineVideo:perf]', channelKey, {
+            droppedDelta,
+            totalDelta,
+            decodedFrames: decoded,
+            speed: statsRef.current?.speed,
+            bufferedSpan,
+          });
+        }
+      }
+      prev.decoded = decoded;
+      prev.dropped = dropped;
+    }, 10000);
+    return () => clearInterval(id);
+  }, [phase, channelKey]);
+
   // Popout hand-off: once mpv reports live for this channel, drop the poster.
   // Column variant unmounts (onClose); Focus variant shows a "playing in
   // external player" resting state with a "Play inline" affordance.
@@ -355,8 +448,24 @@ export default function InlineVideo({ channelKey, thumbnailUrl, variant = 'colum
   const toggleMute = () => {
     const next = !muted;
     setMuted(next);
+    // Set the ref synchronously so the queued createPlayer below reads the new
+    // value (the muted→ref effect only runs after this render commits).
+    mutedRef.current = next;
     if (videoRef.current) videoRef.current.muted = next;
     patchChannel({ muted: next });
+    // Column videos swap MSE profiles on mute change (Item 3b): a muted
+    // background column uses the relaxed stash profile, an audible one the
+    // ultra-low-latency profile. Recreate the pipeline through the creation
+    // queue so the new profile takes effect. Reuse the existing passthrough
+    // URL and keep phase 'playing' (a brief black flash during the swap is
+    // acceptable). Focus always stays low-latency, so it never swaps.
+    if (variant === 'column' && phase === 'playing' && urlRef.current) {
+      // Claim a fresh incarnation at commit time (file rule) so any queued
+      // wedge-rebuild that captured the old gen self-aborts.
+      const gen = ++genRef.current;
+      wdRef.current = { lastFrames: undefined, frozenTicks: 0 };
+      createPlayer(gen, urlRef.current).catch(() => {});
+    }
   };
   const onVolume = (v) => {
     setVolume(v);
