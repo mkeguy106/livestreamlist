@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>twitch iframe spike</title>
+<style>
+  body { margin: 0; background: #09090b; }
+  #grid { display: flex; height: 100vh; }
+  iframe { flex: 1; border: 0; height: 100%; }
+</style>
+</head>
+<body>
+<div id="grid"></div>
+<script>
+const channels = (new URLSearchParams(location.search).get('channels') || '').split(',');
+console.log('SPIKE_IFRAME_START n=' + channels.length);
+for (const c of channels) {
+  const f = document.createElement('iframe');
+  f.src = 'https://player.twitch.tv/?channel=' + encodeURIComponent(c) +
+    '&parent=127.0.0.1&muted=true&autoplay=true';
+  f.allow = 'autoplay; fullscreen';
+  document.getElementById('grid').appendChild(f);
+}
+</script>
+</body>
+</html>

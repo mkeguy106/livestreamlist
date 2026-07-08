@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>mpegts spike</title>
+<script src="mpegts.js"></script>
+<style>
+  body { margin: 0; background: #09090b; color: #ddd; font: 12px monospace; }
+  #grid { display: flex; height: 100vh; }
+  .col { flex: 1; display: flex; flex-direction: column; border-right: 1px solid rgba(255,255,255,.1); }
+  video { width: 100%; flex: 1; background: #000; object-fit: contain; min-height: 0; }
+  .stats { padding: 4px 6px; white-space: pre; height: 48px; }
+</style>
+</head>
+<body>
+<div id="grid"></div>
+<script>
+// ?streams=<b64 json [{name,url},...]>  urls point at streamlink --player-external-http
+const params = new URLSearchParams(location.search);
+const streams = JSON.parse(atob(params.get('streams')));
+const grid = document.getElementById('grid');
+const cells = [];
+
+console.log('SPIKE_START mse=' + (window.MediaSource ? 'yes' : 'NO') +
+  ' mpegts_supported=' + (window.mpegts && mpegts.isSupported() ? 'yes' : 'NO') +
+  ' n=' + streams.length);
+
+function buildPlayer(cell) {
+  const player = mpegts.createPlayer(
+    { type: 'mpegts', isLive: true, url: cell.url },
+    // low-latency tuned: no stash buffer, chase live edge
+    { enableWorker: true, enableStashBuffer: false,
+      liveBufferLatencyChasing: true, liveBufferLatencyMaxLatency: 2.5,
+      liveBufferLatencyMinRemain: 0.5, autoCleanupSourceBuffer: true }
+  );
+  player.on(mpegts.Events.ERROR, (type, detail, info) => {
+    console.log('SPIKE_ERR ' + cell.name + ' ' + type + '/' + detail + ' ' + (info && info.msg || ''));
+  });
+  player.attachMediaElement(cell.v);
+  player.load();
+  cell.v.play().catch(err => console.log('SPIKE_ERR ' + cell.name + ' play() ' + err.message));
+  return player;
+}
+
+for (const s of streams) {
+  const col = document.createElement('div'); col.className = 'col';
+  const v = document.createElement('video');
+  v.muted = true; v.autoplay = true; v.playsInline = true;
+  const st = document.createElement('div'); st.className = 'stats';
+  st.textContent = s.name;
+  col.appendChild(v); col.appendChild(st); grid.appendChild(col);
+  const cell = { name: s.name, url: s.url, v, player: null,
+                 lastDropped: 0, lastTotal: 0 };
+  cells.push(cell);
+}
+
+// ?stagger=ms delays each player's creation (0 = all at once)
+const stagger = parseInt(params.get('stagger') || '0', 10);
+cells.forEach((c, i) => setTimeout(() => { c.player = buildPlayer(c); }, stagger * i));
+
+// Watchdog: decoded-frame count frozen while rs>=3 and playing → destroy +
+// rebuild. Keyed on totalVideoFrames (currentTime moves under latency
+// chasing even when the pipeline is wedged). At most one rebuild per tick so
+// recreated pipelines never initialize simultaneously; up to 3 tries/cell.
+setInterval(() => {
+  for (const c of cells) {
+    if (!c.player || (c.rebuilds || 0) >= 3 || c.v.readyState < 3 || c.v.paused) continue;
+    const frames = c.v.getVideoPlaybackQuality ? c.v.getVideoPlaybackQuality().totalVideoFrames : -1;
+    if (c.lastWdFrames !== undefined && frames === c.lastWdFrames) {
+      c.frozenTicks = (c.frozenTicks || 0) + 1;
+      if (c.frozenTicks >= 2) {
+        c.rebuilds = (c.rebuilds || 0) + 1;
+        console.log('SPIKE_REBUILD ' + c.name + ' attempt=' + c.rebuilds);
+        c.frozenTicks = 0;
+        c.lastWdFrames = undefined;
+        c.player.destroy();
+        const nv = c.v.cloneNode(false);
+        nv.muted = true;
+        c.v.replaceWith(nv);
+        c.v = nv;
+        c.player = buildPlayer(c);
+        return; // one rebuild per tick
+      }
+    } else { c.frozenTicks = 0; }
+    c.lastWdFrames = frames;
+  }
+}, 1500);
+
+setInterval(() => {
+  for (const c of cells) {
+    let total = -1, dropped = -1;
+    if (c.v.getVideoPlaybackQuality) {
+      const q = c.v.getVideoPlaybackQuality();
+      total = q.totalVideoFrames; dropped = q.droppedVideoFrames;
+    }
+    const dTotal = total - c.lastTotal, dDropped = dropped - c.lastDropped;
+    c.lastTotal = total; c.lastDropped = dropped;
+    const buf = c.v.buffered.length ? (c.v.buffered.end(c.v.buffered.length - 1) - c.v.currentTime) : -1;
+    const line = `SPIKE_STAT ${c.name} ${c.v.videoWidth}x${c.v.videoHeight}` +
+      ` rs=${c.v.readyState} paused=${c.v.paused}` +
+      ` frames=${total} dropped=${dropped} dFrames=${dTotal} dDropped=${dDropped}` +
+      ` clientBuf=${buf.toFixed(2)}s`;
+    console.log(line);
+    c.v.nextElementSibling.textContent = line.replace('SPIKE_STAT ', '');
+  }
+}, 5000);
+</script>
+</body>
+</html>

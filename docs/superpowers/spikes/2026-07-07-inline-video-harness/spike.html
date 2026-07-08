@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>hls spike</title>
+<script src="hls.min.js"></script>
+<style>
+  body { margin: 0; background: #09090b; color: #ddd; font: 12px monospace; }
+  #grid { display: flex; height: 100vh; }
+  .col { flex: 1; display: flex; flex-direction: column; border-right: 1px solid rgba(255,255,255,.1); }
+  video { width: 100%; flex: 1; background: #000; object-fit: contain; min-height: 0; }
+  .stats { padding: 4px 6px; white-space: pre; height: 48px; }
+</style>
+</head>
+<body>
+<div id="grid"></div>
+<script>
+// streams injected via ?streams=<b64 json [{name,url},...]>
+const params = new URLSearchParams(location.search);
+const streams = JSON.parse(atob(params.get('streams')));
+const stagger = parseInt(params.get('stagger') || '0', 10);
+const grid = document.getElementById('grid');
+const cells = [];
+
+console.log('SPIKE_START mse=' + (window.MediaSource ? 'yes' : 'NO') +
+  ' hls_supported=' + (window.Hls && Hls.isSupported() ? 'yes' : 'NO') +
+  ' n=' + streams.length);
+
+for (const s of streams) {
+  const col = document.createElement('div'); col.className = 'col';
+  const v = document.createElement('video');
+  v.muted = true; v.autoplay = true; v.playsInline = true;
+  const st = document.createElement('div'); st.className = 'stats';
+  st.textContent = s.name;
+  col.appendChild(v); col.appendChild(st); grid.appendChild(col);
+
+  fetch(s.url).then(r => console.log('SPIKE_FETCH ' + s.name + ' status=' + r.status))
+    .catch(e => console.log('SPIKE_FETCH_ERR ' + s.name + ' ' + e.message));
+
+  if (Hls.isSupported()) {
+    // Route every request through the origin-stripping localhost proxy
+    // (stand-in for the Rust reqwest proxy the real app would ship).
+    class ProxyLoader extends Hls.DefaultConfig.loader {
+      load(context, config, callbacks) {
+        if (!context.url.startsWith('http://127.0.0.1:8808/')) {
+          context.url = 'http://127.0.0.1:8808/p/' + encodeURIComponent(context.url);
+        }
+        super.load(context, config, callbacks);
+      }
+    }
+    const h = new Hls({
+      // live-edge tuned, roughly what we'd ship
+      liveSyncDurationCount: 3, enableWorker: true,
+      backBufferLength: 10, maxBufferLength: 12,
+      loader: ProxyLoader,
+    });
+    h.on(Hls.Events.ERROR, (e, data) => {
+      const extra = (data.response ? ' code=' + data.response.code : '') +
+        (data.error ? ' err=' + data.error.message : '');
+      console.log('SPIKE_ERR ' + s.name + ' ' + data.type + '/' + data.details + ' fatal=' + data.fatal + extra);
+    });
+    // stagger >= 0: timed stagger. stagger === -1: event-driven chain —
+    // attach next only after this one fires 'playing' + 1s settle.
+    cells.push({ name: s.name, v, h, url: s.url, lastDropped: 0, lastTotal: 0,
+                 start: () => { h.loadSource(s.url); h.attachMedia(v); } });
+  } else {
+    // native HLS fallback path (WebKit can have native HLS via GStreamer)
+    v.src = s.url;
+    cells.push({ name: s.name, v, h: null, lastDropped: 0, lastTotal: 0 });
+  }
+  v.play().catch(err => console.log('SPIKE_ERR ' + s.name + ' play() ' + err.message));
+}
+
+if (stagger === -1) {
+  let i = 0;
+  const next = () => {
+    if (i >= cells.length) return;
+    const c = cells[i++];
+    c.v.addEventListener('playing', () => {
+      console.log('SPIKE_PLAYING ' + c.name);
+      setTimeout(next, 1000);
+    }, { once: true });
+    c.start();
+  };
+  next();
+} else {
+  cells.forEach((c, i) => setTimeout(c.start, stagger * i));
+}
+
+// ?pauseat=ms pauses the FIRST video at that time (slot-freeing test)
+const pauseAt = parseInt(params.get('pauseat') || '0', 10);
+if (pauseAt) {
+  setTimeout(() => {
+    cells[0].v.pause();
+    console.log('SPIKE_PAUSED ' + cells[0].name);
+  }, pauseAt);
+}
+
+// Watchdog: rs>=3, not paused, currentTime frozen across 2 ticks → tear down
+// the hls instance + video element and rebuild (?rebuild=1 to enable).
+const rebuildEnabled = params.get('rebuild') === '1';
+setInterval(() => {
+  if (!rebuildEnabled) return;
+  for (const c of cells) {
+    if (c.h && !c.rebuilt && c.v.readyState >= 3 && !c.v.paused) {
+      if (c.lastCT !== undefined && c.v.currentTime === c.lastCT) {
+        c.frozenTicks = (c.frozenTicks || 0) + 1;
+        if (c.frozenTicks >= 2) {
+          console.log('SPIKE_REBUILD ' + c.name);
+          c.rebuilt = true;
+          c.h.destroy();
+          const nv = c.v.cloneNode(false);
+          nv.muted = true;
+          c.v.replaceWith(nv);
+          c.v = nv;
+          const h2 = new Hls({ liveSyncDurationCount: 3, enableWorker: true,
+            backBufferLength: 10, maxBufferLength: 12, loader: c.h.config.loader });
+          c.h = h2;
+          h2.loadSource(c.url); h2.attachMedia(nv);
+          nv.play().catch(() => {});
+        }
+      } else { c.frozenTicks = 0; }
+      c.lastCT = c.v.currentTime;
+    }
+  }
+}, 1500);
+
+setInterval(() => {
+  for (const c of cells) {
+    let total = -1, dropped = -1;
+    if (c.v.getVideoPlaybackQuality) {
+      const q = c.v.getVideoPlaybackQuality();
+      total = q.totalVideoFrames; dropped = q.droppedVideoFrames;
+    }
+    const dTotal = total - c.lastTotal, dDropped = dropped - c.lastDropped;
+    c.lastTotal = total; c.lastDropped = dropped;
+    const line = `SPIKE_STAT ${c.name} ${c.v.videoWidth}x${c.v.videoHeight}` +
+      ` rs=${c.v.readyState} paused=${c.v.paused}` +
+      ` frames=${total} dropped=${dropped} dFrames=${dTotal} dDropped=${dDropped}`;
+    console.log(line);
+    c.v.nextElementSibling.textContent = line.replace('SPIKE_STAT ', '');
+  }
+}, 5000);
+</script>
+</body>
+</html>
