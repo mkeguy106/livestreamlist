@@ -108,12 +108,17 @@ src-tauri/                   # Rust backend
     │   ├── personal.rs      # ~/.config/livestreamlist/personal_dict.json load/save
     │   └── dict.rs          # Enumerate /usr/share/hunspell etc. + bundled en_US fallback
     ├── streamlink.rs        # Detached subprocess spawn + browser handoff
-    └── chat/
-        ├── mod.rs           # ChatManager — one task per channel
-        ├── models.rs        # ChatMessage, ChatUser, EmoteRange, ChatBadge
-        ├── irc.rs           # IRCv3 parser + Twitch emote-tag parser
-        ├── twitch.rs        # Anonymous WebSocket IRC client
-        └── emotes.rs        # 7TV / BTTV / FFZ loaders + EmoteCache
+    ├── chat/
+    │   ├── mod.rs           # ChatManager — one task per channel
+    │   ├── models.rs        # ChatMessage, ChatUser, EmoteRange, ChatBadge
+    │   ├── irc.rs           # IRCv3 parser + Twitch emote-tag parser
+    │   ├── twitch.rs        # Anonymous WebSocket IRC client
+    │   └── emotes.rs        # 7TV / BTTV / FFZ loaders + EmoteCache
+    └── video/
+        ├── mod.rs           # VideoManager — session map, spawn/stop/linger/reap, video:status emits
+        ├── session.rs       # VideoSession state machine (Starting/Serving/Lingering), generation-guarded
+        ├── spawn.rs         # streamlink argv builder + free-port allocation (pure, unit-tested)
+        └── passthrough.rs   # Localhost CORS passthrough — proxies streamlink's MPEG-TS to the webview, injects ACAO
 ```
 
 ### Async model (critical)
@@ -137,6 +142,8 @@ Declared in `src-tauri/src/lib.rs` via `#[tauri::command]`, registered in `tauri
 | `set_favorite` | `uniqueKey, favorite: bool` | Toggle + persist |
 | `refresh_all` | — | Poll all platform clients, update store, return snapshot |
 | `launch_stream` | `uniqueKey, quality?` | Detached `streamlink` subprocess with mpv |
+| `video_start` | `uniqueKey, quality?` | Start (or resume / quality-switch) an inline-video session; returns `{ url }` — the localhost CORS-passthrough URL — once the streamlink child is ready. Errors are plain strings; a soft-cap rejection is prefixed `"cap:"` so the frontend renders an in-panel message instead of a generic error |
+| `video_stop` | `uniqueKey` | Explicit stop (the ✕ control) — bypasses linger, kills the session and its streamlink child immediately |
 | `open_in_browser` | `uniqueKey` | `xdg-open` / `open` / `start` on the channel URL |
 | `chat_connect` | `uniqueKey` | Start per-channel chat task |
 | `chat_disconnect` | `uniqueKey` | Abort that task |
@@ -166,6 +173,7 @@ The Rust side emits events that React subscribes to via `listenEvent(name, handl
 | `chat:message:{uniqueKey}` | `ChatMessage` | `chat/twitch.rs` per PRIVMSG |
 | `chat:status:{uniqueKey}` | `ChatStatusEvent` | `chat/twitch.rs` on connect/disconnect/error |
 | `chat:auth:chaturbate` | `{ signed_in, reason }` | `embed.rs::handle_chaturbate_auth_outcome` on every CB embed page-load — broadcasts auth-drift status |
+| `video:status:{uniqueKey}` | `{ state: "starting" \| "serving" \| "ended" \| "error", message? }` | `video/mod.rs` — emitted on session start, readiness, linger-reap, and child-death/timeout |
 | `chat:resub_self:{uniqueKey}` | `{ months, login }` | `chat/twitch.rs::build_usernotice` when own login broadcasts a `msg-id=resub` or `sub` USERNOTICE; consumed by `useSubAnniversary` for auto-dismiss |
 | `twitch:web_cookie_required` | `{ reason: "missing" \| "expired" }` | `platforms/twitch_anniversary.rs::check` when the cookie is absent or rejected by GQL; consumed by `useSubAnniversary` to mount `<TwitchWebConnectPrompt>` |
 | `twitch:web_status_changed` | `Option<TwitchWebIdentity>` | After Twitch web login or clear (`auth/twitch_web.rs`); consumed by `useAuth` and `useSubAnniversary` |
@@ -568,6 +576,8 @@ Files:
 | **HTML5 drag-and-drop is broken in WebKitGTK** | `dragstart` fires (it's WebKit-internal) but `dragenter`/`dragover`/`drop` are never delivered to JS — GTK's drag-drop machinery captures events before they reach the webview. Standard workarounds don't help: `text/plain` shim alongside the custom MIME, container-level event delegation via `closest('[data-tab-key]')`, and `dragDropEnabled: false` in `tauri.conf.json` all leave dragover dead. **For drag UX, use mouse events instead of HTML5 dnd.** See `src/components/TabStrip.jsx::TabStrip` for the canonical pattern: `onMouseDown` arms a drag with source key + start coords; document-level `mousemove`/`mouseup` listeners (added via `useEffect` while a drag is armed) track the cursor and use `document.elementFromPoint(...).closest('[data-tab-key]')` for drop-target identification; a movement threshold distinguishes click from drag; `mousedown` calls `e.preventDefault()` to suppress text-selection initiation; body cursor + userSelect are locked while active to prevent visual bleed onto neighboring UI |
 | `EmbedSlot`'s register-effect must NOT include `active` in its dep array | The `active` prop on `<EmbedSlot active={isActiveTab}>` flows through TWO `useEffect`s: a `register` effect (registers the slot with `EmbedLayer`) and a separate `updateActive` effect (calls `layer.updateActive(...)` on changes). If `active` is in the register effect's deps, every change runs cleanup → setup, which calls `unregister` then `register`. With the chat-tab system having exactly one slot per channelKey, `unregister` hits the `entry.refs.size === 0` branch in `EmbedLayer` and fires `embedUnmount`, destroying the wry `WebView` via `wry::WebView::Drop`. The subsequent `register` triggers a fresh `embedMount` — the user sees the YT/CB chat reload on every tab switch. The register effect's deps must be `[channelKey, isLive, layer]` only; the `active` flag's actual change is handled by the separate `updateActive` effect, which doesn't unregister. (Fixed in PR #80; documented inline at `src/components/EmbedSlot.jsx`.) |
 | Locally-generated chat IDs that get persisted to disk MUST include a per-process nonce | `chat/twitch.rs::SELF_ECHO_SEQ: AtomicU64` is process-global and resets to 0 on every app launch. Self-echo `ChatMessage`s persist to the chat log file, so on next session `replay_chat_history` can load `self-0` from the previous run into React's `bufferRef`. The new session's first send → echo gets fresh `self-0` → `useChat`'s id-dedup drops the new one as an apparent duplicate → user's first message after restart silently fails to render, even though it sent successfully to Twitch. Fix (PR #110): `SELF_ECHO_PREFIX: OnceLock<String>` initialized to Unix-millis hex on first call; IDs become `self-{prefix}-{N}`. Same pattern needed for any future locally-generated message IDs that flow through both the chat log and the dedup buffer |
+| WebKitGTK reliably wedges one of several MSE pipelines created **simultaneously** (readyState 4, buffer full, zero frames decoded — see the inline-video spike) | Every pipeline creation — including watchdog rebuilds — flows through `src/utils/videoQueue.js::enqueuePipelineCreation`, a module-scope queue that spaces creations ~400 ms apart app-wide, so at most one is ever in flight. `InlineVideo.jsx`'s wedge watchdog keys on `getVideoPlaybackQuality().totalVideoFrames` frozen across 2 ticks (1.5 s each) while `readyState >= 3 && !paused` — **never `currentTime`**, because `liveBufferLatencyChasing` keeps nudging `currentTime` even on a wedged pipeline, masking the freeze |
+| streamlink's `--player-external-http` server sends no `Access-Control-Allow-Origin` header, so the webview can't fetch it directly | `src-tauri/src/video/passthrough.rs` proxies `GET /video/{unique_key}` to the session's streamlink port and injects `Access-Control-Allow-Origin: *`. streamlink must stay in its **default continuous mode** — it's the only mode verified to reconnect cleanly after a watchdog-triggered pipeline rebuild. Stream-end is detected **client-side** (mpegts.js `LOADING_COMPLETE`, which calls `video_stop`), not from the child process — an unexpected streamlink exit is treated as `error`, not as normal end-of-stream |
 
 ## Git workflow
 
