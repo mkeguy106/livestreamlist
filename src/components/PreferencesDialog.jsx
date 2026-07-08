@@ -24,6 +24,7 @@ const TABS = [
   { id: 'general', label: 'General' },
   { id: 'appearance', label: 'Appearance' },
   { id: 'chat', label: 'Chat' },
+  { id: 'video', label: 'Video' },
   { id: 'notifications', label: 'Notifications' },
   { id: 'accounts', label: 'Accounts' },
 ];
@@ -215,6 +216,7 @@ export default function PreferencesDialog({ open, onClose }) {
           {settings && tab === 'general' && <GeneralTab settings={settings} patch={patch} />}
           {settings && tab === 'appearance' && <AppearanceTab settings={settings} patch={patch} />}
           {settings && tab === 'chat' && <ChatTab settings={settings} patch={patch} />}
+          {settings && tab === 'video' && <VideoTab settings={settings} patch={patch} />}
           {settings && tab === 'notifications' && <NotificationsTab settings={settings} patch={patch} />}
           {tab === 'accounts' && <AccountsTab />}
         </div>
@@ -1287,6 +1289,75 @@ function BlockedUsersList() {
           })}
         </div>
       )}
+    </div>
+  );
+}
+
+const VIDEO_QUALITIES = ['720p60', '720p', '480p', 'best'];
+
+function VideoTab({ settings, patch }) {
+  const v = settings.video ?? {};
+  const patchVideo = (fields) =>
+    patch((prev) => ({ ...prev, video: { ...prev.video, ...fields } }));
+
+  const clampInt = (raw, lo, hi, fallback) => {
+    const n = Number.parseInt(raw, 10);
+    if (Number.isNaN(n)) return fallback;
+    return Math.max(lo, Math.min(hi, n));
+  };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <Row label="Default quality" hint="Applies to newly started videos; per-column overrides win.">
+        <div style={{ display: 'flex', gap: 4 }}>
+          {VIDEO_QUALITIES.map((q) => (
+            <button
+              key={q}
+              type="button"
+              className="rx-btn rx-mono"
+              onClick={() => patchVideo({ default_quality: q })}
+              style={{
+                fontSize: 11,
+                color: (v.default_quality ?? '720p60') === q ? 'var(--zinc-100)' : 'var(--zinc-500)',
+                borderColor: (v.default_quality ?? '720p60') === q ? 'var(--zinc-500)' : undefined,
+              }}
+            >
+              {q}
+            </button>
+          ))}
+        </div>
+      </Row>
+
+      <Row label="Max simultaneous videos" hint="Soft cap — starting another video past this shows a message instead. Each playing video costs roughly half a CPU core.">
+        <input
+          type="number"
+          className="rx-input"
+          min={1}
+          max={16}
+          defaultValue={v.max_concurrent ?? 6}
+          onBlur={(e) => patchVideo({ max_concurrent: clampInt(e.target.value, 1, 16, 6) })}
+          style={{ width: 72, boxSizing: 'border-box' }}
+        />
+      </Row>
+
+      <Row label="Keep streams warm (seconds)" hint="After a video unmounts (group/layout switch), its stream keeps running this long so returning resumes instantly. 0 stops immediately.">
+        <input
+          type="number"
+          className="rx-input"
+          min={0}
+          max={600}
+          defaultValue={v.linger_seconds ?? 60}
+          onBlur={(e) => patchVideo({ linger_seconds: clampInt(e.target.value, 0, 600, 60) })}
+          style={{ width: 72, boxSizing: 'border-box' }}
+        />
+      </Row>
+
+      <Row label="Use Twitch login for playback" hint="Passes your captured Twitch session to streamlink — ad-free on channels you're subscribed to (or with Turbo).">
+        <Toggle
+          checked={v.use_twitch_auth ?? true}
+          onChange={(next) => patchVideo({ use_twitch_auth: next })}
+        />
+      </Row>
     </div>
   );
 }
