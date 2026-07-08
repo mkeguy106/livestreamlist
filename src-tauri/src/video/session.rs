@@ -89,11 +89,20 @@ impl VideoSession {
 
 /// The key of the Lingering (zero-consumer, warm-idle) session with the
 /// EARLIEST deadline — the best eviction candidate when a new start hits the
-/// concurrency cap. `None` if no session is Lingering. Pure over the map so
-/// the "pick the oldest linger" selection is unit-testable in isolation.
-pub(crate) fn oldest_lingering(sessions: &HashMap<String, VideoSession>) -> Option<String> {
+/// concurrency cap. `None` if no session is Lingering. `exclude_key` (the key
+/// being started) is never a candidate: a quality-switching session CAN be
+/// Lingering (the frontend's destroyPlayer drops its consumer before
+/// video_start runs), and self-evicting it would orphan the successor —
+/// the eviction's "ended" emit fires on the very key being started and the
+/// replacement becomes a zero-consumer Serving session the sweep never
+/// reaps. Pure over the map so the selection is unit-testable in isolation.
+pub(crate) fn oldest_lingering(
+    sessions: &HashMap<String, VideoSession>,
+    exclude_key: &str,
+) -> Option<String> {
     sessions
         .iter()
+        .filter(|(key, _)| key.as_str() != exclude_key)
         .filter_map(|(key, s)| match s.state {
             SessionState::Lingering { deadline } => Some((deadline, key)),
             _ => None,
@@ -191,7 +200,10 @@ mod tests {
         late.on_consumer_dropped(t0, Duration::from_secs(120));
         map.insert("twitch:late".into(), late);
 
-        assert_eq!(oldest_lingering(&map).as_deref(), Some("twitch:early"));
+        assert_eq!(
+            oldest_lingering(&map, "twitch:starting").as_deref(),
+            Some("twitch:early")
+        );
     }
 
     /// No Lingering sessions -> no eviction candidate (start bails on cap).
@@ -206,6 +218,35 @@ mod tests {
             "twitch:b".into(),
             VideoSession::new(2, "720p".into(), None, 2),
         );
-        assert_eq!(oldest_lingering(&map), None);
+        assert_eq!(oldest_lingering(&map, "twitch:starting"), None);
+    }
+
+    /// The key being started is never self-evicted, even when its session is
+    /// Lingering (quality switch: destroyPlayer drops the consumer before
+    /// video_start runs). With another linger present, that one is picked;
+    /// with only the excluded key lingering, there is no candidate.
+    #[test]
+    fn oldest_lingering_never_picks_excluded_key() {
+        let t0 = Instant::now();
+        let mut map: HashMap<String, VideoSession> = HashMap::new();
+
+        // The key being started — lingering with the EARLIEST deadline, so it
+        // would win min_by_key if exclusion were broken.
+        let mut own = VideoSession::new(1, "720p".into(), None, 1);
+        own.on_consumer_dropped(t0, Duration::from_secs(1));
+        map.insert("twitch:own".into(), own);
+
+        let mut other = VideoSession::new(2, "720p".into(), None, 2);
+        other.on_consumer_dropped(t0, Duration::from_secs(300));
+        map.insert("twitch:other".into(), other);
+
+        assert_eq!(
+            oldest_lingering(&map, "twitch:own").as_deref(),
+            Some("twitch:other")
+        );
+
+        // Only the excluded key lingers -> no candidate at all.
+        map.remove("twitch:other");
+        assert_eq!(oldest_lingering(&map, "twitch:own"), None);
     }
 }

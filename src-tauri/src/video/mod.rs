@@ -257,7 +257,14 @@ impl VideoManager {
                 // zero-consumer) sessions yield to new user intent. Rather than
                 // reject the start, evict the longest-idle linger to make room.
                 // Its consumer is gone by definition, so no client needs it.
-                match session::oldest_lingering(&sessions) {
+                // The key being started is explicitly excluded from candidacy:
+                // a quality-switching session CAN be Lingering (destroyPlayer
+                // drops the consumer before video_start runs), and self-
+                // eviction would orphan the successor's slot — the "ended"
+                // emit would fire on the key we're starting and the
+                // replacement would sit as a zero-consumer Serving session
+                // the sweep never reaps.
+                match session::oldest_lingering(&sessions, unique_key) {
                     Some(victim) => {
                         let s = sessions
                             .remove(&victim)
