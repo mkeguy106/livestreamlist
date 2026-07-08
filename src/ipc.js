@@ -29,6 +29,9 @@ export const listPlaying = () => invoke('list_playing');
 export const videoStart = (uniqueKey, quality = null) =>
   invoke('video_start', { uniqueKey, quality });
 export const videoStop = (uniqueKey) => invoke('video_stop', { uniqueKey });
+// Route a frontend diagnostic line into the Rust `log` crate so it reaches the
+// `tauri:dev` terminal (WebKit console output is otherwise invisible).
+export const frontendLog = (level, message) => invoke('frontend_log', { level, message });
 export const openInBrowser = (uniqueKey) => invoke('open_in_browser', { uniqueKey });
 export const chatConnect = (uniqueKey) => invoke('chat_connect', { uniqueKey });
 export const chatDisconnect = (uniqueKey) => invoke('chat_disconnect', { uniqueKey });
@@ -457,6 +460,9 @@ async function mockInvoke(name, args) {
       return Promise.reject(new Error('inline video requires the desktop app'));
     case 'video_stop':
       return Promise.resolve(null);
+    case 'frontend_log':
+      // Browser-dev: no Rust log sink — accept and no-op.
+      return null;
     case 'open_in_browser': {
       const c = mockChannels.find((c) => `${c.platform}:${c.channel_id}` === args.uniqueKey);
       if (c) {

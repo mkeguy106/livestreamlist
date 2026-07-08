@@ -1376,10 +1376,10 @@ function VideoTab({ settings, patch }) {
       <GroupLabel>Performance</GroupLabel>
       <Row
         label="Use GPU dmabuf renderer"
-        hint="App-wide renderer change, requires restart. Can massively reduce video CPU use; if the app misbehaves after enabling, turn it back off."
+        hint="On by default — turn OFF if you see rendering glitches or crashes (restarts required)."
       >
         <Toggle
-          checked={v.dmabuf_renderer ?? false}
+          checked={v.dmabuf_renderer ?? true}
           onChange={(next) => patchVideo({ dmabuf_renderer: next })}
         />
       </Row>

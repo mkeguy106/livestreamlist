@@ -389,6 +389,19 @@ fn video_stop(
     Ok(())
 }
 
+/// Bridge a frontend diagnostic line into the Rust `log` crate so it lands in
+/// the `tauri:dev` terminal — WebKit's console output is otherwise invisible
+/// (nobody opens the inspector). Used by `InlineVideo.jsx`'s perf watchdog so
+/// the next "it got choppy" report is diagnosable from the terminal.
+#[tauri::command]
+fn frontend_log(level: String, message: String) {
+    match level.as_str() {
+        "error" => log::error!("[frontend] {message}"),
+        "warn" => log::warn!("[frontend] {message}"),
+        _ => log::info!("[frontend] {message}"),
+    }
+}
+
 #[derive(serde::Serialize)]
 struct ImportResult {
     added: u32,
@@ -1914,16 +1927,17 @@ fn open_in_browser(unique_key: String, state: State<'_, AppState>) -> Result<(),
 
 /// Linux-specific runtime workarounds, applied before Tauri boots.
 ///
-/// 1. `WEBKIT_DISABLE_DMABUF_RENDERER=1` — WebKitGTK on NVIDIA + Wayland (KDE
-///    Plasma) crashes with "Error 71 (Protocol error) dispatching to Wayland
-///    display" when the DMABUF renderer is enabled. Disabling it falls back
-///    to a software path that renders correctly.
-///    **Opt-out**: the `video.dmabuf_renderer` setting, when true, skips this
-///    so the GPU path stays on. The inline-video spike
+/// 1. `WEBKIT_DISABLE_DMABUF_RENDERER=1` — historically forced ON because
+///    WebKitGTK on NVIDIA + Wayland (KDE Plasma) once crashed with "Error 71
+///    (Protocol error) dispatching to Wayland display" when the DMABUF
+///    renderer was enabled. As of round 4 the `video.dmabuf_renderer` setting
+///    **defaults true** (renderer ON) — the inline-video spike
 ///    (`docs/superpowers/spikes/2026-07-07-inline-video-playback-spike.md`)
-///    measured ~4x cheaper video painting with the renderer enabled and no
-///    crash on WebKit 2.52. A user who exported the env var themselves always
-///    wins either way (`set_if_unset` never overrides; when the flag is on we
+///    measured ~4x cheaper video painting with it enabled and no crash on
+///    WebKit 2.52, and video decode needs the paint headroom. So we now set
+///    the disable var **only** when the setting is false. Precedence is
+///    unchanged in both directions: a user who exported the env var themselves
+///    always wins (`set_if_unset` never overrides; when the setting is true we
 ///    simply don't set it, so an existing export is preserved).
 /// 2. `GDK_BACKEND=x11` — Wayland's protocol does not expose absolute window
 ///    position to clients (`outer_position` always returns `(0, 0)`), so
@@ -1947,12 +1961,12 @@ fn apply_linux_webkit_workarounds() {
         }
     }
     // Cheap file read; this runs before the Tauri builder so the env is set
-    // before WebKit/GTK initialize. Falls back to defaults (renderer disabled)
-    // if settings can't be loaded.
-    let dmabuf_opt_in = settings::load()
+    // before WebKit/GTK initialize. Falls back to the field default (renderer
+    // ON) if settings can't be loaded, matching a fresh install.
+    let dmabuf_on = settings::load()
         .map(|s| s.video.dmabuf_renderer)
-        .unwrap_or(false);
-    if !dmabuf_opt_in {
+        .unwrap_or(true);
+    if !dmabuf_on {
         set_if_unset("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
     }
     set_if_unset("GDK_BACKEND", "x11");
@@ -1983,6 +1997,7 @@ macro_rules! register_handlers {
             $crate::list_playing,
             $crate::video_start,
             $crate::video_stop,
+            $crate::frontend_log,
             $crate::open_in_browser,
             $crate::open_url,
             $crate::list_socials,
