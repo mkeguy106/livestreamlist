@@ -229,7 +229,7 @@ impl VideoManager {
         // no awaits inside. Inserting a placeholder before releasing the lock
         // makes check+claim atomic: concurrent starts see the reserved slot
         // (cap + duplicate) and cannot double-spawn.
-        let (stale, gen) = {
+        let (stale, gen, evicted) = {
             let mut sessions = self.sessions.lock();
             if let Some(s) = sessions.get_mut(unique_key) {
                 if s.quality == quality {
@@ -251,8 +251,22 @@ impl VideoManager {
             // so a quality switch never trips the cap it already occupies —
             // and a cap bail leaves that old session untouched (still runs).
             let replacing = usize::from(sessions.contains_key(unique_key));
+            let mut evicted: Option<(String, VideoSession)> = None;
             if sessions.len() - replacing >= max_concurrent {
-                bail!("cap: max simultaneous videos ({max_concurrent}) reached");
+                // The cap guards ACTIVE videos; warm-idle (Lingering,
+                // zero-consumer) sessions yield to new user intent. Rather than
+                // reject the start, evict the longest-idle linger to make room.
+                // Its consumer is gone by definition, so no client needs it.
+                match session::oldest_lingering(&sessions) {
+                    Some(victim) => {
+                        let s = sessions
+                            .remove(&victim)
+                            .expect("oldest_lingering returned a present key");
+                        self.ports.lock().remove(&victim);
+                        evicted = Some((victim, s));
+                    }
+                    None => bail!("cap: max simultaneous videos ({max_concurrent}) reached"),
+                }
             }
             // Quality change: pull the old session out; killed after the lock
             // drops (never kill while holding the sessions lock).
@@ -270,10 +284,16 @@ impl VideoManager {
                 unique_key.to_string(),
                 VideoSession::new(0, quality.clone(), None, gen),
             );
-            (stale, gen)
+            (stale, gen, evicted)
         };
         if let Some(mut old) = stale {
             old.kill();
+        }
+        // Evicted linger (I1): its child is killed and consumers notified now
+        // that the sessions lock is released.
+        if let Some((victim_key, mut victim)) = evicted {
+            victim.kill();
+            self.emit(&victim_key, "ended", None);
         }
 
         let token = if use_auth {
@@ -379,13 +399,18 @@ impl VideoManager {
             if child_dead || Instant::now() >= deadline {
                 // Only tear down if the slot is still ours — never destroy a
                 // successor that replaced us during this poll.
-                self.remove_session_if_generation(unique_key, gen);
+                let removed = self.remove_session_if_generation(unique_key, gen);
                 let msg = if child_dead {
                     "streamlink exited during startup (channel offline?)"
                 } else {
                     "timed out waiting for streamlink"
                 };
-                self.emit(unique_key, "error", Some(msg));
+                // Emit only when WE removed the slot. A `false` return means a
+                // successor replaced it — stay silent so we don't flash an
+                // error over the incarnation that's now the rightful owner.
+                if removed {
+                    self.emit(unique_key, "error", Some(msg));
+                }
                 bail!("{msg}");
             }
             tokio::time::sleep(READINESS_POLL).await;
@@ -411,6 +436,20 @@ impl VideoManager {
     pub fn stop(&self, unique_key: &str) {
         if self.remove_session(unique_key) {
             self.emit(unique_key, "ended", None);
+        }
+    }
+
+    /// App-exit teardown: kill every streamlink child. These children are
+    /// plain `std::process::Command` spawns (unlike the popout player, which
+    /// is deliberately detached), so they must be reaped explicitly on exit or
+    /// they leak. `Drop for VideoManager` never runs to do this: the tao event
+    /// loop exits via `std::process::exit`, AND Drop is unreachable anyway —
+    /// run_background holds an `Arc<Self>` while `events_tx` keeps the reaper
+    /// channel alive, a cycle that pins the strong count above zero. Called
+    /// from run()'s `RunEvent::Exit`. No event emissions — the app is going.
+    pub fn stop_all(&self) {
+        for mut s in drain_all_sessions(&self.sessions, &self.ports) {
+            s.kill();
         }
     }
 
@@ -490,6 +529,19 @@ impl VideoManager {
     }
 }
 
+/// Drain every session out of the maps, returning the children for the caller
+/// to kill after the guards drop (never kill while holding the sessions lock).
+/// Also clears the ports map. Pure over the two maps (no AppHandle), so
+/// `stop_all`'s draining is unit-testable without a running Tauri app.
+fn drain_all_sessions(
+    sessions: &Mutex<HashMap<String, VideoSession>>,
+    ports: &PortMap,
+) -> Vec<VideoSession> {
+    let drained: Vec<VideoSession> = sessions.lock().drain().map(|(_, s)| s).collect();
+    ports.lock().clear();
+    drained
+}
+
 impl Drop for VideoManager {
     fn drop(&mut self) {
         // Drain under the lock; kill the children after the guard drops.
@@ -497,5 +549,47 @@ impl Drop for VideoManager {
         for (_, mut s) in drained {
             s.kill();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    use parking_lot::Mutex;
+
+    use super::drain_all_sessions;
+    use super::passthrough::PortMap;
+    use super::session::VideoSession;
+
+    #[test]
+    fn stop_all_drains_sessions() {
+        // stop_all's core over the maps: two child-None sessions vanish and
+        // the ports map is cleared. (child None => kill() is a no-op, so this
+        // exercises the drain path without spawning streamlink.)
+        let sessions: Mutex<HashMap<String, VideoSession>> = Mutex::new(HashMap::new());
+        let ports: PortMap = Arc::new(Mutex::new(HashMap::new()));
+        {
+            let mut g = sessions.lock();
+            g.insert(
+                "twitch:a".to_string(),
+                VideoSession::new(9001, "720p".into(), None, 1),
+            );
+            g.insert(
+                "twitch:b".to_string(),
+                VideoSession::new(9002, "480p".into(), None, 2),
+            );
+        }
+        ports.lock().insert("twitch:a".to_string(), (9001, 1));
+        ports.lock().insert("twitch:b".to_string(), (9002, 2));
+
+        let drained = drain_all_sessions(&sessions, &ports);
+        for mut s in drained {
+            s.kill();
+        }
+
+        assert!(sessions.lock().is_empty(), "sessions map should be empty");
+        assert!(ports.lock().is_empty(), "ports map should be empty");
     }
 }

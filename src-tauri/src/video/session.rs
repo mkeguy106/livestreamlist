@@ -1,6 +1,7 @@
 //! Per-channel session state. Pure transitions — no process or network I/O —
 //! so linger/reap logic is unit-testable without spawning streamlink.
 
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -86,6 +87,21 @@ impl VideoSession {
     }
 }
 
+/// The key of the Lingering (zero-consumer, warm-idle) session with the
+/// EARLIEST deadline — the best eviction candidate when a new start hits the
+/// concurrency cap. `None` if no session is Lingering. Pure over the map so
+/// the "pick the oldest linger" selection is unit-testable in isolation.
+pub(crate) fn oldest_lingering(sessions: &HashMap<String, VideoSession>) -> Option<String> {
+    sessions
+        .iter()
+        .filter_map(|(key, s)| match s.state {
+            SessionState::Lingering { deadline } => Some((deadline, key)),
+            _ => None,
+        })
+        .min_by_key(|(deadline, _)| *deadline)
+        .map(|(_, key)| key.clone())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -152,5 +168,44 @@ mod tests {
         assert_eq!(s.state, SessionState::Serving);
         s.on_consumer_dropped(t0, Duration::from_secs(60));
         assert!(matches!(s.state, SessionState::Lingering { .. }));
+    }
+
+    /// oldest_lingering ignores Serving/Starting sessions and returns the
+    /// Lingering one whose deadline comes first — the cap-eviction victim.
+    #[test]
+    fn oldest_lingering_picks_earliest_deadline() {
+        let t0 = Instant::now();
+        let mut map: HashMap<String, VideoSession> = HashMap::new();
+
+        // Serving — never a candidate.
+        let mut serving = VideoSession::new(1, "720p".into(), None, 1);
+        serving.mark_serving();
+        map.insert("twitch:serving".into(), serving);
+
+        // Two lingering; "early" has the nearer deadline.
+        let mut early = VideoSession::new(2, "720p".into(), None, 2);
+        early.on_consumer_dropped(t0, Duration::from_secs(10));
+        map.insert("twitch:early".into(), early);
+
+        let mut late = VideoSession::new(3, "720p".into(), None, 3);
+        late.on_consumer_dropped(t0, Duration::from_secs(120));
+        map.insert("twitch:late".into(), late);
+
+        assert_eq!(oldest_lingering(&map).as_deref(), Some("twitch:early"));
+    }
+
+    /// No Lingering sessions -> no eviction candidate (start bails on cap).
+    #[test]
+    fn oldest_lingering_none_when_all_active() {
+        let mut map: HashMap<String, VideoSession> = HashMap::new();
+        let mut a = VideoSession::new(1, "720p".into(), None, 1);
+        a.mark_serving();
+        map.insert("twitch:a".into(), a);
+        // A bare Starting session (no consumer, not lingering) is also excluded.
+        map.insert(
+            "twitch:b".into(),
+            VideoSession::new(2, "720p".into(), None, 2),
+        );
+        assert_eq!(oldest_lingering(&map), None);
     }
 }

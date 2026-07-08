@@ -32,7 +32,7 @@ const MPEGTS_CONFIG = {
   autoCleanupSourceBuffer: true,
 };
 
-export default function InlineVideo({ channelKey, live, thumbnailUrl, variant = 'column', onClose }) {
+export default function InlineVideo({ channelKey, thumbnailUrl, variant = 'column', onClose }) {
   const { settings, patch } = usePreferences();
   const chan = settings?.video?.channels?.[channelKey] || {};
 
@@ -108,6 +108,9 @@ export default function InlineVideo({ channelKey, live, thumbnailUrl, variant = 
         // capture gen and bail if a newer generation has taken over.
         player.on(mpegts.Events.ERROR, (type, detail) => {
           if (genRef.current !== gen) return;
+          // Terminal phase: bump gen so any already-queued rebuild self-aborts
+          // instead of spinning up a zombie player under the error overlay.
+          genRef.current += 1;
           setErrMsg(`${type}/${detail}`);
           setPhase('error');
           destroyPlayer();
@@ -115,6 +118,7 @@ export default function InlineVideo({ channelKey, live, thumbnailUrl, variant = 
         // LOADING_COMPLETE = the byte stream ended = the live stream is over.
         player.on(mpegts.Events.LOADING_COMPLETE, () => {
           if (genRef.current !== gen) return;
+          genRef.current += 1; // terminal — invalidate any queued rebuild
           setPhase('ended');
           destroyPlayer();
           videoStop(channelKey).catch(() => {});
@@ -189,8 +193,10 @@ export default function InlineVideo({ channelKey, live, thumbnailUrl, variant = 
     (async () => {
       const un = await listenEvent(`video:status:${channelKey}`, (payload) => {
         const state = payload?.state;
-        if (state === 'ended') { setPhase('ended'); destroyPlayer(); }
+        // Terminal phases bump gen so any queued rebuild self-aborts.
+        if (state === 'ended') { genRef.current += 1; setPhase('ended'); destroyPlayer(); }
         else if (state === 'error') {
+          genRef.current += 1;
           setErrMsg(payload?.message || 'stream error');
           setPhase('error');
           destroyPlayer();
@@ -219,6 +225,7 @@ export default function InlineVideo({ channelKey, live, thumbnailUrl, variant = 
           wd.frozenTicks = 0;
           wd.lastFrames = undefined;
           if (rebuildsRef.current >= MAX_REBUILDS) {
+            genRef.current += 1; // terminal — invalidate any queued rebuild
             setErrMsg('playback pipeline stalled repeatedly');
             setPhase('error');
             destroyPlayer();
@@ -232,9 +239,11 @@ export default function InlineVideo({ channelKey, live, thumbnailUrl, variant = 
               rebuildPendingRef.current = false;
             })
             // A synchronous throw inside the queued creation fn rejects this
-            // chain; swallow it here (startSession's path has try/catch, this
-            // one doesn't) — the next tick / MAX_REBUILDS ceiling handles it.
-            .catch(() => {});
+            // chain and leaves a detached <video> element the watchdog can no
+            // longer re-detect (the frame-freeze check keys on the live
+            // element) — so this warn is the only trace. The next tick /
+            // MAX_REBUILDS ceiling still governs recovery.
+            .catch((e) => { console.warn('[InlineVideo] rebuild failed:', e?.message); });
         }
       } else {
         wd.frozenTicks = 0;
@@ -260,7 +269,12 @@ export default function InlineVideo({ channelKey, live, thumbnailUrl, variant = 
     setQualityOpen(false);
     patchChannel({ quality: q });
     destroyPlayer();
-    startSession(genRef.current, q); // distinct quality -> Rust respawns the session
+    // Claim a fresh incarnation before respawning. Rule of thumb: any action
+    // that starts a new session claims a new generation, so the superseded
+    // in-flight start's "stopped before ready" rejection fails the gen guard
+    // and can't flash the error phase; stale continuations self-discard.
+    const gen = ++genRef.current;
+    startSession(gen, q); // distinct quality -> Rust respawns the session
   };
   const popout = () => {
     launchStream(channelKey);
@@ -274,7 +288,10 @@ export default function InlineVideo({ channelKey, live, thumbnailUrl, variant = 
   };
   const retry = () => {
     rebuildsRef.current = 0;
-    startSession(genRef.current, null);
+    // Fresh incarnation (same rule as pickQuality): a stale continuation from
+    // the failed run can't clobber this retry's state.
+    const gen = ++genRef.current;
+    startSession(gen, null);
   };
 
   const currentQuality = chan.quality || settings?.video?.default_quality || '720p60';

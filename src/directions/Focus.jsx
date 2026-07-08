@@ -230,7 +230,6 @@ function FeaturedStream({ channel, onLaunch, onOpenBrowser }) {
           <InlineVideo
             key={channel.unique_key}
             channelKey={channel.unique_key}
-            live
             thumbnailUrl={channel.thumbnail_url}
             variant="focus"
           />

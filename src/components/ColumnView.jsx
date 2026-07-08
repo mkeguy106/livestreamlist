@@ -224,7 +224,6 @@ export default function ColumnView({
       {live && isTwitch && videoOn && (
         <InlineVideo
           channelKey={key}
-          live={live}
           thumbnailUrl={channel?.thumbnail_url}
           variant="column"
           onClose={() => setVideoOn(false)}

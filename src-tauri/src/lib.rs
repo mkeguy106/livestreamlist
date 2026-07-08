@@ -2214,6 +2214,19 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(register_handlers!())
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            // Reap inline-video streamlink children on exit. They're plain
+            // spawns (not detached like the popout player), so they must be
+            // killed explicitly here — Drop for VideoManager never runs: the
+            // event loop exits via std::process::exit AND an Arc/channel cycle
+            // pins its strong count. RunEvent::Exit covers both window-close
+            // exits and the tray's app.exit(0).
+            if let tauri::RunEvent::Exit = event {
+                if let Some(vm) = app_handle.try_state::<Arc<video::VideoManager>>() {
+                    vm.stop_all();
+                }
+            }
+        });
 }
