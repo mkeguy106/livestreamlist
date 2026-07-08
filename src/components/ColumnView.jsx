@@ -43,8 +43,21 @@ export default function ColumnView({
 
   const { settings, patch } = usePreferences();
   const isTwitch = (channel?.platform ?? key.split(':')[0]) === 'twitch';
-  const videoOn = !!settings?.video?.channels?.[key]?.on;
-  const setVideoOn = (on) =>
+
+  // Two modes decide whether the inline video panel mounts for this column:
+  //   • autoplay ON  — every live Twitch column plays automatically; the
+  //     header ⏹ and InlineVideo's onClose stop it for THIS mount only via a
+  //     local `sessionStopped` flag and never touch the persisted flag, so it
+  //     resumes on remount (group switch / column add). ColumnView is keyed by
+  //     column key in Columns.jsx, so `sessionStopped` naturally resets then.
+  //   • autoplay OFF — classic click-to-play driven by the persisted
+  //     per-channel `on` flag, toggled by the header button.
+  const autoplay = settings?.video?.autoplay_columns ?? true;
+  const persistedOn = !!settings?.video?.channels?.[key]?.on;
+  const [sessionStopped, setSessionStopped] = useState(false);
+  const videoOn = autoplay ? !sessionStopped : persistedOn;
+
+  const setPersistedOn = (on) =>
     patch((prev) => ({
       ...prev,
       video: {
@@ -55,6 +68,14 @@ export default function ColumnView({
         },
       },
     }));
+  const toggleVideo = () => {
+    if (autoplay) setSessionStopped((s) => !s);
+    else setPersistedOn(!videoOn);
+  };
+  const closeVideo = () => {
+    if (autoplay) setSessionStopped(true);
+    else setPersistedOn(false);
+  };
 
   // ── Resize drag — mouse-event pattern copied from Command.jsx's
   // DragResizeHandle: useState-owned drag state, document-level listeners
@@ -181,7 +202,7 @@ export default function ColumnView({
             <button
               type="button"
               aria-label={videoOn ? 'Stop video' : 'Play video'}
-              onClick={() => setVideoOn(!videoOn)}
+              onClick={toggleVideo}
               style={{
                 display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
                 padding: 3, background: 'transparent', border: 'none',
@@ -226,7 +247,7 @@ export default function ColumnView({
           channelKey={key}
           thumbnailUrl={channel?.thumbnail_url}
           variant="column"
-          onClose={() => setVideoOn(false)}
+          onClose={closeVideo}
         />
       )}
 

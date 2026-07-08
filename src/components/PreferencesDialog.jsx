@@ -1293,7 +1293,7 @@ function BlockedUsersList() {
   );
 }
 
-const VIDEO_QUALITIES = ['720p60', '720p', '480p', 'best'];
+const VIDEO_QUALITIES = ['best', '1080p60', '720p60', '720p', '480p'];
 
 function VideoTab({ settings, patch }) {
   const v = settings.video ?? {};
@@ -1318,8 +1318,8 @@ function VideoTab({ settings, patch }) {
               onClick={() => patchVideo({ default_quality: q })}
               style={{
                 fontSize: 11,
-                color: (v.default_quality ?? '720p60') === q ? 'var(--zinc-100)' : 'var(--zinc-500)',
-                borderColor: (v.default_quality ?? '720p60') === q ? 'var(--zinc-500)' : undefined,
+                color: (v.default_quality ?? 'best') === q ? 'var(--zinc-100)' : 'var(--zinc-500)',
+                borderColor: (v.default_quality ?? 'best') === q ? 'var(--zinc-500)' : undefined,
               }}
             >
               {q}
@@ -1356,6 +1356,20 @@ function VideoTab({ settings, patch }) {
         <Toggle
           checked={v.use_twitch_auth ?? true}
           onChange={(next) => patchVideo({ use_twitch_auth: next })}
+        />
+      </Row>
+
+      <Row label="Auto-play videos in Columns" hint="Live Twitch columns start playing when a group opens or a column is added; the ⏹ stops one until the column remounts.">
+        <Toggle
+          checked={v.autoplay_columns ?? true}
+          onChange={(next) => patchVideo({ autoplay_columns: next })}
+        />
+      </Row>
+
+      <Row label="Start columns unmuted" hint="Autoplayed columns start with sound. Per-channel mute choices still stick.">
+        <Toggle
+          checked={v.autoplay_unmuted ?? true}
+          onChange={(next) => patchVideo({ autoplay_unmuted: next })}
         />
       </Row>
     </div>
