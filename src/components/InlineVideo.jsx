@@ -464,7 +464,11 @@ export default function InlineVideo({ channelKey, thumbnailUrl, variant = 'colum
       // wedge-rebuild that captured the old gen self-aborts.
       const gen = ++genRef.current;
       wdRef.current = { lastFrames: undefined, frozenTicks: 0 };
-      createPlayer(gen, urlRef.current).catch(() => {});
+      // Same failure-visibility rule as the watchdog rebuild: a synchronous
+      // throw inside the queued creation fn rejects this chain — warn so
+      // there's a trace instead of a silently dead player.
+      createPlayer(gen, urlRef.current)
+        .catch((e) => { console.warn('[InlineVideo] profile swap failed:', e?.message); });
     }
   };
   const onVolume = (v) => {

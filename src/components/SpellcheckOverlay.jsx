@@ -71,12 +71,15 @@ export default function SpellcheckOverlay({ inputRef, text, misspellings, recent
       ref={overlayRef}
       aria-hidden="true"
       style={{
-        // Fill the wrapper exactly. The wrapper is sized by the in-flow
-        // textarea (width: 100%, auto-grown height), so `inset: 0` +
-        // box-sizing: border-box + a transparent border matching the
-        // textarea's makes the overlay's *content box* line up pixel-for-pixel
-        // with the textarea's — identical text origin AND identical wrap
-        // width. Its getBoundingClientRect therefore equals the textarea's.
+        // OUTER clip box — stationary. Fills the wrapper exactly: the wrapper
+        // is sized by the in-flow textarea (width: 100%, auto-grown height),
+        // so `inset: 0` + box-sizing: border-box + a transparent border
+        // matching the textarea's makes this box's rect equal the textarea's
+        // rect pixel-for-pixel, and its content box the textarea's inner
+        // (clip) edge. The scroll transform must NOT live on this node:
+        // translating the clipped box would drag the whole overlay — borders,
+        // clip region and all — away from the textarea instead of scrolling
+        // the mirrored text inside it (the past-the-cap detach bug).
         position: 'absolute',
         inset: 0,
         boxSizing: 'border-box',
@@ -88,48 +91,63 @@ export default function SpellcheckOverlay({ inputRef, text, misspellings, recent
         borderRightWidth: style.borderRightWidth,
         borderBottomWidth: style.borderBottomWidth,
         borderLeftWidth: style.borderLeftWidth,
-        paddingTop: style.paddingTop,
-        paddingRight: style.paddingRight,
-        paddingBottom: style.paddingBottom,
-        paddingLeft: style.paddingLeft,
-        fontFamily: style.fontFamily,
-        fontSize: style.fontSize,
-        fontWeight: style.fontWeight,
-        lineHeight: style.lineHeight,
-        letterSpacing: style.letterSpacing,
-        whiteSpace: style.whiteSpace,
-        wordBreak: style.wordBreak,
-        overflowWrap: style.overflowWrap,
-        color: 'transparent',
-        transform: `translate(-${scroll.left}px, -${scroll.top}px)`,
       }}
     >
-      {segments.map((seg, i) => {
-        if (seg.kind === 'plain') {
-          return <span key={i}>{seg.text}</span>;
-        }
-        if (seg.kind === 'corrected') {
-          // Use a key that incorporates `originalWord` + position, so
-          // when a word fades and a new correction lands at a similar
-          // position, React doesn't accidentally re-use the DOM node
-          // (which would inherit the in-progress animation timer).
+      <div
+        style={{
+          // INNER content — the mirrored text, translated by -scroll so it
+          // tracks the textarea's own scrolled content while the outer box
+          // stays put and clips. Padding lives HERE (not on the clip box)
+          // because a textarea's padding scrolls with its content: at
+          // scrollTop > 0 the top padding has scrolled out of view, and the
+          // mirror must do the same. Width pins to the textarea's clientWidth
+          // (padding box minus any scrollbar) so text wraps at the same
+          // points even when the past-cap scrollbar steals content width.
+          boxSizing: 'border-box',
+          width: style.clientWidth ? `${style.clientWidth}px` : '100%',
+          paddingTop: style.paddingTop,
+          paddingRight: style.paddingRight,
+          paddingBottom: style.paddingBottom,
+          paddingLeft: style.paddingLeft,
+          fontFamily: style.fontFamily,
+          fontSize: style.fontSize,
+          fontWeight: style.fontWeight,
+          lineHeight: style.lineHeight,
+          letterSpacing: style.letterSpacing,
+          whiteSpace: style.whiteSpace,
+          wordBreak: style.wordBreak,
+          overflowWrap: style.overflowWrap,
+          color: 'transparent',
+          transform: `translate(-${scroll.left}px, -${scroll.top}px)`,
+        }}
+      >
+        {segments.map((seg, i) => {
+          if (seg.kind === 'plain') {
+            return <span key={i}>{seg.text}</span>;
+          }
+          if (seg.kind === 'corrected') {
+            // Use a key that incorporates `originalWord` + position, so
+            // when a word fades and a new correction lands at a similar
+            // position, React doesn't accidentally re-use the DOM node
+            // (which would inherit the in-progress animation timer).
+            return (
+              <span
+                key={`c:${seg.start}:${seg.originalWord}`}
+                className="spellcheck-corrected"
+                data-word={seg.word}
+                data-original={seg.originalWord}
+              >
+                {seg.text}
+              </span>
+            );
+          }
           return (
-            <span
-              key={`c:${seg.start}:${seg.originalWord}`}
-              className="spellcheck-corrected"
-              data-word={seg.word}
-              data-original={seg.originalWord}
-            >
+            <span key={i} className="spellcheck-misspelled" data-word={seg.word}>
               {seg.text}
             </span>
           );
-        }
-        return (
-          <span key={i} className="spellcheck-misspelled" data-word={seg.word}>
-            {seg.text}
-          </span>
-        );
-      })}
+        })}
+      </div>
     </div>
   );
 }
@@ -219,5 +237,10 @@ function readMetrics(input) {
     whiteSpace: cs.whiteSpace,
     wordBreak: cs.wordBreak,
     overflowWrap: cs.overflowWrap,
+    // Padding-box width minus any scrollbar — pins the inner mirror's wrap
+    // width to the textarea's real content width when the past-cap
+    // scrollbar appears. Height changes re-fire the ResizeObserver, which
+    // re-reads this after autoSize commits.
+    clientWidth: input.clientWidth,
   };
 }
