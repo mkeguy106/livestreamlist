@@ -3,6 +3,7 @@
  */
 
 import ChatView from '../components/ChatView.jsx';
+import InlineVideo from '../components/InlineVideo.jsx';
 import PlaySplitButton from '../components/PlaySplitButton.jsx';
 import SocialsBanner from '../components/SocialsBanner.jsx';
 import TitleBanner from '../components/TitleBanner.jsx';
@@ -224,37 +225,49 @@ function FeaturedStream({ channel, onLaunch, onOpenBrowser }) {
           minHeight: 0,
         }}
       >
-        {channel.thumbnail_url && (
-          <img
-            src={channel.thumbnail_url}
-            alt=""
-            style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', opacity: 0.5 }}
+        {channel.is_live && channel.platform === 'twitch' ? (
+          /* key forces a clean remount per channel — mount-seeded state (muted/volume) must not bleed across tab switches */
+          <InlineVideo
+            key={channel.unique_key}
+            channelKey={channel.unique_key}
+            thumbnailUrl={channel.thumbnail_url}
+            variant="focus"
           />
+        ) : (
+          <>
+            {channel.thumbnail_url && (
+              <img
+                src={channel.thumbnail_url}
+                alt=""
+                style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', opacity: 0.5 }}
+              />
+            )}
+            <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <Tooltip text={channel.is_live ? 'Launch via streamlink' : 'channel offline'}>
+                <button
+                  type="button"
+                  onClick={channel.is_live ? () => onLaunch() : undefined}
+                  disabled={!channel.is_live}
+                  style={{
+                    width: 64,
+                    height: 64,
+                    borderRadius: '50%',
+                    border: '1px solid var(--zinc-700)',
+                    background: channel.is_live ? 'rgba(9,9,11,.8)' : 'rgba(9,9,11,.4)',
+                    color: channel.is_live ? 'var(--zinc-100)' : 'var(--zinc-500)',
+                    cursor: channel.is_live ? 'pointer' : 'not-allowed',
+                    fontSize: 22,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                >
+                  ▶
+                </button>
+              </Tooltip>
+            </div>
+          </>
         )}
-        <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <Tooltip text={channel.is_live ? 'Launch via streamlink' : 'channel offline'}>
-            <button
-              type="button"
-              onClick={channel.is_live ? () => onLaunch() : undefined}
-              disabled={!channel.is_live}
-              style={{
-                width: 64,
-                height: 64,
-                borderRadius: '50%',
-                border: '1px solid var(--zinc-700)',
-                background: channel.is_live ? 'rgba(9,9,11,.8)' : 'rgba(9,9,11,.4)',
-                color: channel.is_live ? 'var(--zinc-100)' : 'var(--zinc-500)',
-                cursor: channel.is_live ? 'pointer' : 'not-allowed',
-                fontSize: 22,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-              }}
-            >
-              ▶
-            </button>
-          </Tooltip>
-        </div>
       </div>
 
       <div style={{ display: 'flex', gap: 8, padding: '0 16px 12px' }}>

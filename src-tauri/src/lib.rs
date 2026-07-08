@@ -21,6 +21,7 @@ mod spellcheck;
 mod streamlink;
 mod tray;
 mod users;
+mod video;
 mod window_state;
 
 use channels::{Channel, ChannelStore, Livestream, SharedStore};
@@ -359,6 +360,33 @@ fn stop_stream(unique_key: String, player: State<'_, Arc<PlayerManager>>) -> boo
 #[tauri::command]
 fn list_playing(player: State<'_, Arc<PlayerManager>>) -> Vec<String> {
     player.playing()
+}
+
+#[derive(serde::Serialize)]
+struct VideoStartResult {
+    url: String,
+}
+
+#[tauri::command]
+async fn video_start(
+    unique_key: String,
+    quality: Option<String>,
+    video: State<'_, Arc<video::VideoManager>>,
+) -> Result<VideoStartResult, String> {
+    video
+        .start(&unique_key, quality)
+        .await
+        .map(|url| VideoStartResult { url })
+        .map_err(err_string)
+}
+
+#[tauri::command]
+fn video_stop(
+    unique_key: String,
+    video: State<'_, Arc<video::VideoManager>>,
+) -> Result<(), String> {
+    video.stop(&unique_key);
+    Ok(())
 }
 
 #[derive(serde::Serialize)]
@@ -1938,6 +1966,8 @@ macro_rules! register_handlers {
             $crate::launch_stream,
             $crate::stop_stream,
             $crate::list_playing,
+            $crate::video_start,
+            $crate::video_stop,
             $crate::open_in_browser,
             $crate::open_url,
             $crate::list_socials,
@@ -2017,6 +2047,9 @@ pub(crate) fn manage_all_state(app: &mut tauri::App) -> anyhow::Result<()> {
     let player_mgr = Arc::new(PlayerManager::new(handle.clone()));
     app.manage(player_mgr);
 
+    let video_mgr = Arc::new(video::VideoManager::new(handle.clone()));
+    app.manage(video_mgr);
+
     let embed_mgr = embed::EmbedHost::new();
     app.manage(embed_mgr);
 
@@ -2062,6 +2095,8 @@ pub fn run() {
                 )?;
             }
             crate::manage_all_state(app)?;
+            let video_mgr = app.state::<Arc<video::VideoManager>>().inner().clone();
+            tauri::async_runtime::spawn(video_mgr.run_background());
             #[cfg(target_os = "linux")]
             {
                 let main = app
@@ -2179,6 +2214,19 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(register_handlers!())
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            // Reap inline-video streamlink children on exit. They're plain
+            // spawns (not detached like the popout player), so they must be
+            // killed explicitly here — Drop for VideoManager never runs: the
+            // event loop exits via std::process::exit AND an Arc/channel cycle
+            // pins its strong count. RunEvent::Exit covers both window-close
+            // exits and the tray's app.exit(0).
+            if let tauri::RunEvent::Exit = event {
+                if let Some(vm) = app_handle.try_state::<Arc<video::VideoManager>>() {
+                    vm.stop_all();
+                }
+            }
+        });
 }

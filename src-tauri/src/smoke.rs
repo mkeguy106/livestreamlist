@@ -20,7 +20,10 @@ pub const DENYLIST: &[&str] = &[
     "launch_stream",
     "stop_stream",
     "list_playing",
-    // Requires ChatManager or PlayerManager state not managed in smoke harness
+    "video_start",
+    "video_stop",
+    // Requires ChatManager, PlayerManager, or VideoManager state not managed
+    // in smoke harness
     "kick_logout",
     "twitch_logout",
     "list_emotes",
