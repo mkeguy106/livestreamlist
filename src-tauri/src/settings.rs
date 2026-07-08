@@ -359,6 +359,15 @@ impl Default for ColumnsSettings {
 fn default_video_quality() -> String {
     "best".into()
 }
+/// Columns render at 240–600 px — 1080p/best is wasted bits and decode. Live
+/// telemetry at 4+ concurrent column streams showed delivery starvation
+/// (near-zero decode, latency collapsed to ~0, download speed collapsed): a
+/// bandwidth cliff from each stream pulling ~6 Mbps at "best". Columns default
+/// to this cheaper quality instead of `default_quality`; Focus (the single
+/// full-size stream) keeps `default_quality`.
+fn default_column_quality() -> String {
+    "720p60".into()
+}
 fn default_video_max_concurrent() -> u32 {
     6
 }
@@ -400,8 +409,16 @@ impl Default for ChannelVideoState {
 pub struct VideoSettings {
     #[serde(default)]
     pub channels: std::collections::HashMap<String, ChannelVideoState>,
+    /// Quality for the Focus layout (and anything without an override). One of
+    /// `best` / `1080p60` / `720p60` / `720p` / `480p`.
     #[serde(default = "default_video_quality")]
     pub default_quality: String,
+    /// Quality for Columns-layout videos, checked BEFORE `default_quality` by
+    /// the frontend (`InlineVideo.jsx::resolveDefaultQuality`) — a per-channel
+    /// override still wins over both. Columns are small; `default_quality`
+    /// stays the Focus-oriented "best" default.
+    #[serde(default = "default_column_quality")]
+    pub column_quality: String,
     /// Soft cap on simultaneously running video sessions (Starting/Serving/Lingering all count).
     #[serde(default = "default_video_max_concurrent")]
     pub max_concurrent: u32,
@@ -434,6 +451,7 @@ impl Default for VideoSettings {
         Self {
             channels: std::collections::HashMap::new(),
             default_quality: default_video_quality(),
+            column_quality: default_column_quality(),
             max_concurrent: default_video_max_concurrent(),
             linger_seconds: default_video_linger_seconds(),
             use_twitch_auth: true,
@@ -737,6 +755,7 @@ mod tests {
         let s: Settings = serde_json::from_str("{}").unwrap();
         assert!(s.video.channels.is_empty());
         assert_eq!(s.video.default_quality, "best");
+        assert_eq!(s.video.column_quality, "720p60");
         assert_eq!(s.video.max_concurrent, 6);
         assert_eq!(s.video.linger_seconds, 60);
         assert!(s.video.use_twitch_auth);
@@ -752,6 +771,8 @@ mod tests {
         let json = r#"{"video":{"default_quality":"720p","max_concurrent":4}}"#;
         let s: Settings = serde_json::from_str(json).unwrap();
         assert_eq!(s.video.default_quality, "720p");
+        // column_quality absent from old JSON → picks up the new default.
+        assert_eq!(s.video.column_quality, "720p60");
         assert!(s.video.autoplay_columns);
         assert!(s.video.autoplay_unmuted);
         // dmabuf_renderer absent from old JSON → picks up the new default-true.
@@ -771,6 +792,7 @@ mod tests {
             },
         );
         s.video.max_concurrent = 3;
+        s.video.column_quality = "480p".into();
         s.video.autoplay_columns = false;
         s.video.autoplay_unmuted = false;
         // dmabuf_renderer now defaults true — flip to false so the round trip
@@ -783,6 +805,7 @@ mod tests {
         assert!(!c.muted);
         assert_eq!(c.quality.as_deref(), Some("480p"));
         assert_eq!(back.video.max_concurrent, 3);
+        assert_eq!(back.video.column_quality, "480p");
         assert!(!back.video.autoplay_columns);
         assert!(!back.video.autoplay_unmuted);
         assert!(!back.video.dmabuf_renderer);

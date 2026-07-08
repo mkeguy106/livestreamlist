@@ -146,6 +146,20 @@ export default function InlineVideo({ channelKey, thumbnailUrl, variant = 'colum
   // timestamps (the info line is emitted to the Rust log once per 60 s).
   const statsRef = useRef(null);
   const perfRef = useRef({ decoded: 0, dropped: 0, lastWarnAt: 0, lastInfoAt: 0 });
+  // The quality actually being requested right now (per-channel pick, else
+  // the variant's default — column_quality for columns, default_quality for
+  // Focus). Drives both the overlay menu highlight and the perf heartbeat's
+  // `q=` field, so terminal telemetry shows what each stream is pulling.
+  // Mirrored into a ref (same idiom as mutedRef/volumeRef) so the perf
+  // effect's 10 s interval closure always reads the latest value rather than
+  // the one captured when that closure was created.
+  const currentQuality =
+    chan.quality ||
+    (variant === 'focus'
+      ? settings?.video?.default_quality || 'best'
+      : settings?.video?.column_quality || '720p60');
+  const currentQualityRef = useRef(currentQuality);
+  useEffect(() => { currentQualityRef.current = currentQuality; }, [currentQuality]);
 
   const patchChannel = useCallback(
     (fields) =>
@@ -161,6 +175,25 @@ export default function InlineVideo({ channelKey, thumbnailUrl, variant = 'colum
       })),
     [patch, channelKey],
   );
+
+  // Effective quality to request when (re)starting a session without an
+  // explicit user pick. Columns render at 240-600 px — 1080p/best is wasted
+  // bandwidth and decode headroom, and live telemetry at 4+ concurrent column
+  // streams showed delivery starvation (near-zero decode, latency collapsed
+  // to ~0, download speed collapsed): a bandwidth cliff from each stream
+  // pulling ~6 Mbps at "best". So columns pass an EXPLICIT override resolved
+  // from the per-channel pick, then `video.column_quality` (default 720p60) —
+  // never the general `video.default_quality`. Focus is the single full-size
+  // stream and keeps returning null so Rust's own
+  // `quality_override.or(per_channel).unwrap_or(default_quality)` resolution
+  // applies unchanged (defaults to "best"). Every startSession call site for
+  // the column variant must route through this helper (rather than passing a
+  // literal null) so mount, auto-retry, and manual-retry all agree on the
+  // same quality — see the module doc + CLAUDE.md's video-round-5 notes.
+  const resolveDefaultQuality = useCallback(() => {
+    if (variant === 'focus') return null;
+    return chan.quality ?? settings?.video?.column_quality ?? '720p60';
+  }, [variant, chan.quality, settings?.video?.column_quality]);
 
   const destroyPlayer = useCallback(() => {
     if (playerRef.current) {
@@ -242,7 +275,7 @@ export default function InlineVideo({ channelKey, thumbnailUrl, variant = 'colum
             const retryGen = ++genRef.current;
             setTimeout(() => {
               if (genRef.current !== retryGen) return;
-              startSessionRef.current?.(retryGen, null);
+              startSessionRef.current?.(retryGen, resolveDefaultQuality());
             }, backoff);
             return;
           }
@@ -276,7 +309,7 @@ export default function InlineVideo({ channelKey, thumbnailUrl, variant = 'colum
         });
         playerRef.current = player;
       }),
-    [channelKey, destroyPlayer, variant],
+    [channelKey, destroyPlayer, variant, resolveDefaultQuality],
   );
 
   const startSession = useCallback(
@@ -315,12 +348,16 @@ export default function InlineVideo({ channelKey, thumbnailUrl, variant = 'colum
     rebuildsRef.current = 0;
     autoRetriesRef.current = 0;
     rebuildPendingRef.current = false; // new channel = fresh slate
-    startSession(gen, null);
+    startSession(gen, resolveDefaultQuality());
     return () => {
       genRef.current += 1;
       destroyPlayer();
     };
     // startSession identity changes only with channelKey (createPlayer likewise).
+    // resolveDefaultQuality() is evaluated fresh at mount time only — same
+    // snapshot-at-mount behavior as the `muted` initializer above; a later
+    // column_quality preference change doesn't retroactively touch an already-
+    // running session (a new session naturally re-resolves it).
   }, [channelKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Rust-side status events (reaper 'ended', child-death 'error').
@@ -453,7 +490,7 @@ export default function InlineVideo({ channelKey, thumbnailUrl, variant = 'colum
           const msg =
             `[InlineVideo:perf] ${channelKey} DROPPED ${droppedDelta}/${totalDelta} ` +
             `in window (decoded=${decoded} speed=${statsRef.current?.speed ?? '?'}KB/s ` +
-            `span=${bufferedSpan.toFixed(1)}s latency=${latency.toFixed(1)}s)`;
+            `span=${bufferedSpan.toFixed(1)}s latency=${latency.toFixed(1)}s q=${currentQualityRef.current})`;
           // eslint-disable-next-line no-console
           console.warn(msg);
           frontendLog('warn', msg).catch(() => {});
@@ -467,7 +504,7 @@ export default function InlineVideo({ channelKey, thumbnailUrl, variant = 'colum
         frontendLog(
           'info',
           `[InlineVideo:perf] ${channelKey} dropped=${dropped}/${decoded} ` +
-            `span=${bufferedSpan.toFixed(1)}s latency=${latency.toFixed(1)}s`,
+            `span=${bufferedSpan.toFixed(1)}s latency=${latency.toFixed(1)}s q=${currentQualityRef.current}`,
         ).catch(() => {});
       }
 
@@ -558,10 +595,9 @@ export default function InlineVideo({ channelKey, thumbnailUrl, variant = 'colum
     // Fresh incarnation (same rule as pickQuality): a stale continuation from
     // the failed run can't clobber this retry's state.
     const gen = ++genRef.current;
-    startSession(gen, null);
+    startSession(gen, resolveDefaultQuality());
   };
 
-  const currentQuality = chan.quality || settings?.video?.default_quality || 'best';
   const wrapStyle =
     variant === 'focus'
       ? { position: 'absolute', inset: 0 }
