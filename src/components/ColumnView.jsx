@@ -22,7 +22,9 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import ChatView from './ChatView.jsx';
+import InlineVideo from './InlineVideo.jsx';
 import Tooltip from './Tooltip.jsx';
+import { usePreferences } from '../hooks/usePreferences.jsx';
 import { clampWidth } from '../utils/columnGroups.js';
 import { formatViewers, platformLetter } from '../utils/format.js';
 
@@ -38,6 +40,21 @@ export default function ColumnView({
 }) {
   const { key, live, channel } = column;
   const letter = platformLetter(channel?.platform);
+
+  const { settings, patch } = usePreferences();
+  const isTwitch = (channel?.platform ?? key.split(':')[0]) === 'twitch';
+  const videoOn = !!settings?.video?.channels?.[key]?.on;
+  const setVideoOn = (on) =>
+    patch((prev) => ({
+      ...prev,
+      video: {
+        ...prev.video,
+        channels: {
+          ...prev.video?.channels,
+          [key]: { ...prev.video?.channels?.[key], on },
+        },
+      },
+    }));
 
   // ── Resize drag — mouse-event pattern copied from Command.jsx's
   // DragResizeHandle: useState-owned drag state, document-level listeners
@@ -159,6 +176,23 @@ export default function ColumnView({
             {formatViewers(channel?.viewers)}
           </span>
         )}
+        {live && isTwitch && (
+          <Tooltip text={videoOn ? 'Stop video' : 'Play video'}>
+            <button
+              type="button"
+              aria-label={videoOn ? 'Stop video' : 'Play video'}
+              onClick={() => setVideoOn(!videoOn)}
+              style={{
+                display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                padding: 3, background: 'transparent', border: 'none',
+                color: videoOn ? 'var(--zinc-200)' : 'var(--zinc-500)',
+                cursor: 'pointer', lineHeight: 0, flexShrink: 0,
+              }}
+            >
+              {videoOn ? <IconStopVideo /> : <IconPlayVideo />}
+            </button>
+          </Tooltip>
+        )}
         <div style={{ flex: 1, minWidth: 0 }} />
         {onRemove != null && (
           <Tooltip text="Remove column">
@@ -186,6 +220,16 @@ export default function ColumnView({
           </Tooltip>
         )}
       </div>
+
+      {live && isTwitch && videoOn && (
+        <InlineVideo
+          channelKey={key}
+          live={live}
+          thumbnailUrl={channel?.thumbnail_url}
+          variant="column"
+          onClose={() => setVideoOn(false)}
+        />
+      )}
 
       <ChatView
         channelKey={key}
@@ -215,6 +259,22 @@ function IconX() {
   return (
     <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="square">
       <path d="M2 2 L8 8 M8 2 L2 8" />
+    </svg>
+  );
+}
+
+function IconPlayVideo() {
+  return (
+    <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
+      <path d="M2 1 L9 5 L2 9 Z" />
+    </svg>
+  );
+}
+
+function IconStopVideo() {
+  return (
+    <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
+      <rect x="2" y="2" width="6" height="6" />
     </svg>
   );
 }
