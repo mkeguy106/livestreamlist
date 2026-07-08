@@ -1323,7 +1323,7 @@ function VideoTab({ settings, patch }) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-      <Row label="Default quality" hint="Applies to newly started videos; per-column overrides win.">
+      <Row label="Default quality" hint="Applies to the Focus layout's featured stream (and anywhere else without a more specific default); per-channel overrides always win.">
         <div style={{ display: 'flex', gap: 4 }}>
           {VIDEO_QUALITIES.map((q) => (
             <button
@@ -1335,6 +1335,26 @@ function VideoTab({ settings, patch }) {
                 fontSize: 11,
                 color: (v.default_quality ?? 'best') === q ? 'var(--zinc-100)' : 'var(--zinc-500)',
                 borderColor: (v.default_quality ?? 'best') === q ? 'var(--zinc-500)' : undefined,
+              }}
+            >
+              {q}
+            </button>
+          ))}
+        </div>
+      </Row>
+
+      <Row label="Column quality" hint="Columns are small — 720p60 halves bandwidth and decode vs best. Per-column picks still override.">
+        <div style={{ display: 'flex', gap: 4 }}>
+          {VIDEO_QUALITIES.map((q) => (
+            <button
+              key={q}
+              type="button"
+              className="rx-btn rx-mono"
+              onClick={() => patchVideo({ column_quality: q })}
+              style={{
+                fontSize: 11,
+                color: (v.column_quality ?? '720p60') === q ? 'var(--zinc-100)' : 'var(--zinc-500)',
+                borderColor: (v.column_quality ?? '720p60') === q ? 'var(--zinc-500)' : undefined,
               }}
             >
               {q}

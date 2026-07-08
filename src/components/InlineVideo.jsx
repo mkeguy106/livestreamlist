@@ -146,6 +146,28 @@ export default function InlineVideo({ channelKey, thumbnailUrl, variant = 'colum
   // timestamps (the info line is emitted to the Rust log once per 60 s).
   const statsRef = useRef(null);
   const perfRef = useRef({ decoded: 0, dropped: 0, lastWarnAt: 0, lastInfoAt: 0 });
+  // What a session started RIGHT NOW would request (per-channel pick, else
+  // the variant's default — column_quality for columns, default_quality for
+  // Focus). This is the live-preferences view; it is NOT what the running
+  // session is necessarily pulling. Kept in a "latest value" ref (same idiom
+  // as startSessionRef below) so startSession can freeze it at kickoff time
+  // without stale-closure risk.
+  const requestedQualityNow =
+    chan.quality ||
+    (variant === 'focus'
+      ? settings?.video?.default_quality || 'best'
+      : settings?.video?.column_quality || '720p60');
+  const requestedQualityNowRef = useRef(requestedQualityNow);
+  requestedQualityNowRef.current = requestedQualityNow;
+  // The quality the RUNNING session actually requested, frozen inside
+  // startSession at each real session start (mount, retry, auto-retry,
+  // pickQuality). The quality-menu label and the perf heartbeat/warn `q=`
+  // field read THIS ref, not the live settings resolution — otherwise editing
+  // "Column quality" / "Default quality" in Preferences mid-playback would
+  // make the label and telemetry claim the NEW quality while the running
+  // session still pulls the old one, defeating the telemetry's purpose.
+  // Null until the first start; readers fall back to the live resolution.
+  const sessionQualityRef = useRef(null);
 
   const patchChannel = useCallback(
     (fields) =>
@@ -161,6 +183,28 @@ export default function InlineVideo({ channelKey, thumbnailUrl, variant = 'colum
       })),
     [patch, channelKey],
   );
+
+  // Effective quality to request when (re)starting a session without an
+  // explicit user pick. Columns render at 240-600 px — 1080p/best is wasted
+  // bandwidth and decode headroom, and live telemetry at 4+ concurrent column
+  // streams showed delivery starvation (near-zero decode, latency collapsed
+  // to ~0, download speed collapsed): a bandwidth cliff from each stream
+  // pulling ~6 Mbps at "best". So columns pass an EXPLICIT override resolved
+  // from the per-channel pick, then `video.column_quality` (default 720p60) —
+  // never the general `video.default_quality`. Focus is the single full-size
+  // stream and keeps returning null so Rust's own
+  // `quality_override.or(per_channel).unwrap_or(default_quality)` resolution
+  // applies unchanged (defaults to "best"). Every startSession call site for
+  // the column variant must route through this helper (rather than passing a
+  // literal null) so mount, auto-retry, and manual-retry all agree on the
+  // same quality — see the module doc + CLAUDE.md's video-round-5 notes.
+  // Cold-start race (accepted, mirrors the `muted` initializer above): on the
+  // very first mount `settings` may still be loading, so the '720p60' literal
+  // stands in — bounded to that first session.
+  const resolveDefaultQuality = useCallback(() => {
+    if (variant === 'focus') return null;
+    return chan.quality ?? settings?.video?.column_quality ?? '720p60';
+  }, [variant, chan.quality, settings?.video?.column_quality]);
 
   const destroyPlayer = useCallback(() => {
     if (playerRef.current) {
@@ -242,7 +286,7 @@ export default function InlineVideo({ channelKey, thumbnailUrl, variant = 'colum
             const retryGen = ++genRef.current;
             setTimeout(() => {
               if (genRef.current !== retryGen) return;
-              startSessionRef.current?.(retryGen, null);
+              startSessionRef.current?.(retryGen, resolveDefaultQuality());
             }, backoff);
             return;
           }
@@ -276,11 +320,19 @@ export default function InlineVideo({ channelKey, thumbnailUrl, variant = 'colum
         });
         playerRef.current = player;
       }),
-    [channelKey, destroyPlayer, variant],
+    [channelKey, destroyPlayer, variant, resolveDefaultQuality],
   );
 
   const startSession = useCallback(
     async (gen, qualityOverride = null) => {
+      // Freeze the quality this session is requesting (labels/telemetry must
+      // reflect the running session, not current prefs). For the explicit-
+      // override paths (columns, pickQuality) that's the override itself; for
+      // Focus's null pass, capture what Rust will resolve for it — the
+      // per-channel pick, else default_quality — AT THIS MOMENT. Synchronous
+      // before the first await, so competing starts leave the ref matching
+      // whichever kickoff claimed the newest gen.
+      sessionQualityRef.current = qualityOverride ?? requestedQualityNowRef.current;
       setPhase('starting');
       setErrMsg('');
       wdRef.current = { lastFrames: undefined, frozenTicks: 0 };
@@ -315,12 +367,16 @@ export default function InlineVideo({ channelKey, thumbnailUrl, variant = 'colum
     rebuildsRef.current = 0;
     autoRetriesRef.current = 0;
     rebuildPendingRef.current = false; // new channel = fresh slate
-    startSession(gen, null);
+    startSession(gen, resolveDefaultQuality());
     return () => {
       genRef.current += 1;
       destroyPlayer();
     };
     // startSession identity changes only with channelKey (createPlayer likewise).
+    // resolveDefaultQuality() is evaluated fresh at mount time only — same
+    // snapshot-at-mount behavior as the `muted` initializer above; a later
+    // column_quality preference change doesn't retroactively touch an already-
+    // running session (a new session naturally re-resolves it).
   }, [channelKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Rust-side status events (reaper 'ended', child-death 'error').
@@ -443,6 +499,10 @@ export default function InlineVideo({ channelKey, thumbnailUrl, variant = 'colum
         }
       } catch { /* not ready */ }
       const latency = bufferedEnd ? bufferedEnd - v.currentTime : 0;
+      // Frozen at session start — reports what the running session requested,
+      // not what current Preferences would request (fallback is unreachable
+      // in practice: phase==='playing' implies a start already froze it).
+      const reqQuality = sessionQualityRef.current ?? requestedQualityNowRef.current;
 
       // WARN path — the <video> element is replaced on rebuild (frame counters
       // reset); a non-positive delta means we crossed a rebuild — just
@@ -453,7 +513,7 @@ export default function InlineVideo({ channelKey, thumbnailUrl, variant = 'colum
           const msg =
             `[InlineVideo:perf] ${channelKey} DROPPED ${droppedDelta}/${totalDelta} ` +
             `in window (decoded=${decoded} speed=${statsRef.current?.speed ?? '?'}KB/s ` +
-            `span=${bufferedSpan.toFixed(1)}s latency=${latency.toFixed(1)}s)`;
+            `span=${bufferedSpan.toFixed(1)}s latency=${latency.toFixed(1)}s q=${reqQuality})`;
           // eslint-disable-next-line no-console
           console.warn(msg);
           frontendLog('warn', msg).catch(() => {});
@@ -467,7 +527,7 @@ export default function InlineVideo({ channelKey, thumbnailUrl, variant = 'colum
         frontendLog(
           'info',
           `[InlineVideo:perf] ${channelKey} dropped=${dropped}/${decoded} ` +
-            `span=${bufferedSpan.toFixed(1)}s latency=${latency.toFixed(1)}s`,
+            `span=${bufferedSpan.toFixed(1)}s latency=${latency.toFixed(1)}s q=${reqQuality}`,
         ).catch(() => {});
       }
 
@@ -558,10 +618,16 @@ export default function InlineVideo({ channelKey, thumbnailUrl, variant = 'colum
     // Fresh incarnation (same rule as pickQuality): a stale continuation from
     // the failed run can't clobber this retry's state.
     const gen = ++genRef.current;
-    startSession(gen, null);
+    startSession(gen, resolveDefaultQuality());
   };
 
-  const currentQuality = chan.quality || settings?.video?.default_quality || 'best';
+  // Overlay quality-menu label/highlight: the RUNNING session's requested
+  // quality (frozen at start), NOT the live settings resolution — a mid-
+  // playback Preferences edit must not relabel a session still pulling the
+  // old quality. Falls back to the live resolution only before the first
+  // start (every ref write happens inside startSession, which always pairs
+  // with a setPhase, so a re-render picks the new value up).
+  const currentQuality = sessionQualityRef.current ?? requestedQualityNow;
   const wrapStyle =
     variant === 'focus'
       ? { position: 'absolute', inset: 0 }
