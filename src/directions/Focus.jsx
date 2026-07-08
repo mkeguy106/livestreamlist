@@ -226,7 +226,9 @@ function FeaturedStream({ channel, onLaunch, onOpenBrowser }) {
         }}
       >
         {channel.is_live && channel.platform === 'twitch' ? (
+          /* key forces a clean remount per channel — mount-seeded state (muted/volume) must not bleed across tab switches */
           <InlineVideo
+            key={channel.unique_key}
             channelKey={channel.unique_key}
             live
             thumbnailUrl={channel.thumbnail_url}
