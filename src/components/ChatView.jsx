@@ -590,6 +590,7 @@ export default function ChatView({
           channelKey={channelKey}
           platform={platform}
           auth={auth}
+          compact={variant === 'compact'}
           mentionCandidates={mentionCandidates}
           replyTo={replyTo}
           onCancelReply={() => setReplyTo(null)}

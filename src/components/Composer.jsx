@@ -96,6 +96,7 @@ export default function Composer({
   channelKey,
   platform,
   auth,
+  compact = false,
   mentionCandidates,
   replyTo,
   onCancelReply,
@@ -189,7 +190,11 @@ export default function Composer({
       : 'This platform chats on its own site — click Browser ↗ to open it'
     : replyTo
       ? `Reply to @${replyTo.parent_display_name}…`
-      : 'Send a message…  —  `:` for emotes, `@` for mentions';
+      : compact
+        // Columns run narrow — keep the placeholder short so the input the user
+        // types in stays clearly legible.
+        ? 'Send a message…'
+        : 'Send a message…  —  `:` for emotes, `@` for mentions';
 
   // Cache emotes per-channel. Re-runs on channelKey change AND whenever the
   // backend signals the user-emote layer changed (login, logout, app-start
@@ -685,7 +690,8 @@ export default function Composer({
       onKeyDown={onFormKeyDown}
       style={{
         borderTop: 'var(--hair)',
-        padding: '6px 10px',
+        // Slimmer row in Columns so the whole composer is one legible line.
+        padding: compact ? '4px 8px' : '6px 10px',
         display: 'flex',
         flexDirection: 'column',
         gap: 4,
@@ -701,7 +707,7 @@ export default function Composer({
           onPick={(item) => accept(item)}
         />
       )}
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+      <div style={{ display: 'flex', gap: compact ? 5 : 8, alignItems: 'center' }}>
         <div className="rx-mono rx-chiclet" style={{ color: 'var(--zinc-600)' }}>
           {authed ? `@${platformAuth.login}` : platform}
         </div>
@@ -808,10 +814,32 @@ export default function Composer({
             <button
               type="button"
               className="rx-btn rx-btn-ghost"
+              aria-label="Open chat in browser"
               onClick={() => chatOpenInBrowser(channelKey).catch((e) => setError(String(e?.message ?? e)))}
-              style={{ padding: '2px 6px', fontSize: 10 }}
+              style={
+                compact
+                  ? { padding: '3px 5px', display: 'inline-flex', alignItems: 'center', lineHeight: 0 }
+                  : { padding: '2px 6px', fontSize: 10 }
+              }
             >
-              Browser ↗
+              {compact ? <IconExternal /> : 'Browser ↗'}
+            </button>
+          </Tooltip>
+        )}
+        {/* Compact (Columns) send affordance — a small icon button so the
+            user can clearly participate without the wide "Send" text taking
+            room from the input. Enter still submits. Disabled when empty or
+            unauthed. */}
+        {compact && (
+          <Tooltip placement="top" align="right" text="Send">
+            <button
+              type="submit"
+              className="rx-btn rx-btn-ghost"
+              aria-label="Send"
+              disabled={!authed || text.trim() === ''}
+              style={{ padding: '3px 6px', display: 'inline-flex', alignItems: 'center', lineHeight: 0 }}
+            >
+              <IconSend />
             </button>
           </Tooltip>
         )}
@@ -930,6 +958,47 @@ function Popup({ kind, items, index, onPick }) {
         );
       })}
     </div>
+  );
+}
+
+// Small stroked paper-plane — the compact send button glyph. Same stroked-
+// icon idiom as ColumnView's IconX / IconExternal below.
+function IconSend() {
+  return (
+    <svg
+      width="13"
+      height="13"
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.3"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M14.5 1.5 L7 9" />
+      <path d="M14.5 1.5 L10 14.5 L7 9 L1.5 6 Z" />
+    </svg>
+  );
+}
+
+// "Open in browser" external-link glyph (box + out-arrow) for the compact
+// Browser button.
+function IconExternal() {
+  return (
+    <svg
+      width="12"
+      height="12"
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.3"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M9 2.5 H13.5 V7" />
+      <path d="M13.5 2.5 L7.5 8.5" />
+      <path d="M12.5 9 V12.5 A1 1 0 0 1 11.5 13.5 H3.5 A1 1 0 0 1 2.5 12.5 V4.5 A1 1 0 0 1 3.5 3.5 H7" />
+    </svg>
   );
 }
 
