@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { chatOpenInBrowser, chatSend, listEmotes, listenEvent, spellcheckAddWord, spellcheckSuggest } from '../ipc.js';
 import { shouldAutocorrect, isPastWord, rangeAtCaret } from '../utils/autocorrect.js';
 import { counterState } from '../utils/charCount.js';
@@ -191,9 +191,11 @@ export default function Composer({
     : replyTo
       ? `Reply to @${replyTo.parent_display_name}…`
       : compact
-        // Columns run narrow — keep the placeholder short so the input the user
-        // types in stays clearly legible.
-        ? 'Send a message…'
+        // Columns run narrow — the identity chiclet is dropped in compact
+        // (see below), so fold the @login into the placeholder instead. It
+        // acts as an in-input background hint that vanishes the moment the
+        // user types. Falls back to a plain prompt when no login is known.
+        ? (platformAuth?.login ? `@${platformAuth.login} — send a message…` : 'Send a message…')
         : 'Send a message…  —  `:` for emotes, `@` for mentions';
 
   // Cache emotes per-channel. Re-runs on channelKey change AND whenever the
@@ -328,6 +330,53 @@ export default function Composer({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autocorrectEnabled, text, misspellings, alreadyCorrected, recordCorrection]);
 
+  // ── Auto-grow textarea (Item 2) ──────────────────────────────────────
+  // The composer is a <textarea rows={1}> that wraps and grows vertically up
+  // to ~5 lines, then scrolls. Chat messages stay single-line: newlines are
+  // stripped on input (see onChange) and Enter always submits, so the
+  // textarea only ever grows because the text *wraps*, never because it holds
+  // a literal newline. Height is recomputed on every value change and on
+  // column-width changes (a rewrap changes the line count).
+  const autoSize = useCallback(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    const cs = getComputedStyle(el);
+    const borderV =
+      (parseFloat(cs.borderTopWidth) || 0) + (parseFloat(cs.borderBottomWidth) || 0);
+    const padV = (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0);
+    let lineH = parseFloat(cs.lineHeight);
+    if (!Number.isFinite(lineH)) lineH = (parseFloat(cs.fontSize) || 12) * 1.4;
+    const maxH = Math.round(lineH * 5 + padV + borderV);
+    // .rx-input is border-box: the height that avoids a scrollbar is
+    // scrollHeight (content + padding) plus the box's own border.
+    const desired = el.scrollHeight + borderV;
+    const h = Math.min(desired, maxH);
+    el.style.height = `${h}px`;
+    el.style.overflowY = desired > maxH ? 'auto' : 'hidden';
+  }, []);
+
+  useLayoutEffect(() => {
+    autoSize();
+  }, [text, autoSize]);
+
+  // Rewrap on width change (column resize). Observe the wrapper's width only,
+  // guarding against re-runs from our own height mutation — otherwise setting
+  // the textarea height would loop back through this ResizeObserver.
+  useEffect(() => {
+    const el = inputRef.current;
+    const wrap = el?.parentElement;
+    if (!wrap || typeof ResizeObserver === 'undefined') return undefined;
+    let lastW = wrap.clientWidth;
+    const ro = new ResizeObserver(() => {
+      if (wrap.clientWidth === lastW) return;
+      lastW = wrap.clientWidth;
+      autoSize();
+    });
+    ro.observe(wrap);
+    return () => ro.disconnect();
+  }, [autoSize]);
+
   const mentionsSorted = useMemo(
     () => Array.from(new Set(mentionCandidates ?? [])),
     [mentionCandidates],
@@ -348,7 +397,11 @@ export default function Composer({
   );
 
   const onChange = (e) => {
-    const value = e.target.value;
+    // Chat messages are single-line. A <textarea> can accept newlines via
+    // paste / drag-drop / IME — strip them to spaces (1:1 per char so the
+    // caret offset from selectionStart stays valid) before anything sees the
+    // value. Enter never reaches here (onKey preventDefaults + submits).
+    const value = e.target.value.replace(/[\r\n]/g, ' ');
     // Real user typing (as opposed to a history-recall setText, which
     // never runs through this native onChange) always exits browsing mode.
     historyIndexRef.current = -1;
@@ -575,7 +628,10 @@ export default function Composer({
         setPopup({ ...popup, index: (popup.index - 1 + popup.items.length) % popup.items.length });
         return;
       }
-      if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) {
+      if (e.key === 'Tab' || e.key === 'Enter') {
+        // Enter (with or without Shift) accepts the highlighted item. Shift+
+        // Enter must never fall through to the textarea's default newline
+        // insertion — chat messages are single-line.
         e.preventDefault();
         accept();
         return;
@@ -655,7 +711,10 @@ export default function Composer({
         return;
       }
     }
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.key === 'Enter') {
+      // Enter submits; Shift+Enter also submits (never inserts a newline —
+      // chat messages are single-line, so the textarea must not grow via a
+      // literal newline).
       e.preventDefault();
       submit();
     }
@@ -707,10 +766,15 @@ export default function Composer({
           onPick={(item) => accept(item)}
         />
       )}
-      <div style={{ display: 'flex', gap: compact ? 5 : 8, alignItems: 'center' }}>
-        <div className="rx-mono rx-chiclet" style={{ color: 'var(--zinc-600)' }}>
-          {authed ? `@${platformAuth.login}` : platform}
-        </div>
+      <div style={{ display: 'flex', gap: compact ? 5 : 8, alignItems: 'flex-end' }}>
+        {/* Non-compact keeps the identity chiclet; compact folds @login into
+            the input's placeholder (see `placeholder` above) to reclaim the
+            narrow column's horizontal space. */}
+        {!compact && (
+          <div className="rx-mono rx-chiclet" style={{ color: 'var(--zinc-600)' }}>
+            {authed ? `@${platformAuth.login}` : platform}
+          </div>
+        )}
         {replyTo && (
           <span className="rx-reply-chiclet">
             <span style={{ color: 'var(--zinc-500)' }}>↩</span>
@@ -728,11 +792,24 @@ export default function Composer({
           </span>
         )}
         <div style={{ position: 'relative', flex: 1, minWidth: 0 }}>
-          <input
+          <textarea
             ref={inputRef}
-            type="text"
             className="rx-input"
-            style={{ width: '100%' }}
+            rows={1}
+            style={{
+              width: '100%',
+              // Auto-grows via `autoSize`; the user must not manually resize,
+              // and while under the 5-line cap there is no scrollbar (autoSize
+              // flips overflowY to 'auto' only past the cap).
+              resize: 'none',
+              overflowY: 'hidden',
+              // Wrapping metrics the SpellcheckOverlay mirrors verbatim — keep
+              // these in sync with the overlay's copied computed styles.
+              whiteSpace: 'pre-wrap',
+              overflowWrap: 'break-word',
+              display: 'block',
+              boxSizing: 'border-box',
+            }}
             placeholder={placeholder}
             value={text}
             onChange={onChange}
