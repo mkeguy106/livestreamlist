@@ -49,7 +49,19 @@ export default function InlineVideo({ channelKey, live, thumbnailUrl, variant = 
   const urlRef = useRef(null);
   const rebuildsRef = useRef(0);
   const wdRef = useRef({ lastFrames: undefined, frozenTicks: 0 });
-  const aliveRef = useRef(true);
+  // Generation counter (mirrors the Rust side's incarnation pattern). The
+  // mount effect is keyed on channelKey, so ONE component instance survives
+  // channel switches — a shared "alive" boolean would be re-armed by the new
+  // run, letting the OLD run's suspended startSession continuation (up to
+  // ~15s inside videoStart) resume and clobber fresh state with the previous
+  // channel's stream. Every async resumption point instead compares the gen
+  // it captured at kickoff against genRef.current and bails on mismatch.
+  const genRef = useRef(0);
+  // True while a watchdog-triggered rebuild is queued or executing. Without
+  // it, a backed-up creation queue lets consecutive ticks enqueue a second
+  // rebuild of the same still-wedged element — double-counting rebuilds and
+  // possibly tearing down a fresh player with a stale URL.
+  const rebuildPendingRef = useRef(false);
   const mutedRef = useRef(muted);
   const volumeRef = useRef(volume);
   useEffect(() => { mutedRef.current = muted; }, [muted]);
@@ -81,9 +93,9 @@ export default function InlineVideo({ channelKey, live, thumbnailUrl, variant = 
   // queue; always replaces the <video> element — a wedged element must not
   // be reused (spike: the element, not just the player, is what's wedged).
   const createPlayer = useCallback(
-    (url) =>
+    (gen, url) =>
       enqueuePipelineCreation(() => {
-        if (!aliveRef.current || !videoRef.current) return;
+        if (genRef.current !== gen || !videoRef.current) return;
         destroyPlayer();
         const old = videoRef.current;
         const nv = old.cloneNode(false);
@@ -92,40 +104,52 @@ export default function InlineVideo({ channelKey, live, thumbnailUrl, variant = 
         nv.muted = mutedRef.current;
         nv.volume = volumeRef.current;
         const player = mpegts.createPlayer({ type: 'mpegts', isLive: true, url }, MPEGTS_CONFIG);
+        // The mpegts callbacks belong to THIS player incarnation — they
+        // capture gen and bail if a newer generation has taken over.
         player.on(mpegts.Events.ERROR, (type, detail) => {
-          if (!aliveRef.current) return;
+          if (genRef.current !== gen) return;
           setErrMsg(`${type}/${detail}`);
           setPhase('error');
           destroyPlayer();
         });
         // LOADING_COMPLETE = the byte stream ended = the live stream is over.
         player.on(mpegts.Events.LOADING_COMPLETE, () => {
-          if (!aliveRef.current) return;
+          if (genRef.current !== gen) return;
           setPhase('ended');
           destroyPlayer();
           videoStop(channelKey).catch(() => {});
         });
         player.attachMediaElement(nv);
         player.load();
-        nv.play().catch(() => {});
+        nv.play().catch((err) => {
+          if (genRef.current !== gen) return;
+          if (!nv.muted) {
+            // Autoplay with sound blocked by engine policy — degrade to muted
+            // playback; the user's next unmute click is a gesture and will stick.
+            console.warn('[InlineVideo] unmuted autoplay blocked, starting muted:', err?.message);
+            nv.muted = true;
+            setMuted(true); // UI only — do NOT persist; the user's saved preference stands
+            nv.play().catch(() => {});
+          }
+        });
         playerRef.current = player;
       }),
     [channelKey, destroyPlayer],
   );
 
   const startSession = useCallback(
-    async (qualityOverride = null) => {
+    async (gen, qualityOverride = null) => {
       setPhase('starting');
       setErrMsg('');
       wdRef.current = { lastFrames: undefined, frozenTicks: 0 };
       try {
         const { url } = await videoStart(channelKey, qualityOverride);
-        if (!aliveRef.current) return;
+        if (genRef.current !== gen) return;
         urlRef.current = url;
-        await createPlayer(url);
-        if (aliveRef.current) setPhase('playing');
+        await createPlayer(gen, url);
+        if (genRef.current === gen) setPhase('playing');
       } catch (e) {
-        if (!aliveRef.current) return;
+        if (genRef.current !== gen) return;
         const msg = String(e?.message ?? e);
         if (msg.startsWith('cap:')) {
           setPhase('cap');
@@ -139,12 +163,15 @@ export default function InlineVideo({ channelKey, live, thumbnailUrl, variant = 
   );
 
   // Mount -> start. Unmount -> destroy player only (linger handles Rust side).
+  // Bumping genRef in cleanup invalidates every in-flight continuation from
+  // this run; the new run's own increment claims the next generation.
   useEffect(() => {
-    aliveRef.current = true;
+    const gen = ++genRef.current;
     rebuildsRef.current = 0;
-    startSession(null);
+    rebuildPendingRef.current = false; // new channel = fresh slate
+    startSession(gen, null);
     return () => {
-      aliveRef.current = false;
+      genRef.current += 1;
       destroyPlayer();
     };
     // startSession identity changes only with channelKey (createPlayer likewise).
@@ -179,6 +206,9 @@ export default function InlineVideo({ channelKey, live, thumbnailUrl, variant = 
   useEffect(() => {
     if (phase !== 'playing') return undefined;
     const id = setInterval(() => {
+      // A rebuild is already queued/executing — don't stack another on the
+      // same still-wedged element while the creation queue drains.
+      if (rebuildPendingRef.current) return;
       const v = videoRef.current;
       if (!v || v.readyState < 3 || v.paused || !v.getVideoPlaybackQuality) return;
       const frames = v.getVideoPlaybackQuality().totalVideoFrames;
@@ -195,7 +225,16 @@ export default function InlineVideo({ channelKey, live, thumbnailUrl, variant = 
             return;
           }
           rebuildsRef.current += 1;
-          createPlayer(urlRef.current);
+          const gen = genRef.current;
+          rebuildPendingRef.current = true;
+          createPlayer(gen, urlRef.current)
+            .finally(() => {
+              rebuildPendingRef.current = false;
+            })
+            // A synchronous throw inside the queued creation fn rejects this
+            // chain; swallow it here (startSession's path has try/catch, this
+            // one doesn't) — the next tick / MAX_REBUILDS ceiling handles it.
+            .catch(() => {});
         }
       } else {
         wd.frozenTicks = 0;
@@ -221,7 +260,7 @@ export default function InlineVideo({ channelKey, live, thumbnailUrl, variant = 
     setQualityOpen(false);
     patchChannel({ quality: q });
     destroyPlayer();
-    startSession(q); // distinct quality -> Rust respawns the session
+    startSession(genRef.current, q); // distinct quality -> Rust respawns the session
   };
   const popout = () => {
     launchStream(channelKey);
@@ -235,7 +274,7 @@ export default function InlineVideo({ channelKey, live, thumbnailUrl, variant = 
   };
   const retry = () => {
     rebuildsRef.current = 0;
-    startSession(null);
+    startSession(genRef.current, null);
   };
 
   const currentQuality = chan.quality || settings?.video?.default_quality || '720p60';
