@@ -30,18 +30,26 @@ const MAX_REBUILDS = 3;
 // append/remove cost grows with the buffered-range size — live playback never
 // seeks backward, so a bounded window is safe.
 //
-// Jank correlation (round 4): the previous round set 30/15 here and the
-// stutter *onset* moved from ~3 min (mpegts's default cleanup cadence) to
-// ~20 s — i.e. SourceBuffer.remove() is the thing that stalls playback.
-// WebKitGTK's MSE blocks appends while a remove() is in flight; a batched
-// remove every ~15 s was starving the zero-stash ultra-low-latency profile
-// (tiny appends every ~100 ms, minRemain 0.5 s) into a latency-chase stutter.
-// 60/30 halves the remove() frequency vs 30/15 while still keeping the
-// buffered span bounded — fewer, still-cheap prunes.
+// Real diagnosis (round 7): round 4's 60/30 wasn't a remove()-frequency
+// tradeoff, it was quietly starving playback. WebKitGTK enforces a
+// per-process MSE memory quota SHARED across every player in the process —
+// retained back-buffer counts against that quota same as forward buffer, and
+// once it's hit, appends silently stall (no error, no event — the pipeline
+// just stops taking data). Live telemetry at 60/30 showed exactly this:
+// download speed steady at full bitrate, main-thread lag modest, but frame
+// output collapsing with latency≈0.1s while buffered span sat at 38–57s —
+// i.e. ~40-55s of ALREADY-PLAYED video was being retained behind the
+// playhead, eating quota that appends ahead of the playhead needed. More
+// concurrent streams divide the same process-wide budget, which is why 3
+// streams showed slight stutter and 4 showed a lot. Live monitoring never
+// seeks backward, so there is no reason to keep more than a few seconds of
+// back-buffer: 12/6 keeps the retained window minimal (~12s ≈ 5MB/stream at
+// 720p60) so the quota stays available for forward appends instead of dead
+// weight behind the playhead.
 const CLEANUP_CONFIG = {
   autoCleanupSourceBuffer: true,
-  autoCleanupMaxBackwardDuration: 60,
-  autoCleanupMinBackwardDuration: 30,
+  autoCleanupMaxBackwardDuration: 12,
+  autoCleanupMinBackwardDuration: 6,
 };
 
 // Cushioned base shared by all three profiles (round 4). The stash buffer is
@@ -516,12 +524,18 @@ export default function InlineVideo({ channelKey, thumbnailUrl, variant = 'colum
       const droppedDelta = dropped - prev.dropped;
       const now = Date.now();
 
-      // Buffered span + live latency (shared by both the warn and the info
-      // line). `buffered` can throw before the pipeline is ready.
+      // Buffered span + live latency + range count (shared by both the warn
+      // and the info line). `ranges` (video.buffered.length) is the other
+      // quota-starvation signature: a healthy pipeline holds one contiguous
+      // range, while fragmented remove()/append cycles under quota pressure
+      // can splinter the buffer into several. `buffered` can throw before the
+      // pipeline is ready.
       let bufferedEnd = 0;
       let bufferedSpan = 0;
+      let bufferedRanges = 0;
       try {
         const b = v.buffered;
+        bufferedRanges = b ? b.length : 0;
         if (b && b.length) {
           bufferedEnd = b.end(b.length - 1);
           bufferedSpan = bufferedEnd - b.start(b.length - 1);
@@ -544,7 +558,7 @@ export default function InlineVideo({ channelKey, thumbnailUrl, variant = 'colum
           const msg =
             `[InlineVideo:perf] ${channelKey} DROPPED ${droppedDelta}/${totalDelta} ` +
             `in window (decoded=${decoded} speed=${statsRef.current?.speed ?? '?'}KB/s ` +
-            `span=${bufferedSpan.toFixed(1)}s latency=${latency.toFixed(1)}s q=${reqQuality} ` +
+            `span=${bufferedSpan.toFixed(1)}s ranges=${bufferedRanges} latency=${latency.toFixed(1)}s q=${reqQuality} ` +
             `mainLag=${takeWorstLag()}ms)`;
           // eslint-disable-next-line no-console
           console.warn(msg);
@@ -561,7 +575,7 @@ export default function InlineVideo({ channelKey, thumbnailUrl, variant = 'colum
         frontendLog(
           'info',
           `[InlineVideo:perf] ${channelKey} dropped=${dropped}/${decoded} ` +
-            `span=${bufferedSpan.toFixed(1)}s latency=${latency.toFixed(1)}s q=${reqQuality} ` +
+            `span=${bufferedSpan.toFixed(1)}s ranges=${bufferedRanges} latency=${latency.toFixed(1)}s q=${reqQuality} ` +
             `mainLag=${takeWorstLag()}ms`,
         ).catch(() => {});
       }
