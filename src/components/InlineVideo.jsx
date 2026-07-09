@@ -512,6 +512,7 @@ export default function InlineVideo({ channelKey, thumbnailUrl, variant = 'colum
       dropped: q0?.droppedVideoFrames ?? 0,
       lastWarnAt: 0,
       lastInfoAt: 0,
+      lastTickAt: 0,
     };
     const id = setInterval(() => {
       const v = videoRef.current;
@@ -546,6 +547,15 @@ export default function InlineVideo({ channelKey, thumbnailUrl, variant = 'colum
       // not what current Preferences would request (fallback is unreachable
       // in practice: phase==='playing' implies a start already froze it).
       const reqQuality = sessionQualityRef.current ?? requestedQualityNowRef.current;
+      // Actual DECODED resolution (what's really painting) vs `reqQuality`
+      // (what we asked streamlink for) — `720p60,best` can silently deliver a
+      // different variant. `res=0x0` before the first frame decodes.
+      const res = `${v.videoWidth || 0}x${v.videoHeight || 0}`;
+      // Effective decode rate over the real elapsed tick (not the nominal 10 s —
+      // under main-thread lag the timer stretches, so divide by measured time
+      // to keep fps honest). A 60 fps source sitting at fps≈5 is starved.
+      const elapsedS = prev.lastTickAt ? (now - prev.lastTickAt) / 1000 : 10;
+      const fps = totalDelta > 0 && elapsedS > 0 ? Math.round(totalDelta / elapsedS) : 0;
 
       // WARN path — the <video> element is replaced on rebuild (frame counters
       // reset); a non-positive delta means we crossed a rebuild — just
@@ -558,7 +568,7 @@ export default function InlineVideo({ channelKey, thumbnailUrl, variant = 'colum
           const msg =
             `[InlineVideo:perf] ${channelKey} DROPPED ${droppedDelta}/${totalDelta} ` +
             `in window (decoded=${decoded} speed=${statsRef.current?.speed ?? '?'}KB/s ` +
-            `span=${bufferedSpan.toFixed(1)}s ranges=${bufferedRanges} latency=${latency.toFixed(1)}s q=${reqQuality} ` +
+            `res=${res} fps=${fps} span=${bufferedSpan.toFixed(1)}s ranges=${bufferedRanges} latency=${latency.toFixed(1)}s q=${reqQuality} ` +
             `mainLag=${takeWorstLag()}ms)`;
           // eslint-disable-next-line no-console
           console.warn(msg);
@@ -575,13 +585,14 @@ export default function InlineVideo({ channelKey, thumbnailUrl, variant = 'colum
         frontendLog(
           'info',
           `[InlineVideo:perf] ${channelKey} dropped=${dropped}/${decoded} ` +
-            `span=${bufferedSpan.toFixed(1)}s ranges=${bufferedRanges} latency=${latency.toFixed(1)}s q=${reqQuality} ` +
+            `res=${res} fps=${fps} span=${bufferedSpan.toFixed(1)}s ranges=${bufferedRanges} latency=${latency.toFixed(1)}s q=${reqQuality} ` +
             `mainLag=${takeWorstLag()}ms`,
         ).catch(() => {});
       }
 
       prev.decoded = decoded;
       prev.dropped = dropped;
+      prev.lastTickAt = now;
     }, 10000);
     return () => clearInterval(id);
   }, [phase, channelKey]);
