@@ -18,6 +18,7 @@ import { videoStart, videoStop, launchStream, listenEvent, frontendLog } from '.
 import { usePreferences } from '../hooks/usePreferences.jsx';
 import { usePlayerState } from '../hooks/usePlayerState.js';
 import { enqueuePipelineCreation } from '../utils/videoQueue.js';
+import { takeWorstLag } from '../utils/mainThreadLag.js';
 import Tooltip from './Tooltip.jsx';
 
 const QUALITIES = ['best', '1080p60', '720p60', '720p', '480p'];
@@ -510,10 +511,13 @@ export default function InlineVideo({ channelKey, thumbnailUrl, variant = 'colum
       if (totalDelta > 0 && droppedDelta > totalDelta * 0.05) {
         if (now - prev.lastWarnAt >= 30000) {
           prev.lastWarnAt = now;
+          // mainLag: worst main-thread event-loop lag (window-wide, reset on
+          // read — shared across all videos + the INFO line; see mainThreadLag.js).
           const msg =
             `[InlineVideo:perf] ${channelKey} DROPPED ${droppedDelta}/${totalDelta} ` +
             `in window (decoded=${decoded} speed=${statsRef.current?.speed ?? '?'}KB/s ` +
-            `span=${bufferedSpan.toFixed(1)}s latency=${latency.toFixed(1)}s q=${reqQuality})`;
+            `span=${bufferedSpan.toFixed(1)}s latency=${latency.toFixed(1)}s q=${reqQuality} ` +
+            `mainLag=${takeWorstLag()}ms)`;
           // eslint-disable-next-line no-console
           console.warn(msg);
           frontendLog('warn', msg).catch(() => {});
@@ -524,10 +528,13 @@ export default function InlineVideo({ channelKey, thumbnailUrl, variant = 'colum
       // 10 s tick after mount, since lastInfoAt starts at epoch 0).
       if (now - prev.lastInfoAt >= 60000) {
         prev.lastInfoAt = now;
+        // mainLag: worst main-thread lag since anything last read it (window-
+        // wide, reset on read — see mainThreadLag.js).
         frontendLog(
           'info',
           `[InlineVideo:perf] ${channelKey} dropped=${dropped}/${decoded} ` +
-            `span=${bufferedSpan.toFixed(1)}s latency=${latency.toFixed(1)}s q=${reqQuality}`,
+            `span=${bufferedSpan.toFixed(1)}s latency=${latency.toFixed(1)}s q=${reqQuality} ` +
+            `mainLag=${takeWorstLag()}ms`,
         ).catch(() => {});
       }
 
