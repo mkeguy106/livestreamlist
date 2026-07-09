@@ -15,7 +15,18 @@ pub(crate) enum SessionState {
 }
 
 pub(crate) struct VideoSession {
+    /// The streamlink child's HTTP port (the passthrough's upstream).
     pub(crate) port: u16,
+    /// This session's OWN passthrough listener port (round 6). Each session
+    /// gets a dedicated listener so streams never share a libsoup connection
+    /// pool; the frontend URL is `http://127.0.0.1:{public_port}/video/{key}`.
+    /// 0 until the fill-in in `start()` binds the listener.
+    pub(crate) public_port: u16,
+    /// Handle to this session's `passthrough::serve_session` accept loop.
+    /// Aborted by `kill()` so every session-removal path structurally tears
+    /// the listener down. `None` for the reservation placeholder and in unit
+    /// tests (no listener bound).
+    pub(crate) listener_task: Option<tauri::async_runtime::JoinHandle<()>>,
     /// Incarnation identity. Every session creation (fresh start or
     /// quality-switch placeholder) gets a fresh, monotonically-increasing
     /// generation from `VideoManager::next_generation`. Consumer events and
@@ -42,6 +53,8 @@ impl VideoSession {
     ) -> Self {
         Self {
             port,
+            public_port: 0,
+            listener_task: None,
             generation,
             quality,
             state: SessionState::Starting,
@@ -80,6 +93,13 @@ impl VideoSession {
     }
 
     pub(crate) fn kill(&mut self) {
+        // Abort the per-session passthrough listener first (idempotent; a
+        // no-op when None, e.g. a reservation placeholder or a unit-test
+        // session). This makes listener teardown structural — every removal
+        // path that calls kill() also drops the listener.
+        if let Some(task) = self.listener_task.take() {
+            task.abort();
+        }
         if let Some(child) = self.child.as_mut() {
             let _ = child.kill();
             let _ = child.wait();
@@ -114,6 +134,47 @@ pub(crate) fn oldest_lingering(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Test-owned single-thread runtime (mirrors `chat/mod.rs`'s precedent).
+    /// Deliberately does NOT spawn on `tauri::async_runtime`'s process-global
+    /// runtime — real tasks spawned there from parallel unit tests caused
+    /// intermittent SIGSEGVs at test-binary teardown. The runtime must outlive
+    /// the handles it produced, so the test keeps it alive on the stack.
+    fn test_rt() -> tokio::runtime::Runtime {
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("test runtime")
+    }
+
+    /// kill() aborts a live listener_task (the per-session passthrough accept
+    /// loop). The task is `pending()` so it's still live when kill() runs —
+    /// exercising the real JoinHandle::abort path, not a finished stub. The
+    /// AbortHandle probe is taken before kill() consumes the JoinHandle.
+    #[test]
+    fn kill_aborts_live_listener_task() {
+        let rt = test_rt();
+        let tokio_handle = rt.spawn(async { std::future::pending::<()>().await });
+        let probe = tokio_handle.abort_handle();
+        let mut s = VideoSession::new(9000, "720p60".into(), None, 1);
+        s.listener_task = Some(tauri::async_runtime::JoinHandle::Tokio(tokio_handle));
+        assert!(!probe.is_finished(), "task should be live before kill");
+
+        s.kill();
+        assert!(s.listener_task.is_none(), "kill() takes the handle");
+        // Drive the runtime so the cancellation is processed.
+        rt.block_on(async {
+            for _ in 0..100 {
+                if probe.is_finished() {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        });
+        assert!(probe.is_finished(), "listener task should be aborted");
+
+        // Idempotent: a second kill() on the drained session must not panic.
+        s.kill();
+    }
 
     #[test]
     fn linger_then_reap_after_deadline() {

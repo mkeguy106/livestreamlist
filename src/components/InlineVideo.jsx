@@ -18,6 +18,7 @@ import { videoStart, videoStop, launchStream, listenEvent, frontendLog } from '.
 import { usePreferences } from '../hooks/usePreferences.jsx';
 import { usePlayerState } from '../hooks/usePlayerState.js';
 import { enqueuePipelineCreation } from '../utils/videoQueue.js';
+import { takeWorstLag } from '../utils/mainThreadLag.js';
 import Tooltip from './Tooltip.jsx';
 
 const QUALITIES = ['best', '1080p60', '720p60', '720p', '480p'];
@@ -347,6 +348,34 @@ export default function InlineVideo({ channelKey, thumbnailUrl, variant = 'colum
         const msg = String(e?.message ?? e);
         if (msg.startsWith('cap:')) {
           setPhase('cap');
+        } else if (msg.includes('not ready') && autoRetriesRef.current < 3) {
+          // "video session not ready": a concurrent same-key start hit an
+          // in-flight reservation whose per-session listener isn't bound yet
+          // (round 6 — per-session ports; the primary start finishes wiring
+          // within ms). Pre-round-6 the shared listener made this self-resolve
+          // invisibly (the returned URL just 404'd briefly); now the duplicate
+          // start rejects, so route it through the same auto-retry
+          // backoff/budget as the pre-first-frame NetworkError path instead of
+          // alarming the user with the error chip + manual Retry. Phase stays
+          // 'starting' (set at the top of this function).
+          const attempt = autoRetriesRef.current;
+          autoRetriesRef.current += 1;
+          const backoff = [500, 1000, 2000][attempt] ?? 2000;
+          console.warn(
+            `[InlineVideo] session not ready (start raced an in-flight reservation); ` +
+              `auto-retry ${attempt + 1}/3 in ${backoff}ms`,
+          );
+          // Claim a fresh incarnation NOW, at scheduling time — the file's
+          // rule: anything newer (unmount, channel switch, manual retry,
+          // terminal Rust event) bumps gen and cancels this pending retry.
+          const retryGen = ++genRef.current;
+          setTimeout(() => {
+            if (genRef.current !== retryGen) return;
+            // Re-run with the SAME override the failed call used (explicit
+            // pick or resolved column default) so the retry requests the
+            // identical session.
+            startSessionRef.current?.(retryGen, qualityOverride);
+          }, backoff);
         } else {
           setErrMsg(msg);
           setPhase('error');
@@ -510,10 +539,13 @@ export default function InlineVideo({ channelKey, thumbnailUrl, variant = 'colum
       if (totalDelta > 0 && droppedDelta > totalDelta * 0.05) {
         if (now - prev.lastWarnAt >= 30000) {
           prev.lastWarnAt = now;
+          // mainLag: worst main-thread event-loop lag (window-wide, reset on
+          // read — shared across all videos + the INFO line; see mainThreadLag.js).
           const msg =
             `[InlineVideo:perf] ${channelKey} DROPPED ${droppedDelta}/${totalDelta} ` +
             `in window (decoded=${decoded} speed=${statsRef.current?.speed ?? '?'}KB/s ` +
-            `span=${bufferedSpan.toFixed(1)}s latency=${latency.toFixed(1)}s q=${reqQuality})`;
+            `span=${bufferedSpan.toFixed(1)}s latency=${latency.toFixed(1)}s q=${reqQuality} ` +
+            `mainLag=${takeWorstLag()}ms)`;
           // eslint-disable-next-line no-console
           console.warn(msg);
           frontendLog('warn', msg).catch(() => {});
@@ -524,10 +556,13 @@ export default function InlineVideo({ channelKey, thumbnailUrl, variant = 'colum
       // 10 s tick after mount, since lastInfoAt starts at epoch 0).
       if (now - prev.lastInfoAt >= 60000) {
         prev.lastInfoAt = now;
+        // mainLag: worst main-thread lag since anything last read it (window-
+        // wide, reset on read — see mainThreadLag.js).
         frontendLog(
           'info',
           `[InlineVideo:perf] ${channelKey} dropped=${dropped}/${decoded} ` +
-            `span=${bufferedSpan.toFixed(1)}s latency=${latency.toFixed(1)}s q=${reqQuality}`,
+            `span=${bufferedSpan.toFixed(1)}s latency=${latency.toFixed(1)}s q=${reqQuality} ` +
+            `mainLag=${takeWorstLag()}ms`,
         ).catch(() => {});
       }
 
