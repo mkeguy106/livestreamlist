@@ -175,7 +175,7 @@ Event: `mpv:status:{uniqueKey}` `{ state: "starting"|"playing"|"ended"|"error", 
 - **Modal occlusion:** mpv surfaces join the existing `modalOpen →
   set_visible(false)` set so no React popup renders behind a video.
 - **Cap:** `max_concurrent` still applies as a safety valve; because mpv scales
-  (nvdec), the default can be raised in slice C after measuring real headroom.
+  (nvdec), the default can be raised in slice B after measuring real headroom.
 
 ## Platform matrix
 
@@ -187,15 +187,16 @@ Event: `mpv:status:{uniqueKey}` `{ state: "starting"|"playing"|"ended"|"error", 
 
 ## PR slicing (each its own plan → build)
 
-1. **A — mpv engine (Linux):** `mpv.rs`, `EmbedHost` Mpv variant, `mpv_*` IPC,
-   VideoManager direct-URL. Unit tests + live smoke: mount one mpv embed, play,
-   control, tear down clean, reap on exit. Not yet wired to real columns.
-2. **B — Columns frontend (Linux):** `VideoPanel` backend selection, mpv slot,
-   occlusion control strip, poster/loading/error states, wired into `ColumnView`.
-3. **C — Focus + robustness:** Focus mpv slot, crash/auto-retry, modal
-   occlusion, cap tuning.
-4. **D — Windows:** HWND surface + Windows vo. Builds; ships unverified.
-5. **E — retire mpegts on Linux/Win:** switch those platforms fully to mpv, keep
+1. **A — mpv engine + Columns (Linux):** the full working path in one slice —
+   `mpv.rs`, `EmbedHost` Mpv variant, `mpv_*` IPC, VideoManager direct-URL, AND
+   the frontend `VideoPanel` backend selection, EmbedSlot-based mpv slot,
+   occlusion control strip, and poster/loading/error states wired into
+   `ColumnView`. Ships as real, hardware-decoded inline video in the Columns
+   layout on Linux — verifiable end-to-end in daily use.
+2. **B — Focus + robustness:** Focus mpv slot, crash/auto-retry, modal
+   occlusion, cap tuning for the higher headroom.
+3. **C — Windows:** HWND surface + Windows vo. Builds; ships unverified.
+4. **D — retire mpegts on Linux/Win:** switch those platforms fully to mpv, keep
    mpegts as the macOS-only path, drop the now-unused CORS passthrough there.
 
 ## Testing
@@ -212,7 +213,7 @@ Event: `mpv:status:{uniqueKey}` `{ state: "starting"|"playing"|"ended"|"error", 
 
 ## Out of scope / deferred
 
-- Windows verification (no test hardware) — ships best-effort in slice D.
+- Windows verification (no test hardware) — ships best-effort in slice C.
 - macOS mpv (no foreign-window embedding) — stays on mpegts permanently.
 - mpv OSC / power-user keybinds (controls are the app's DOM strip).
 - Recording, PiP, per-column audio-device routing.
@@ -221,7 +222,7 @@ Event: `mpv:status:{uniqueKey}` `{ state: "starting"|"playing"|"ended"|"error", 
 ## Open questions
 
 - Windows `--wid` child-HWND creation inside wry's window + the correct Windows
-  vo (`gpu` vs `gpu-next` vs `d3d11`) is unverified; slice D must spike it before
+  vo (`gpu` vs `gpu-next` vs `d3d11`) is unverified; slice C must spike it before
   committing, mirroring how slice A's Linux path was spiked.
 - Whether the occlusion-on-hover control feel is acceptable in daily use or
-  needs the video to stay live during volume drags — revisit after slice B smoke.
+  needs the video to stay live during volume drags — revisit after slice A smoke.
