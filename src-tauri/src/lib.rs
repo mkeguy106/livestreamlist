@@ -9,6 +9,8 @@ mod chat;
 mod config;
 mod embed;
 mod login_popup;
+#[cfg(target_os = "linux")]
+mod mpv;
 mod notify;
 mod platforms;
 mod player;
