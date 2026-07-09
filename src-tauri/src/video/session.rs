@@ -15,7 +15,18 @@ pub(crate) enum SessionState {
 }
 
 pub(crate) struct VideoSession {
+    /// The streamlink child's HTTP port (the passthrough's upstream).
     pub(crate) port: u16,
+    /// This session's OWN passthrough listener port (round 6). Each session
+    /// gets a dedicated listener so streams never share a libsoup connection
+    /// pool; the frontend URL is `http://127.0.0.1:{public_port}/video/{key}`.
+    /// 0 until the fill-in in `start()` binds the listener.
+    pub(crate) public_port: u16,
+    /// Handle to this session's `passthrough::serve_session` accept loop.
+    /// Aborted by `kill()` so every session-removal path structurally tears
+    /// the listener down. `None` for the reservation placeholder and in unit
+    /// tests (no listener bound).
+    pub(crate) listener_task: Option<tauri::async_runtime::JoinHandle<()>>,
     /// Incarnation identity. Every session creation (fresh start or
     /// quality-switch placeholder) gets a fresh, monotonically-increasing
     /// generation from `VideoManager::next_generation`. Consumer events and
@@ -42,6 +53,8 @@ impl VideoSession {
     ) -> Self {
         Self {
             port,
+            public_port: 0,
+            listener_task: None,
             generation,
             quality,
             state: SessionState::Starting,
@@ -80,6 +93,13 @@ impl VideoSession {
     }
 
     pub(crate) fn kill(&mut self) {
+        // Abort the per-session passthrough listener first (idempotent; a
+        // no-op when None, e.g. a reservation placeholder or a unit-test
+        // session). This makes listener teardown structural — every removal
+        // path that calls kill() also drops the listener.
+        if let Some(task) = self.listener_task.take() {
+            task.abort();
+        }
         if let Some(child) = self.child.as_mut() {
             let _ = child.kill();
             let _ = child.wait();

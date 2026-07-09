@@ -1,10 +1,12 @@
 //! Inline-video session management (Phase 6 slice 2).
 //!
 //! One streamlink child per playing channel serving MPEG-TS over a localhost
-//! port; a single CORS passthrough (passthrough.rs) bridges those ports to
-//! the webview. See docs/superpowers/specs/2026-07-08-inline-video-slice2-design.md
-//! and the spike doc it cites for the WebKitGTK MSE constraints this design
-//! works around.
+//! port; each session gets its OWN CORS passthrough listener (passthrough.rs)
+//! bridging that port to the webview (round 6 — per-session listener ports so
+//! streams never share a libsoup connection pool; see passthrough.rs's header).
+//! See docs/superpowers/specs/2026-07-08-inline-video-slice2-design.md and the
+//! spike doc it cites for the WebKitGTK MSE constraints this design works
+//! around.
 
 pub(crate) mod passthrough;
 pub(crate) mod session;
@@ -21,7 +23,7 @@ use parking_lot::Mutex;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 
-use passthrough::{ConsumerEvent, PortMap};
+use passthrough::ConsumerEvent;
 use session::VideoSession;
 
 const READINESS_TIMEOUT: Duration = Duration::from_secs(15);
@@ -38,13 +40,11 @@ pub struct VideoStatusEvent {
 pub struct VideoManager {
     app: AppHandle,
     sessions: Mutex<HashMap<String, VideoSession>>,
-    ports: PortMap,
     /// Monotonic source of incarnation identities. Every session creation
     /// (fresh start AND quality-switch placeholder) claims one via
     /// `fetch_add`, so stale consumer events / readiness teardown from a
     /// replaced incarnation under the same key can be recognized and ignored.
     next_generation: AtomicU64,
-    passthrough_port: std::sync::OnceLock<u16>,
     events_tx: tokio::sync::mpsc::UnboundedSender<ConsumerEvent>,
     /// Taken exactly once by run_background's reaper.
     events_rx: Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<ConsumerEvent>>>,
@@ -56,34 +56,17 @@ impl VideoManager {
         Self {
             app,
             sessions: Mutex::new(HashMap::new()),
-            ports: Arc::new(Mutex::new(HashMap::new())),
             next_generation: AtomicU64::new(1),
-            passthrough_port: std::sync::OnceLock::new(),
             events_tx: tx,
             events_rx: Mutex::new(Some(rx)),
         }
     }
 
-    /// Bind the passthrough listener and spawn the serve + reaper tasks.
-    /// Called once from run()'s setup via tauri::async_runtime::spawn.
+    /// Run the consumer-event reaper + periodic sweep loop. Called once from
+    /// run()'s setup via tauri::async_runtime::spawn. There is no longer a
+    /// shared passthrough listener to bind here — each session binds its own
+    /// listener in `start()` (round 6, per-session ports).
     pub async fn run_background(self: Arc<Self>) {
-        let listener = match tokio::net::TcpListener::bind("127.0.0.1:0").await {
-            Ok(l) => l,
-            Err(e) => {
-                log::error!("video passthrough bind failed: {e}");
-                return;
-            }
-        };
-        let port = listener.local_addr().map(|a| a.port()).unwrap_or(0);
-        let _ = self.passthrough_port.set(port);
-        log::info!("video passthrough listening on 127.0.0.1:{port}");
-
-        tauri::async_runtime::spawn(passthrough::serve(
-            listener,
-            Arc::clone(&self.ports),
-            self.events_tx.clone(),
-        ));
-
         let mut rx = self
             .events_rx
             .lock()
@@ -169,7 +152,6 @@ impl VideoManager {
                 }
             };
             if let Some(mut s) = taken {
-                self.remove_port_if_generation(&key, gen);
                 s.kill();
                 self.emit(&key, "ended", None);
             }
@@ -190,7 +172,6 @@ impl VideoManager {
                 }
             };
             if let Some(mut s) = taken {
-                self.remove_port_if_generation(&key, gen);
                 s.kill();
                 self.emit(&key, "error", Some("streamlink exited unexpectedly"));
             }
@@ -235,16 +216,24 @@ impl VideoManager {
                 if s.quality == quality {
                     if s.child.is_some() {
                         // A real, running (or lingering) session: resume it —
-                        // cancel any linger, dedupe the start.
+                        // cancel any linger, dedupe the start. Its listener is
+                        // already bound (fill-in set `public_port`), so the URL
+                        // is live.
                         s.mark_serving();
                     }
                     // else: an in-flight reservation placeholder (child None)
                     // owned by a concurrent primary start() at the same
-                    // quality. Do NOT mutate its state — that start() will
-                    // finish the wiring, and url_for(key) becomes valid the
-                    // moment it registers the port. Returning the URL now is
-                    // safe (the fetch just 404s briefly until registration).
-                    return self.url_for(unique_key);
+                    // quality. Its listener isn't bound yet (public_port == 0),
+                    // so we can't hand back a live URL — report not-ready and
+                    // let the caller retry once the primary finishes wiring.
+                    // (Formatted inline: we already hold `sessions`, and
+                    // `url_for` would re-lock it — parking_lot is not
+                    // reentrant, so calling it here would deadlock.)
+                    let port = s.public_port;
+                    if port == 0 {
+                        bail!("video session not ready");
+                    }
+                    return Ok(passthrough_url(port, unique_key));
                 }
             }
             // Cap check ignores the same-key session we're about to replace,
@@ -269,18 +258,15 @@ impl VideoManager {
                         let s = sessions
                             .remove(&victim)
                             .expect("oldest_lingering returned a present key");
-                        self.ports.lock().remove(&victim);
                         evicted = Some((victim, s));
                     }
                     None => bail!("cap: max simultaneous videos ({max_concurrent}) reached"),
                 }
             }
             // Quality change: pull the old session out; killed after the lock
-            // drops (never kill while holding the sessions lock).
+            // drops (never kill while holding the sessions lock). Its
+            // per-session listener is aborted by that kill().
             let stale = sessions.remove(unique_key);
-            if stale.is_some() {
-                self.ports.lock().remove(unique_key);
-            }
             // Claim a fresh incarnation identity for this placeholder. Every
             // later touch of "our" session (fill-in, readiness, teardown) and
             // every consumer event is matched against `gen`, so the old
@@ -347,12 +333,46 @@ impl VideoManager {
             }
         };
 
-        // Fill the reserved slot. If it vanished OR was replaced by a newer
-        // incarnation (concurrent stop() or quality switch), the winner owns
-        // the slot now — clean up the just-spawned child and bail silently.
-        // (A quality switch's stale-kill already reaped our child by killing
-        // the placeholder-turned-session it removed, but we may hold a fresh
-        // one it never saw, so kill defensively.)
+        // Bind this session's OWN passthrough listener (round 6). Each session
+        // gets a dedicated origin port so streams never share a libsoup
+        // connection pool. Bind OUTSIDE the sessions lock — never hold the
+        // parking_lot mutex across an async bind. The listener may start
+        // accepting before streamlink is confirmed ready; a fetch that races
+        // ahead just 502s (handle_conn's upstream connect fails) until the
+        // child is up, exactly like the old port-registered-before-readiness
+        // timing.
+        let (public_port, listener_task) = match tokio::net::TcpListener::bind("127.0.0.1:0").await
+        {
+            Ok(listener) => {
+                let pub_port = listener.local_addr().map(|a| a.port()).unwrap_or(0);
+                let task = tauri::async_runtime::spawn(passthrough::serve_session(
+                    listener,
+                    unique_key.to_string(),
+                    gen,
+                    port,
+                    self.events_tx.clone(),
+                ));
+                (pub_port, task)
+            }
+            Err(e) => {
+                // Couldn't bind the listener — release our reservation (if
+                // still ours) and reap the just-spawned child.
+                self.remove_session_if_generation(unique_key, gen);
+                let mut child = child;
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(anyhow!("binding video passthrough listener: {e}"));
+            }
+        };
+
+        // Fill the reserved slot with the child + this session's listener. If
+        // it vanished OR was replaced by a newer incarnation (concurrent
+        // stop() or quality switch), the winner owns the slot now — clean up
+        // the just-spawned child AND abort our orphaned listener, then bail
+        // silently. (A quality switch's stale-kill already reaped our child by
+        // killing the placeholder-turned-session it removed, but we may hold a
+        // fresh one it never saw, so kill defensively; the listener it removed
+        // had no task yet, so ours is orphaned and must be aborted here.)
         {
             let mut sessions = self.sessions.lock();
             let ours = matches!(sessions.get(unique_key), Some(s) if s.generation == gen);
@@ -360,17 +380,17 @@ impl VideoManager {
                 let s = sessions.get_mut(unique_key).expect("checked present");
                 s.port = port;
                 s.child = Some(child);
+                s.public_port = public_port;
+                s.listener_task = Some(listener_task);
             } else {
                 drop(sessions);
+                listener_task.abort();
                 let mut child = child;
                 let _ = child.kill();
                 let _ = child.wait();
                 bail!("stopped before ready");
             }
         }
-        self.ports
-            .lock()
-            .insert(unique_key.to_string(), (port, gen));
         self.emit(unique_key, "starting", None);
 
         // Readiness: poll the session port. No sessions lock held across awaits.
@@ -452,17 +472,15 @@ impl VideoManager {
     /// channel alive, a cycle that pins the strong count above zero. Called
     /// from run()'s `RunEvent::Exit`. No event emissions — the app is going.
     pub fn stop_all(&self) {
-        for mut s in drain_all_sessions(&self.sessions, &self.ports) {
+        for mut s in drain_all_sessions(&self.sessions) {
             s.kill();
         }
     }
 
     /// Unconditional removal — targets whatever session currently holds the
     /// key. Used by `stop()` (user intent is "stop what's playing now",
-    /// regardless of incarnation). Removes the ports entry too (it always
-    /// belongs to the current session).
+    /// regardless of incarnation). `kill()` aborts the session's listener.
     fn remove_session(&self, unique_key: &str) -> bool {
-        self.ports.lock().remove(unique_key);
         // Take the session out into a local so the lock guard (a temporary
         // that would otherwise live for a whole match) drops before kill().
         let taken = self.sessions.lock().remove(unique_key);
@@ -479,7 +497,7 @@ impl VideoManager {
     /// carries `gen`. The readiness failure paths (spawn failure, child death,
     /// timeout) use this so a slow teardown can never destroy a successor
     /// incarnation that replaced ours under the same key. Returns whether a
-    /// session was removed.
+    /// session was removed. `kill()` aborts the session's listener.
     fn remove_session_if_generation(&self, unique_key: &str, gen: u64) -> bool {
         let taken = {
             let mut sessions = self.sessions.lock();
@@ -490,7 +508,6 @@ impl VideoManager {
         };
         match taken {
             Some(mut s) => {
-                self.remove_port_if_generation(unique_key, gen);
                 s.kill();
                 true
             }
@@ -498,22 +515,23 @@ impl VideoManager {
         }
     }
 
-    /// Remove the ports entry for `unique_key` only if it belongs to `gen` —
-    /// guards against clobbering a successor incarnation's freshly-registered
-    /// port during a generation-guarded session teardown.
-    fn remove_port_if_generation(&self, unique_key: &str, gen: u64) {
-        let mut ports = self.ports.lock();
-        if ports.get(unique_key).map(|&(_, g)| g) == Some(gen) {
-            ports.remove(unique_key);
-        }
-    }
-
+    /// The per-session passthrough URL. Reads `public_port` from the live
+    /// session (round 6 — each session has its own listener). Errors if the
+    /// session is gone or its listener isn't bound yet (`public_port == 0`).
+    /// Callers must NOT hold the sessions lock (this re-acquires it — parking_lot
+    /// is not reentrant); the resume path formats the URL inline instead.
     fn url_for(&self, unique_key: &str) -> anyhow::Result<String> {
-        let port = self
-            .passthrough_port
-            .get()
-            .ok_or_else(|| anyhow!("video passthrough not started"))?;
-        Ok(format!("http://127.0.0.1:{port}/video/{unique_key}"))
+        let port = {
+            let sessions = self.sessions.lock();
+            let s = sessions
+                .get(unique_key)
+                .ok_or_else(|| anyhow!("no video session for {unique_key}"))?;
+            s.public_port
+        };
+        if port == 0 {
+            bail!("video session not ready");
+        }
+        Ok(passthrough_url(port, unique_key))
     }
 
     fn linger_duration(&self) -> Duration {
@@ -533,17 +551,17 @@ impl VideoManager {
     }
 }
 
-/// Drain every session out of the maps, returning the children for the caller
-/// to kill after the guards drop (never kill while holding the sessions lock).
-/// Also clears the ports map. Pure over the two maps (no AppHandle), so
+/// The per-session passthrough URL for a given listener port + key.
+fn passthrough_url(public_port: u16, unique_key: &str) -> String {
+    format!("http://127.0.0.1:{public_port}/video/{unique_key}")
+}
+
+/// Drain every session out of the map, returning the sessions for the caller
+/// to kill after the guard drops (never kill while holding the sessions lock;
+/// kill() aborts each session's listener). Pure over the map (no AppHandle), so
 /// `stop_all`'s draining is unit-testable without a running Tauri app.
-fn drain_all_sessions(
-    sessions: &Mutex<HashMap<String, VideoSession>>,
-    ports: &PortMap,
-) -> Vec<VideoSession> {
-    let drained: Vec<VideoSession> = sessions.lock().drain().map(|(_, s)| s).collect();
-    ports.lock().clear();
-    drained
+fn drain_all_sessions(sessions: &Mutex<HashMap<String, VideoSession>>) -> Vec<VideoSession> {
+    sessions.lock().drain().map(|(_, s)| s).collect()
 }
 
 /// Readiness probe for a freshly-spawned streamlink child's HTTP port.
@@ -609,21 +627,19 @@ impl Drop for VideoManager {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
-    use std::sync::Arc;
 
     use parking_lot::Mutex;
 
     use super::drain_all_sessions;
-    use super::passthrough::PortMap;
+    use super::passthrough_url;
     use super::session::VideoSession;
 
     #[test]
     fn stop_all_drains_sessions() {
-        // stop_all's core over the maps: two child-None sessions vanish and
-        // the ports map is cleared. (child None => kill() is a no-op, so this
-        // exercises the drain path without spawning streamlink.)
+        // stop_all's core over the map: two child-None sessions vanish.
+        // (child None + listener_task None => kill() is a no-op, so this
+        // exercises the drain path without spawning streamlink or a listener.)
         let sessions: Mutex<HashMap<String, VideoSession>> = Mutex::new(HashMap::new());
-        let ports: PortMap = Arc::new(Mutex::new(HashMap::new()));
         {
             let mut g = sessions.lock();
             g.insert(
@@ -635,16 +651,22 @@ mod tests {
                 VideoSession::new(9002, "480p".into(), None, 2),
             );
         }
-        ports.lock().insert("twitch:a".to_string(), (9001, 1));
-        ports.lock().insert("twitch:b".to_string(), (9002, 2));
 
-        let drained = drain_all_sessions(&sessions, &ports);
+        let drained = drain_all_sessions(&sessions);
         for mut s in drained {
             s.kill();
         }
 
         assert!(sessions.lock().is_empty(), "sessions map should be empty");
-        assert!(ports.lock().is_empty(), "ports map should be empty");
+    }
+
+    #[test]
+    fn passthrough_url_is_per_session() {
+        // The URL embeds the session's own listener port (not a shared one).
+        assert_eq!(
+            passthrough_url(54321, "twitch:gems"),
+            "http://127.0.0.1:54321/video/twitch:gems"
+        );
     }
 
     /// The passive readiness parser recognizes a loopback LISTEN row for the

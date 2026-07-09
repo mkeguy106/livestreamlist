@@ -1,25 +1,27 @@
 //! Localhost CORS passthrough. The webview cannot fetch streamlink's HTTP
 //! server directly (it sends no Access-Control-Allow-Origin header —
-//! spike-verified), so one app-owned listener proxies
-//! `GET /video/{unique_key}` to the session's streamlink port, injecting the
-//! ACAO header and streaming MPEG-TS bytes through unbuffered.
+//! spike-verified), so an app-owned listener proxies `GET /video/{unique_key}`
+//! to the session's streamlink port, injecting the ACAO header and streaming
+//! MPEG-TS bytes through unbuffered.
+//!
+//! **One listener per session** (round 6). WebKitGTK's libsoup caps concurrent
+//! connections at ~6 per (scheme, host, port). When every stream shared a
+//! single passthrough origin, six live videos pinned the whole pool with
+//! long-lived streaming fetches — a watchdog rebuild's new fetch then queued
+//! behind a dying connection and starved ("playback pipeline stalled
+//! repeatedly"). Giving each session its OWN listener port means no two streams
+//! ever share a connection pool, so a rebuild's fetch always has headroom. As a
+//! result this server is session-scoped: `serve_session` is spawned per session
+//! with the (key, generation, upstream_port) it proxies fixed for its whole
+//! life — there is no port map to look up.
 //!
 //! Deliberately hand-rolled minimal HTTP: one route, GET only,
 //! connection-close streaming semantics (matching streamlink's own server).
 //! No preflight handling needed — the page issues a simple GET.
 
-use std::collections::HashMap;
-use std::sync::Arc;
-
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc::UnboundedSender;
-
-/// unique_key -> (streamlink session port, incarnation generation). Written by
-/// VideoManager. The generation is captured at connection time and echoed on
-/// the consumer events so the manager can drop events belonging to an
-/// incarnation that was replaced (quality switch) under the same key.
-pub(crate) type PortMap = Arc<parking_lot::Mutex<HashMap<String, (u16, u64)>>>;
 
 /// Consumer lifecycle notifications, keyed by unique_key and tagged with the
 /// incarnation generation the connection was serving. The manager's background
@@ -34,9 +36,16 @@ pub(crate) enum ConsumerEvent {
     Dropped { key: String, generation: u64 },
 }
 
-pub(crate) async fn serve(
+/// Accept loop for ONE session's dedicated listener. No port-map lookup: the
+/// listener serves exactly this `key`/`generation` proxying to `upstream_port`
+/// for its entire life. Aborted (via the session's `listener_task` JoinHandle)
+/// when the session is torn down. The 100 ms error backoff matches the old
+/// shared `serve`.
+pub(crate) async fn serve_session(
     listener: TcpListener,
-    ports: PortMap,
+    key: String,
+    generation: u64,
+    upstream_port: u16,
     events: UnboundedSender<ConsumerEvent>,
 ) {
     loop {
@@ -48,17 +57,19 @@ pub(crate) async fn serve(
                 continue;
             }
         };
-        let ports = Arc::clone(&ports);
+        let key = key.clone();
         let events = events.clone();
         tauri::async_runtime::spawn(async move {
-            let _ = handle_conn(client, ports, events).await;
+            let _ = handle_conn(client, key, generation, upstream_port, events).await;
         });
     }
 }
 
 async fn handle_conn(
     mut client: TcpStream,
-    ports: PortMap,
+    key: String,
+    generation: u64,
+    upstream_port: u16,
     events: UnboundedSender<ConsumerEvent>,
 ) -> std::io::Result<()> {
     // ── Request head (bounded: request line + a few headers) ──
@@ -81,17 +92,15 @@ async fn handle_conn(
     if method != "GET" {
         return respond(&mut client, "405 Method Not Allowed").await;
     }
-    // unique_keys contain ':' which is a legal path character — no decoding.
-    let Some(key) = path.strip_prefix("/video/") else {
+    // The listener is session-scoped, so the path's key suffix is decorative:
+    // require the `/video/` prefix but tolerate any suffix (the real key comes
+    // from `serve_session`, not the URL).
+    if !path.starts_with("/video/") {
         return respond(&mut client, "404 Not Found").await;
-    };
-    let entry = ports.lock().get(key).copied();
-    let Some((port, generation)) = entry else {
-        return respond(&mut client, "404 Not Found").await;
-    };
+    }
 
     // ── Upstream request ──
-    let mut upstream = match TcpStream::connect(("127.0.0.1", port)).await {
+    let mut upstream = match TcpStream::connect(("127.0.0.1", upstream_port)).await {
         Ok(s) => s,
         Err(_) => return respond(&mut client, "502 Bad Gateway").await,
     };
@@ -123,7 +132,6 @@ async fn handle_conn(
     client.write_all(&uhead[head_end + 4..]).await?;
 
     // ── Streaming phase: consumer is officially attached ──
-    let key = key.to_string();
     let _ = events.send(ConsumerEvent::Connected {
         key: key.clone(),
         generation,
@@ -149,11 +157,13 @@ mod tests {
     use super::*;
     use std::io::{Read, Write};
 
-    /// Full loopback: fake upstream (std thread) -> passthrough -> std client.
-    /// The server side runs on tauri's global async runtime; the client and
-    /// fake upstream are std blocking I/O so no test-runtime juggling.
+    /// Full loopback: fake upstream (std thread) -> session-scoped passthrough
+    /// -> std client. The server side runs on tauri's global async runtime; the
+    /// client and fake upstream are std blocking I/O so no test-runtime
+    /// juggling. `serve_session` is spawned with the fixed (key, generation,
+    /// upstream_port) — no port registration.
     #[test]
-    fn injects_acao_and_reports_consumer_lifecycle() {
+    fn serve_session_injects_acao_and_reports_consumer_lifecycle() {
         // Fake upstream mimicking streamlink's response shape.
         let upstream = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let upstream_port = upstream.local_addr().unwrap().port();
@@ -168,18 +178,19 @@ mod tests {
             // connection closes on drop -> passthrough sees EOF
         });
 
-        let ports: PortMap = Arc::new(parking_lot::Mutex::new(HashMap::new()));
-        // Register with a nonzero generation; the events must round-trip it.
-        ports
-            .lock()
-            .insert("twitch:test".into(), (upstream_port, 7));
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-
         let listener = tauri::async_runtime::block_on(async {
             TcpListener::bind("127.0.0.1:0").await.unwrap()
         });
         let pass_port = listener.local_addr().unwrap().port();
-        tauri::async_runtime::spawn(serve(listener, Arc::clone(&ports), tx));
+        // Nonzero generation; the events must round-trip it verbatim.
+        tauri::async_runtime::spawn(serve_session(
+            listener,
+            "twitch:test".into(),
+            7,
+            upstream_port,
+            tx,
+        ));
 
         let mut client = std::net::TcpStream::connect(("127.0.0.1", pass_port)).unwrap();
         client
@@ -208,27 +219,28 @@ mod tests {
     }
 
     #[test]
-    fn unknown_key_404s_and_post_405s() {
-        let ports: PortMap = Arc::new(parking_lot::Mutex::new(HashMap::new()));
+    fn non_video_path_404s_and_post_405s() {
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
         let listener = tauri::async_runtime::block_on(async {
             TcpListener::bind("127.0.0.1:0").await.unwrap()
         });
         let pass_port = listener.local_addr().unwrap().port();
-        tauri::async_runtime::spawn(serve(listener, ports, tx));
+        // Upstream port is irrelevant — 404/405 short-circuit before connecting.
+        tauri::async_runtime::spawn(serve_session(listener, "twitch:x".into(), 1, 1, tx));
 
+        // A path outside /video/ -> 404 (prefix required).
         let mut c1 = std::net::TcpStream::connect(("127.0.0.1", pass_port)).unwrap();
-        c1.write_all(b"GET /video/twitch:nope HTTP/1.1\r\n\r\n")
-            .unwrap();
+        c1.write_all(b"GET /nope HTTP/1.1\r\n\r\n").unwrap();
         let mut r1 = String::new();
         c1.read_to_string(&mut r1).unwrap();
-        assert!(r1.starts_with("HTTP/1.1 404"));
+        assert!(r1.starts_with("HTTP/1.1 404"), "got: {r1}");
 
+        // POST is rejected before the path is even considered.
         let mut c2 = std::net::TcpStream::connect(("127.0.0.1", pass_port)).unwrap();
         c2.write_all(b"POST /video/twitch:x HTTP/1.1\r\n\r\n")
             .unwrap();
         let mut r2 = String::new();
         c2.read_to_string(&mut r2).unwrap();
-        assert!(r2.starts_with("HTTP/1.1 405"));
+        assert!(r2.starts_with("HTTP/1.1 405"), "got: {r2}");
     }
 }
