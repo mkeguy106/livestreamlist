@@ -135,6 +135,47 @@ pub(crate) fn oldest_lingering(
 mod tests {
     use super::*;
 
+    /// Test-owned single-thread runtime (mirrors `chat/mod.rs`'s precedent).
+    /// Deliberately does NOT spawn on `tauri::async_runtime`'s process-global
+    /// runtime — real tasks spawned there from parallel unit tests caused
+    /// intermittent SIGSEGVs at test-binary teardown. The runtime must outlive
+    /// the handles it produced, so the test keeps it alive on the stack.
+    fn test_rt() -> tokio::runtime::Runtime {
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("test runtime")
+    }
+
+    /// kill() aborts a live listener_task (the per-session passthrough accept
+    /// loop). The task is `pending()` so it's still live when kill() runs —
+    /// exercising the real JoinHandle::abort path, not a finished stub. The
+    /// AbortHandle probe is taken before kill() consumes the JoinHandle.
+    #[test]
+    fn kill_aborts_live_listener_task() {
+        let rt = test_rt();
+        let tokio_handle = rt.spawn(async { std::future::pending::<()>().await });
+        let probe = tokio_handle.abort_handle();
+        let mut s = VideoSession::new(9000, "720p60".into(), None, 1);
+        s.listener_task = Some(tauri::async_runtime::JoinHandle::Tokio(tokio_handle));
+        assert!(!probe.is_finished(), "task should be live before kill");
+
+        s.kill();
+        assert!(s.listener_task.is_none(), "kill() takes the handle");
+        // Drive the runtime so the cancellation is processed.
+        rt.block_on(async {
+            for _ in 0..100 {
+                if probe.is_finished() {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        });
+        assert!(probe.is_finished(), "listener task should be aborted");
+
+        // Idempotent: a second kill() on the drained session must not panic.
+        s.kill();
+    }
+
     #[test]
     fn linger_then_reap_after_deadline() {
         let mut s = VideoSession::new(9000, "720p60".into(), None, 42);

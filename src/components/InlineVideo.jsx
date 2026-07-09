@@ -348,6 +348,34 @@ export default function InlineVideo({ channelKey, thumbnailUrl, variant = 'colum
         const msg = String(e?.message ?? e);
         if (msg.startsWith('cap:')) {
           setPhase('cap');
+        } else if (msg.includes('not ready') && autoRetriesRef.current < 3) {
+          // "video session not ready": a concurrent same-key start hit an
+          // in-flight reservation whose per-session listener isn't bound yet
+          // (round 6 — per-session ports; the primary start finishes wiring
+          // within ms). Pre-round-6 the shared listener made this self-resolve
+          // invisibly (the returned URL just 404'd briefly); now the duplicate
+          // start rejects, so route it through the same auto-retry
+          // backoff/budget as the pre-first-frame NetworkError path instead of
+          // alarming the user with the error chip + manual Retry. Phase stays
+          // 'starting' (set at the top of this function).
+          const attempt = autoRetriesRef.current;
+          autoRetriesRef.current += 1;
+          const backoff = [500, 1000, 2000][attempt] ?? 2000;
+          console.warn(
+            `[InlineVideo] session not ready (start raced an in-flight reservation); ` +
+              `auto-retry ${attempt + 1}/3 in ${backoff}ms`,
+          );
+          // Claim a fresh incarnation NOW, at scheduling time — the file's
+          // rule: anything newer (unmount, channel switch, manual retry,
+          // terminal Rust event) bumps gen and cancels this pending retry.
+          const retryGen = ++genRef.current;
+          setTimeout(() => {
+            if (genRef.current !== retryGen) return;
+            // Re-run with the SAME override the failed call used (explicit
+            // pick or resolved column default) so the retry requests the
+            // identical session.
+            startSessionRef.current?.(retryGen, qualityOverride);
+          }, backoff);
         } else {
           setErrMsg(msg);
           setPhase('error');
