@@ -1927,18 +1927,22 @@ fn open_in_browser(unique_key: String, state: State<'_, AppState>) -> Result<(),
 
 /// Linux-specific runtime workarounds, applied before Tauri boots.
 ///
-/// 1. `WEBKIT_DISABLE_DMABUF_RENDERER=1` — historically forced ON because
-///    WebKitGTK on NVIDIA + Wayland (KDE Plasma) once crashed with "Error 71
-///    (Protocol error) dispatching to Wayland display" when the DMABUF
-///    renderer was enabled. As of round 4 the `video.dmabuf_renderer` setting
-///    **defaults true** (renderer ON) — the inline-video spike
+/// 1. `WEBKIT_DISABLE_DMABUF_RENDERER=1` — set by default because WebKitGTK
+///    on NVIDIA + Wayland (KDE Plasma) crashes to a fully BLACK WINDOW when
+///    the DMABUF renderer is enabled. Round 4 flipped `video.dmabuf_renderer`
+///    to default-true off a bare-window spike
 ///    (`docs/superpowers/spikes/2026-07-07-inline-video-playback-spike.md`)
-///    measured ~4x cheaper video painting with it enabled and no crash on
-///    WebKit 2.52, and video decode needs the paint headroom. So we now set
-///    the disable var **only** when the setting is false. Precedence is
-///    unchanged in both directions: a user who exported the env var themselves
-///    always wins (`set_if_unset` never overrides; when the setting is true we
-///    simply don't set it, so an existing export is preserved).
+///    that measured ~4x cheaper video painting and no crash on WebKit 2.52.
+///    Round 7's live telemetry under real app load reproduced the black
+///    window twice on the owner's NVIDIA + KDE box — the spike's bare-window
+///    test was not representative of the full app's WebKit surface. The
+///    workaround is CONFIRMED still required by default; `dmabuf_renderer`
+///    now defaults false again (disable var set) and `true` is an opt-in
+///    experiment for systems that don't hit the crash. Precedence is
+///    unchanged in both directions: a user who exported the env var
+///    themselves always wins (`set_if_unset` never overrides; when the
+///    setting is true we simply don't set it, so an existing export is
+///    preserved).
 /// 2. `GDK_BACKEND=x11` — Wayland's protocol does not expose absolute window
 ///    position to clients (`outer_position` always returns `(0, 0)`), so
 ///    `tauri-plugin-window-state` cannot persist or restore position on a
@@ -1962,10 +1966,11 @@ fn apply_linux_webkit_workarounds() {
     }
     // Cheap file read; this runs before the Tauri builder so the env is set
     // before WebKit/GTK initialize. Falls back to the field default (renderer
-    // ON) if settings can't be loaded, matching a fresh install.
+    // OFF, workaround applied) if settings can't be loaded, matching a fresh
+    // install.
     let dmabuf_on = settings::load()
         .map(|s| s.video.dmabuf_renderer)
-        .unwrap_or(true);
+        .unwrap_or(false);
     if !dmabuf_on {
         set_if_unset("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
     }
