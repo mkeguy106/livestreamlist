@@ -37,6 +37,13 @@ pub struct VideoStatusEvent {
     pub message: Option<String>,
 }
 
+/// Handoff for the mpv backend: the direct streamlink URL plus the session
+/// incarnation it belongs to (mpv's consumer events must carry it).
+pub struct DirectSession {
+    pub url: String,
+    pub generation: u64,
+}
+
 pub struct VideoManager {
     app: AppHandle,
     sessions: Mutex<HashMap<String, VideoSession>>,
@@ -456,6 +463,46 @@ impl VideoManager {
         self.url_for(unique_key)
     }
 
+    /// Start (or resume / quality-switch) a session and hand back the
+    /// DIRECT streamlink URL + the session's generation, for the mpv
+    /// backend. Rides `start()` wholesale (same cap / linger / generation /
+    /// readiness semantics; the per-session passthrough listener is bound
+    /// but simply never used by mpv — it goes away in slice D).
+    pub async fn start_direct(
+        &self,
+        unique_key: &str,
+        quality_override: Option<String>,
+    ) -> anyhow::Result<DirectSession> {
+        self.start(unique_key, quality_override).await?;
+        let sessions = self.sessions.lock();
+        let s = sessions
+            .get(unique_key)
+            .ok_or_else(|| anyhow!("no video session for {unique_key}"))?;
+        Ok(DirectSession {
+            url: direct_url(s.port),
+            generation: s.generation,
+        })
+    }
+
+    /// Report an external (mpv) consumer attaching to a session. Routed
+    /// through the same reaper channel as passthrough connections so the
+    /// generation guard and linger transitions apply identically.
+    pub fn consumer_connected(&self, unique_key: &str, generation: u64) {
+        let _ = self.events_tx.send(ConsumerEvent::Connected {
+            key: unique_key.to_string(),
+            generation,
+        });
+    }
+
+    /// Report an external (mpv) consumer detaching — starts the linger
+    /// clock once the count reaches zero (reaper-side).
+    pub fn consumer_dropped(&self, unique_key: &str, generation: u64) {
+        let _ = self.events_tx.send(ConsumerEvent::Dropped {
+            key: unique_key.to_string(),
+            generation,
+        });
+    }
+
     /// Explicit stop (the ✕ control) — bypasses linger.
     pub fn stop(&self, unique_key: &str) {
         if self.remove_session(unique_key) {
@@ -554,6 +601,13 @@ impl VideoManager {
 /// The per-session passthrough URL for a given listener port + key.
 fn passthrough_url(public_port: u16, unique_key: &str) -> String {
     format!("http://127.0.0.1:{public_port}/video/{unique_key}")
+}
+
+/// The DIRECT streamlink URL for a session's child port. mpv (a native
+/// client, not a browser) needs no CORS passthrough — it fetches straight
+/// from streamlink's own HTTP server.
+fn direct_url(port: u16) -> String {
+    format!("http://127.0.0.1:{port}/")
 }
 
 /// Drain every session out of the map, returning the sessions for the caller
@@ -700,5 +754,12 @@ mod tests {
         assert!(!listening_in_table(table, 5555));
         // Empty table -> no match, no panic.
         assert!(!listening_in_table("", 9001));
+    }
+
+    #[test]
+    fn direct_url_is_streamlink_root() {
+        // mpv consumes streamlink's HTTP server directly (no CORS
+        // passthrough hop) — bare root path on the child's own port.
+        assert_eq!(super::direct_url(40123), "http://127.0.0.1:40123/");
     }
 }
