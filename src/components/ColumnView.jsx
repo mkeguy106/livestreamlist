@@ -22,7 +22,7 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import ChatView from './ChatView.jsx';
-import InlineVideo from './InlineVideo.jsx';
+import VideoPanel from './VideoPanel.jsx';
 import Tooltip from './Tooltip.jsx';
 import { usePreferences } from '../hooks/usePreferences.jsx';
 import { clampWidth } from '../utils/columnGroups.js';
@@ -249,7 +249,7 @@ export default function ColumnView({
       </div>
 
       {live && isTwitch && videoOn && (
-        <InlineVideo
+        <VideoPanel
           channelKey={key}
           thumbnailUrl={channel?.thumbnail_url}
           variant="column"
