@@ -48,6 +48,19 @@ export const embedBounds = (uniqueKey, x, y, width, height) =>
 export const embedSetVisible = (uniqueKey, visible) =>
   invoke('embed_set_visible', { uniqueKey, visible });
 export const embedUnmount = (uniqueKey) => invoke('embed_unmount', { uniqueKey });
+// mpv inline-video backend (Linux; see src-tauri/src/mpv.rs)
+export const videoBackend = () => invoke('video_backend');
+export const mpvMount = (uniqueKey, x, y, width, height, quality = null, muted = false, volume = 0.5) =>
+  invoke('mpv_mount', { uniqueKey, x, y, width, height, quality, muted, volume });
+export const mpvBounds = (uniqueKey, x, y, width, height) =>
+  invoke('mpv_bounds', { uniqueKey, x, y, width, height });
+export const mpvSetVisible = (uniqueKey, visible) =>
+  invoke('mpv_set_visible', { uniqueKey, visible });
+export const mpvUnmount = (uniqueKey) => invoke('mpv_unmount', { uniqueKey });
+export const mpvSetVolume = (uniqueKey, volume) =>
+  invoke('mpv_set_volume', { uniqueKey, volume });
+export const mpvSetMuted = (uniqueKey, muted) =>
+  invoke('mpv_set_muted', { uniqueKey, muted });
 export const loginPopupOpen = (x, y, width, height) =>
   invoke('login_popup_open', { x, y, width, height });
 export const loginPopupClose = () => invoke('login_popup_close');
@@ -571,6 +584,17 @@ async function mockInvoke(name, args) {
     case 'embed_unmount':
       // Browser-dev: no native embeds — accept the call and no-op.
       return name === 'embed_mount' ? false : null;
+    case 'video_backend':
+      // Browser-dev has no native surfaces — keep the mpegts (DOM) path.
+      return 'mpegts';
+    case 'mpv_mount':
+      return Promise.reject(new Error('mpv video requires the desktop app'));
+    case 'mpv_bounds':
+    case 'mpv_set_visible':
+    case 'mpv_unmount':
+    case 'mpv_set_volume':
+    case 'mpv_set_muted':
+      return null;
     default:
       throw new Error(`[mock] unknown invoke ${name}`);
   }

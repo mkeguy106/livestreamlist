@@ -22,6 +22,12 @@ pub const DENYLIST: &[&str] = &[
     "list_playing",
     "video_start",
     "video_stop",
+    "mpv_mount",
+    "mpv_bounds",
+    "mpv_set_visible",
+    "mpv_unmount",
+    "mpv_set_volume",
+    "mpv_set_muted",
     // Requires ChatManager, PlayerManager, or VideoManager state not managed
     // in smoke harness
     "kick_logout",
