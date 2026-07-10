@@ -42,6 +42,12 @@ export default function EmbedLayer({ children, modalOpen }) {
     // async mpv_mount (streamlink startup — seconds) is in flight.
     const failedKeys = useRef(new Set());
     const mountingKeys = useRef(new Set());
+    // Latest `hidden` for async .then handlers — reflowKey's closure goes stale
+    // across the multi-second mpv mount.
+    const hiddenRef = useRef(hidden);
+    useEffect(() => { hiddenRef.current = hidden; }, [hidden]);
+    // Keys whose remount was requested while their mount was still in flight.
+    const pendingRemounts = useRef(new Set());
 
     const reflowKey = useCallback((key) => {
         const entry = registry.current.get(key);
@@ -71,16 +77,38 @@ export default function EmbedLayer({ children, modalOpen }) {
                 mpvMount(key, x, y, w, h, args.quality ?? null, !!args.muted, args.volume ?? 0.5)
                     .then((ok) => {
                         if (!ok) return;
+                        // The slot unregistered while the mount was in flight — tear the
+                        // fresh native surface down instead of leaking mpv+streamlink.
+                        if (!registry.current.has(key)) {
+                            mpvUnmount(key).catch(() => {});
+                            return;
+                        }
                         mountedKeys.current.add(key);
-                        if (!shown) mpvSetVisible(key, false).catch(() => {});
+                        // Recompute visibility NOW — hidden/occluded may have changed
+                        // during the mount (stale-closure fix).
+                        const shownNow = !hiddenRef.current && !occludedKeys.current.has(key);
+                        if (!shownNow) mpvSetVisible(key, false).catch(() => {});
                     })
-                    .catch(() => { failedKeys.current.add(key); })
-                    .finally(() => { mountingKeys.current.delete(key); });
+                    .catch(() => { if (registry.current.has(key)) failedKeys.current.add(key); })
+                    .finally(() => {
+                        mountingKeys.current.delete(key);
+                        // A remount (quality switch) arrived mid-mount: run it now that the
+                        // original mount has settled.
+                        if (pendingRemounts.current.delete(key)) {
+                            if (mountedKeys.current.has(key)) {
+                                mountedKeys.current.delete(key);
+                                mpvUnmount(key).then(() => reflowKey(key)).catch(() => reflowKey(key));
+                            } else {
+                                reflowKey(key);
+                            }
+                        }
+                    });
             } else {
                 embedMount(key, x, y, w, h).then((ok) => {
                     if (ok) {
                         mountedKeys.current.add(key);
-                        if (!shown) embedSetVisible(key, false).catch(() => {});
+                        const shownNow = !hiddenRef.current && !occludedKeys.current.has(key);
+                        if (!shownNow) embedSetVisible(key, false).catch(() => {});
                     }
                 }).catch(() => {});
             }
@@ -114,6 +142,7 @@ export default function EmbedLayer({ children, modalOpen }) {
             registry.current.delete(key);
             occludedKeys.current.delete(key);
             failedKeys.current.delete(key);
+            pendingRemounts.current.delete(key);
             if (mountedKeys.current.has(key)) {
                 (backend === 'mpv' ? mpvUnmount : embedUnmount)(key).catch(() => {});
                 mountedKeys.current.delete(key);
@@ -174,12 +203,15 @@ export default function EmbedLayer({ children, modalOpen }) {
         const entry = registry.current.get(key);
         if (!entry || (entry.backend ?? 'webview') !== 'mpv') return;
         failedKeys.current.delete(key);
-        const doMount = () => reflowKey(key);
+        if (mountingKeys.current.has(key)) {
+            pendingRemounts.current.add(key); // picked up in the mount's .finally
+            return;
+        }
         if (mountedKeys.current.has(key)) {
             mountedKeys.current.delete(key);
-            mpvUnmount(key).then(doMount).catch(doMount);
+            mpvUnmount(key).then(() => reflowKey(key)).catch(() => reflowKey(key));
         } else {
-            doMount();
+            reflowKey(key);
         }
     }, [reflowKey]);
 
