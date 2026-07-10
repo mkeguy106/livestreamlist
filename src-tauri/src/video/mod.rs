@@ -39,6 +39,8 @@ pub struct VideoStatusEvent {
 
 /// Handoff for the mpv backend: the direct streamlink URL plus the session
 /// incarnation it belongs to (mpv's consumer events must carry it).
+// TODO(Task 5): remove — consumed by the mpv IPC commands
+#[allow(dead_code)]
 pub struct DirectSession {
     pub url: String,
     pub generation: u64,
@@ -468,6 +470,8 @@ impl VideoManager {
     /// backend. Rides `start()` wholesale (same cap / linger / generation /
     /// readiness semantics; the per-session passthrough listener is bound
     /// but simply never used by mpv — it goes away in slice D).
+    // TODO(Task 5): remove — consumed by the mpv IPC commands
+    #[allow(dead_code)]
     pub async fn start_direct(
         &self,
         unique_key: &str,
@@ -487,6 +491,8 @@ impl VideoManager {
     /// Report an external (mpv) consumer attaching to a session. Routed
     /// through the same reaper channel as passthrough connections so the
     /// generation guard and linger transitions apply identically.
+    // TODO(Task 5): remove — consumed by the mpv IPC commands
+    #[allow(dead_code)]
     pub fn consumer_connected(&self, unique_key: &str, generation: u64) {
         let _ = self.events_tx.send(ConsumerEvent::Connected {
             key: unique_key.to_string(),
@@ -496,6 +502,8 @@ impl VideoManager {
 
     /// Report an external (mpv) consumer detaching — starts the linger
     /// clock once the count reaches zero (reaper-side).
+    // TODO(Task 5): remove — consumed by the mpv IPC commands
+    #[allow(dead_code)]
     pub fn consumer_dropped(&self, unique_key: &str, generation: u64) {
         let _ = self.events_tx.send(ConsumerEvent::Dropped {
             key: unique_key.to_string(),
@@ -606,6 +614,8 @@ fn passthrough_url(public_port: u16, unique_key: &str) -> String {
 /// The DIRECT streamlink URL for a session's child port. mpv (a native
 /// client, not a browser) needs no CORS passthrough — it fetches straight
 /// from streamlink's own HTTP server.
+// TODO(Task 5): remove — consumed by the mpv IPC commands
+#[allow(dead_code)]
 fn direct_url(port: u16) -> String {
     format!("http://127.0.0.1:{port}/")
 }
