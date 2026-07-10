@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { embedMount, embedBounds, embedSetVisible, embedUnmount } from '../ipc.js';
+import { embedMount, embedBounds, embedSetVisible, embedUnmount,
+         mpvMount, mpvBounds, mpvSetVisible, mpvUnmount } from '../ipc.js';
 
 export const EmbedLayerContext = createContext(null);
 
@@ -32,15 +33,25 @@ export default function EmbedLayer({ children, modalOpen }) {
     const registry = useRef(new Map());
     // mounted keys (in Rust) — used for cleanup
     const mountedKeys = useRef(new Set());
+    // Per-key occlusion (mpv hover-controls): a key in this set has its
+    // native surface hidden while its DOM controls are interacted with —
+    // composes with the global modal/overlay `hidden`.
+    const occludedKeys = useRef(new Set());
+    // mpv mount lifecycle: failed keys don't remount on every ResizeObserver
+    // reflow (retryMount clears); mounting keys don't double-mount while the
+    // async mpv_mount (streamlink startup — seconds) is in flight.
+    const failedKeys = useRef(new Set());
+    const mountingKeys = useRef(new Set());
 
     const reflowKey = useCallback((key) => {
         const entry = registry.current.get(key);
         if (!entry) return;
+        const backend = entry.backend ?? 'webview';
+        const setVis = backend === 'mpv' ? mpvSetVisible : embedSetVisible;
         const active = [...entry.refs.values()].find((s) => s.active);
         if (!active || !active.ref.current) {
-            // No active slot for this key — hide if mounted
             if (mountedKeys.current.has(key)) {
-                embedSetVisible(key, false).catch(() => {});
+                setVis(key, false).catch(() => {});
             }
             return;
         }
@@ -50,24 +61,43 @@ export default function EmbedLayer({ children, modalOpen }) {
         const y = r.top * dpr;
         const w = Math.max(1, r.width) * dpr;
         const h = Math.max(1, r.height) * dpr;
+        const shown = !hidden && !occludedKeys.current.has(key);
 
         if (!mountedKeys.current.has(key)) {
-            embedMount(key, x, y, w, h).then((ok) => {
-                if (ok) {
-                    mountedKeys.current.add(key);
-                    if (hidden) embedSetVisible(key, false).catch(() => {});
-                }
-            }).catch(() => {});
+            if (backend === 'mpv') {
+                if (failedKeys.current.has(key) || mountingKeys.current.has(key)) return;
+                const args = entry.getMountArgs?.() ?? {};
+                mountingKeys.current.add(key);
+                mpvMount(key, x, y, w, h, args.quality ?? null, !!args.muted, args.volume ?? 0.5)
+                    .then((ok) => {
+                        if (!ok) return;
+                        mountedKeys.current.add(key);
+                        if (!shown) mpvSetVisible(key, false).catch(() => {});
+                    })
+                    .catch(() => { failedKeys.current.add(key); })
+                    .finally(() => { mountingKeys.current.delete(key); });
+            } else {
+                embedMount(key, x, y, w, h).then((ok) => {
+                    if (ok) {
+                        mountedKeys.current.add(key);
+                        if (!shown) embedSetVisible(key, false).catch(() => {});
+                    }
+                }).catch(() => {});
+            }
         } else {
-            embedBounds(key, x, y, w, h).catch(() => {});
-            embedSetVisible(key, !hidden).catch(() => {});
+            (backend === 'mpv' ? mpvBounds : embedBounds)(key, x, y, w, h).catch(() => {});
+            setVis(key, shown).catch(() => {});
         }
     }, [hidden]);
 
-    const register = useCallback((key, slotId, ref, active) => {
+    const register = useCallback((key, slotId, ref, active, opts = {}) => {
         let entry = registry.current.get(key);
         if (!entry) {
-            entry = { refs: new Map() };
+            entry = {
+                refs: new Map(),
+                backend: opts.backend ?? 'webview',
+                getMountArgs: opts.getMountArgs,
+            };
             registry.current.set(key, entry);
         }
         entry.refs.set(slotId, { ref, active });
@@ -80,9 +110,12 @@ export default function EmbedLayer({ children, modalOpen }) {
         if (!entry) return;
         entry.refs.delete(slotId);
         if (entry.refs.size === 0) {
+            const backend = entry.backend ?? 'webview';
             registry.current.delete(key);
+            occludedKeys.current.delete(key);
+            failedKeys.current.delete(key);
             if (mountedKeys.current.has(key)) {
-                embedUnmount(key).catch(() => {});
+                (backend === 'mpv' ? mpvUnmount : embedUnmount)(key).catch(() => {});
                 mountedKeys.current.delete(key);
             }
         } else {
@@ -111,7 +144,9 @@ export default function EmbedLayer({ children, modalOpen }) {
     // Re-apply visibility when modal/overlay state toggles
     useEffect(() => {
         for (const key of mountedKeys.current) {
-            embedSetVisible(key, !hidden).catch(() => {});
+            const backend = registry.current.get(key)?.backend ?? 'webview';
+            const shown = !hidden && !occludedKeys.current.has(key);
+            (backend === 'mpv' ? mpvSetVisible : embedSetVisible)(key, shown).catch(() => {});
         }
     }, [hidden]);
 
@@ -120,9 +155,39 @@ export default function EmbedLayer({ children, modalOpen }) {
         return () => setOverlayCount((c) => Math.max(0, c - 1));
     }, []);
 
+    // Hide/show ONE key's native surface (mpv hover-controls occlusion).
+    const occludeKey = useCallback((key, occluded) => {
+        if (occluded) occludedKeys.current.add(key);
+        else occludedKeys.current.delete(key);
+        reflowKey(key); // re-applies bounds + composed visibility
+    }, [reflowKey]);
+
+    // A failed mpv mount stays failed until the panel's Retry clears it —
+    // otherwise every ResizeObserver tick would re-spawn a doomed mount.
+    const retryMount = useCallback((key) => {
+        failedKeys.current.delete(key);
+        reflowKey(key);
+    }, [reflowKey]);
+
+    // Kill + respawn with fresh getMountArgs (mpv quality switch).
+    const remountKey = useCallback((key) => {
+        const entry = registry.current.get(key);
+        if (!entry || (entry.backend ?? 'webview') !== 'mpv') return;
+        failedKeys.current.delete(key);
+        const doMount = () => reflowKey(key);
+        if (mountedKeys.current.has(key)) {
+            mountedKeys.current.delete(key);
+            mpvUnmount(key).then(doMount).catch(doMount);
+        } else {
+            doMount();
+        }
+    }, [reflowKey]);
+
     const ctx = useMemo(() => ({
         register, unregister, updateActive, reflowKey, pushOverlay,
-    }), [register, unregister, updateActive, reflowKey, pushOverlay]);
+        occludeKey, retryMount, remountKey,
+    }), [register, unregister, updateActive, reflowKey, pushOverlay,
+        occludeKey, retryMount, remountKey]);
 
     return (
         <EmbedLayerContext.Provider value={ctx}>

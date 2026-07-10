@@ -14,7 +14,10 @@ const inTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
  *
  * Outside Tauri (browser dev): renders a placeholder hint.
  */
-export default function EmbedSlot({ channelKey, isLive, active, placeholderText }) {
+export default function EmbedSlot({
+    channelKey, isLive, active, placeholderText,
+    backend = 'webview', getMountArgs, children,
+}) {
     const ref = useRef(null);
     const slotIdRef = useRef(null);
     const layer = useContext(EmbedLayerContext);
@@ -32,13 +35,17 @@ export default function EmbedSlot({ channelKey, isLive, active, placeholderText 
         // happened to YT/CB embeds on every chat-tab switch — the embed
         // would briefly become the only-and-zero slot and get destroyed,
         // then re-mount on re-register, producing a visible reload).
-        layer.register(channelKey, slotIdRef.current, ref, active);
+        layer.register(channelKey, slotIdRef.current, ref, active, { backend, getMountArgs });
         return () => {
             if (slotIdRef.current !== null) {
                 layer.unregister(channelKey, slotIdRef.current);
             }
         };
-        // eslint-disable-next-line react-hooks/exhaustive-deps -- `active` flows through updateActive
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- `active` flows through updateActive;
+        // `backend`/`getMountArgs` are intentionally excluded too — `backend` never changes for a
+        // mounted slot and `getMountArgs` MUST be identity-stable, so re-running this effect on
+        // either would only ever unregister/re-register for no reason, which destroys and remounts
+        // the native embed (see the block comment above).
     }, [channelKey, isLive, layer]);
 
     useEffect(() => {
@@ -71,15 +78,17 @@ export default function EmbedSlot({ channelKey, isLive, active, placeholderText 
                 overflow: 'hidden',
             }}
         >
-            {!isLive ? (
-                <div style={{ padding: 16, color: 'var(--zinc-600)', fontSize: 'var(--t-11)' }}>
-                    {placeholderText ?? 'Channel offline.'}
-                </div>
-            ) : !inTauri ? (
-                <div style={{ padding: 16, color: 'var(--zinc-600)', fontSize: 'var(--t-11)' }}>
-                    Embedded chat is only available in the desktop app.
-                </div>
-            ) : null}
+            {children ?? (
+                !isLive ? (
+                    <div style={{ padding: 16, color: 'var(--zinc-600)', fontSize: 'var(--t-11)' }}>
+                        {placeholderText ?? 'Channel offline.'}
+                    </div>
+                ) : !inTauri ? (
+                    <div style={{ padding: 16, color: 'var(--zinc-600)', fontSize: 'var(--t-11)' }}>
+                        Embedded chat is only available in the desktop app.
+                    </div>
+                ) : null
+            )}
         </div>
     );
 }
