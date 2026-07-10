@@ -171,9 +171,7 @@ impl ChildEmbed {
                 }
                 ChildInner::Mpv(m) => {
                     use gtk::prelude::*;
-                    // Occlusion/modal visibility composes with readiness:
-                    // never show a surface mpv hasn't painted yet.
-                    m.area.set_visible(visible && m.ready);
+                    m.area.set_visible(visible);
                 }
             }
         }
@@ -938,7 +936,7 @@ impl EmbedHost {
         unique_key: &str,
         bounds: Rect,
         spec: MpvMountSpec,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<bool> {
         use anyhow::Context as _;
         use gtk::glib::Cast as _;
         use gtk::prelude::*;
@@ -951,11 +949,16 @@ impl EmbedHost {
         };
 
         // Idempotent: already mounted -> just resize (mirrors webview mount).
+        // Returns whether the existing child is already READY (playing) so
+        // the command can re-emit "playing" — after a webview reload the
+        // monitor's one-shot "playing" event predates the fresh page's
+        // listener, and without the re-emit the panel spins forever.
         {
             let mut g = self.inner.lock();
             if let Some(existing) = g.children.get_mut(unique_key) {
                 existing.set_bounds(bounds, scale_factor)?;
-                return Ok(());
+                let already_ready = matches!(&existing.inner, ChildInner::Mpv(m) if m.ready);
+                return Ok(already_ready);
             }
         }
 
@@ -966,10 +969,9 @@ impl EmbedHost {
             ((bounds.h / s).max(1.0)).round() as i32,
         );
 
-        // Surface: put -> size -> realize (the GdkWindow/XID doesn't exist
-        // until realize). Created UNSHOWN — mpv renders into the unmapped X
-        // window fine, and mpv_mark_ready maps it once frames flow, so the
-        // DOM poster shows through during startup instead of a black rect.
+        // Surface: put -> size -> show -> realize (the GdkWindow/XID doesn't
+        // exist until realize, and GTK3 only allocates VISIBLE children — see
+        // the comment at the show() call below).
         let (xid, area) = {
             let g = self.inner.lock();
             let fixed = g
@@ -979,6 +981,16 @@ impl EmbedHost {
             let area = gtk::DrawingArea::new();
             fixed.0.put(&area, x, y);
             area.set_size_request(w, h);
+            // CRITICAL: show BEFORE realize, exactly like the spike. GTK3
+            // refuses to size-allocate invisible widgets (gtk_widget_size_
+            // allocate early-returns), so a created-hidden surface keeps the
+            // default 1×1@(-1,-1) GdkWindow forever — mpv renders into one
+            // pixel and nothing appears (found live in the slice-A smoke; the
+            // plan's original hidden-until-ready refinement is unimplementable
+            // on GTK3). Tradeoff: the surface shows as a black rect for the
+            // sub-second between mpv spawn and first frame — the poster still
+            // covers the long streamlink-startup phase (no surface exists yet).
+            area.show();
             area.realize();
             // Empty input region: pointer events fall through the surface to
             // the React webview so DOM hover/controls work. Pairs with mpv's
@@ -1044,7 +1056,8 @@ impl EmbedHost {
             socket_path,
             expected_exit,
         );
-        Ok(())
+        // Fresh mount — not ready until the monitor sees playback start.
+        Ok(false)
     }
 
     /// The session generation the mounted mpv child (if any) belongs to.
@@ -1070,13 +1083,14 @@ impl EmbedHost {
     #[cfg(target_os = "linux")]
     #[allow(dead_code)]
     pub fn mpv_mark_ready(&self, key: &str) {
-        use gtk::prelude::*;
         let mut g = self.inner.lock();
         if let Some(child) = g.children.get_mut(key) {
-            let visible = child.visible;
             if let ChildInner::Mpv(m) = &mut child.inner {
+                // `ready` no longer gates GTK visibility (the surface is
+                // created shown — GTK3 can't allocate hidden widgets); it
+                // records "playback confirmed" so an idempotent remount can
+                // re-emit "playing" to a freshly-reloaded webview.
                 m.ready = true;
-                m.area.set_visible(visible);
             }
         }
     }

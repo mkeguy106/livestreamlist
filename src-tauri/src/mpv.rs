@@ -218,6 +218,9 @@ pub(crate) fn spawn_monitor(
 
         match connect_with_retry(&socket_path).await {
             None => {
+                // Rare and actionable (mpv died pre-socket or the path is
+                // blocked) — worth a real log line, not just the status event.
+                log::warn!("mpv monitor: ipc connect failed for {unique_key} (gen {generation})");
                 end_error = Some("mpv exited during startup (no IPC socket)".to_string());
             }
             Some(stream) => {

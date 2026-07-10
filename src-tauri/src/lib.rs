@@ -496,7 +496,15 @@ async fn mpv_mount(
         }
     }
     match rx.await {
-        Ok(Ok(())) => Ok(true),
+        Ok(Ok(already_ready)) => {
+            // Remount of an already-playing child (e.g. webview reload): the
+            // monitor's one-shot "playing" predates this page's listener, so
+            // re-emit it or the panel shows the startup spinner forever.
+            if already_ready {
+                emit("playing", None);
+            }
+            Ok(true)
+        }
         Ok(Err(e)) => {
             let msg = e.to_string();
             emit("error", Some(msg.clone()));
