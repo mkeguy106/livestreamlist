@@ -122,13 +122,24 @@ impl MpvProcess {
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null());
-        // SAFETY: prctl is async-signal-safe and nothing else runs between
-        // fork and exec. PDEATHSIG=SIGKILL means an abrupt parent death
-        // (crash, SIGKILL — paths where neither Drop nor RunEvent::Exit run)
-        // cannot orphan mpv (the spike orphaned mpv exactly this way).
+        // SAFETY: prctl/getppid/raise are async-signal-safe and nothing else
+        // runs between fork and exec. PDEATHSIG=SIGKILL means an abrupt
+        // parent death (crash, SIGKILL — paths where neither Drop nor
+        // RunEvent::Exit run) cannot orphan mpv (the spike orphaned mpv
+        // exactly this way).
+        let parent_pid = std::process::id() as libc::pid_t;
         unsafe {
-            cmd.pre_exec(|| {
-                libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL);
+            cmd.pre_exec(move || {
+                if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                // PDEATHSIG race: if the parent died between fork() and the
+                // prctl above, the deathsig bound to the reparented parent
+                // and will never fire — detect that by re-checking the ppid
+                // and self-terminate.
+                if libc::getppid() != parent_pid {
+                    libc::raise(libc::SIGKILL);
+                }
                 Ok(())
             });
         }
