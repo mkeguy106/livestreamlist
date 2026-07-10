@@ -38,7 +38,7 @@ export default function EmbedLayer({ children, modalOpen }) {
     // composes with the global modal/overlay `hidden`.
     const occludedKeys = useRef(new Set());
     // mpv mount lifecycle: failed keys don't remount on every ResizeObserver
-    // reflow (retryMount clears); mounting keys don't double-mount while the
+    // reflow (remountKey clears); mounting keys don't double-mount while the
     // async mpv_mount (streamlink startup — seconds) is in flight.
     const failedKeys = useRef(new Set());
     const mountingKeys = useRef(new Set());
@@ -191,14 +191,13 @@ export default function EmbedLayer({ children, modalOpen }) {
         reflowKey(key); // re-applies bounds + composed visibility
     }, [reflowKey]);
 
-    // A failed mpv mount stays failed until the panel's Retry clears it —
-    // otherwise every ResizeObserver tick would re-spawn a doomed mount.
-    const retryMount = useCallback((key) => {
-        failedKeys.current.delete(key);
-        reflowKey(key);
-    }, [reflowKey]);
-
-    // Kill + respawn with fresh getMountArgs (mpv quality switch).
+    // Kill + respawn with fresh getMountArgs (mpv quality switch, and the
+    // panel's Retry — after a Rust-side death the client-side mountedKeys is
+    // stale-true, so a plain reflow would take the "already mounted" branch
+    // and no-op; the unmount-first path here is a safe no-op Rust-side and
+    // yields a genuine fresh mount). Also clears the failed flag — a failed
+    // mount otherwise stays failed so ResizeObserver ticks don't re-spawn a
+    // doomed mount.
     const remountKey = useCallback((key) => {
         const entry = registry.current.get(key);
         if (!entry || (entry.backend ?? 'webview') !== 'mpv') return;
@@ -217,9 +216,9 @@ export default function EmbedLayer({ children, modalOpen }) {
 
     const ctx = useMemo(() => ({
         register, unregister, updateActive, reflowKey, pushOverlay,
-        occludeKey, retryMount, remountKey,
+        occludeKey, remountKey,
     }), [register, unregister, updateActive, reflowKey, pushOverlay,
-        occludeKey, retryMount, remountKey]);
+        occludeKey, remountKey]);
 
     return (
         <EmbedLayerContext.Provider value={ctx}>

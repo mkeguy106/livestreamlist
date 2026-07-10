@@ -141,7 +141,13 @@ export default function MpvVideo({ channelKey, thumbnailUrl, variant = 'column',
   const retry = () => {
     setErrMsg('');
     setPhase('starting');
-    layer?.retryMount?.(channelKey);
+    // remountKey, not a plain retry-reflow: after a monitor-driven
+    // 'ended'/'error' Rust has already torn down its side, but the layer's
+    // client-side mountedKeys is stale-true — a reflow would take the
+    // "already mounted" branch and silently no-op (spinner forever).
+    // remountKey unmounts first (a safe no-op Rust-side), clears the failed
+    // flag, then reflows into a genuine fresh mpv_mount.
+    layer?.remountKey?.(channelKey);
   };
 
   // Popout hand-off: once the external player is live, this panel yields.

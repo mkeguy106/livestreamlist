@@ -13,7 +13,13 @@ export function useVideoBackend() {
     let on = true;
     backendPromise
       .then((b) => { if (on) setBackend(b === 'mpv' ? 'mpv' : 'mpegts'); })
-      .catch(() => { if (on) setBackend('mpegts'); });
+      .catch(() => {
+        // Don't poison the cache permanently on a transient rejection — a
+        // later VideoPanel mount retries the probe. THIS mount still falls
+        // back to mpegts.
+        backendPromise = null;
+        if (on) setBackend('mpegts');
+      });
     return () => { on = false; };
   }, []);
   return backend;
