@@ -89,13 +89,11 @@ pub(crate) fn parse_mpv_event(line: &str) -> Option<MpvEvent> {
     }
 }
 
-#[allow(dead_code)]
 static SOCKET_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// Unique-per-process socket path in the temp dir (mpv creates/unlinks the
 /// file itself; the pid+sequence keeps concurrent sessions and app restarts
 /// from colliding).
-#[allow(dead_code)]
 pub(crate) fn alloc_socket_path() -> PathBuf {
     let n = SOCKET_SEQ.fetch_add(1, Ordering::Relaxed);
     std::env::temp_dir().join(format!(
@@ -104,7 +102,6 @@ pub(crate) fn alloc_socket_path() -> PathBuf {
     ))
 }
 
-#[allow(dead_code)]
 pub(crate) struct MpvProcess {
     child: std::process::Child,
     pub(crate) socket_path: PathBuf,
@@ -113,6 +110,12 @@ pub(crate) struct MpvProcess {
     pub(crate) expected_exit: Arc<AtomicBool>,
 }
 
+// `spawn`/`set_property` are exercised by embed::mount_mpv (Task 3) and
+// mpv_set_volume/mpv_set_muted (Task 5's IPC commands), but those call sites
+// are #[cfg(not(test))] — under the `--all-targets` test-target compile they
+// have no caller (spawning a real mpv process isn't unit-testable), so the
+// allow stays until this crate has a caller reachable in both builds.
+// TODO(Task 5): reassess once the IPC commands are wired in
 #[allow(dead_code)]
 impl MpvProcess {
     pub(crate) fn spawn(spec: &MpvSpawnSpec) -> anyhow::Result<Self> {
@@ -190,6 +193,19 @@ impl Drop for MpvProcess {
     fn drop(&mut self) {
         self.kill();
     }
+}
+
+/// Task 4 replaces this stub with the real IPC-socket monitor.
+// TODO(Task 5): remove — reachable once mount_mpv is wired to video_start
+#[cfg(not(test))]
+#[allow(dead_code)]
+pub(crate) fn spawn_monitor(
+    _app: tauri::AppHandle,
+    _unique_key: String,
+    _generation: u64,
+    _socket_path: PathBuf,
+    _expected_exit: Arc<AtomicBool>,
+) {
 }
 
 #[cfg(test)]

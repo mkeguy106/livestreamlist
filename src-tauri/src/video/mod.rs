@@ -491,7 +491,11 @@ impl VideoManager {
     /// Report an external (mpv) consumer attaching to a session. Routed
     /// through the same reaper channel as passthrough connections so the
     /// generation guard and linger transitions apply identically.
-    // TODO(Task 5): remove — consumed by the mpv IPC commands
+    // Called by embed::mount_mpv (Task 3), but that call site is
+    // #[cfg(not(test))] — under the `--all-targets` test-target compile
+    // there is no caller, so the allow stays until Task 5's IPC wiring adds
+    // an always-compiled one.
+    // TODO(Task 5): reassess once the IPC commands are wired in
     #[allow(dead_code)]
     pub fn consumer_connected(&self, unique_key: &str, generation: u64) {
         let _ = self.events_tx.send(ConsumerEvent::Connected {

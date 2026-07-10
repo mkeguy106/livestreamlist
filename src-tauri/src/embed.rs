@@ -36,6 +36,21 @@ impl Rect {
     }
 }
 
+/// Everything `mount_mpv` needs beyond geometry.
+// TODO(Task 5): remove — constructed by the invoke command wiring the mpv
+// backend into video_start
+#[cfg(target_os = "linux")]
+#[allow(dead_code)]
+pub struct MpvMountSpec {
+    /// Direct streamlink URL from `VideoManager::start_direct`.
+    pub url: String,
+    /// The session incarnation the URL belongs to.
+    pub generation: u64,
+    pub muted: bool,
+    /// 0.0–1.0 UI scale.
+    pub volume: f64,
+}
+
 #[derive(Clone, Debug)]
 #[allow(dead_code)] // used by Phase 6 chaturbate auth-drift hook
 pub struct CookieView {
@@ -99,23 +114,45 @@ impl ChildEmbed {
     pub(crate) fn set_bounds(&mut self, bounds: Rect, scale_factor: f64) -> anyhow::Result<()> {
         #[cfg(target_os = "linux")]
         {
-            let wry_rect = build_linux::physical_to_logical(bounds, scale_factor);
-            self.inner
-                .0
-                .set_bounds(wry_rect)
-                .map_err(|e| anyhow::anyhow!("set_bounds: {e}"))?;
+            match &self.inner {
+                ChildInner::WebView(wv, _) => {
+                    let wry_rect = build_linux::physical_to_logical(bounds, scale_factor);
+                    wv.set_bounds(wry_rect)
+                        .map_err(|e| anyhow::anyhow!("set_bounds: {e}"))?;
+                }
+                ChildInner::Mpv(m) => {
+                    use gtk::glib::Cast as _;
+                    use gtk::prelude::*;
+                    let s = scale_factor.max(1.0);
+                    if let Some(fixed) = m
+                        .area
+                        .parent()
+                        .and_then(|p| p.downcast::<gtk::Fixed>().ok())
+                    {
+                        fixed.move_(
+                            &m.area,
+                            (bounds.x / s).round() as i32,
+                            (bounds.y / s).round() as i32,
+                        );
+                    }
+                    m.area.set_size_request(
+                        ((bounds.w / s).max(1.0)).round() as i32,
+                        ((bounds.h / s).max(1.0)).round() as i32,
+                    );
+                }
+            }
         }
         #[cfg(not(target_os = "linux"))]
         {
             use tauri::{PhysicalPosition, PhysicalSize};
-            self.inner
-                .0
-                .set_position(PhysicalPosition::new(bounds.x, bounds.y))
-                .map_err(|e| anyhow::anyhow!("set_position: {e}"))?;
-            self.inner
-                .0
-                .set_size(PhysicalSize::new(bounds.w as u32, bounds.h as u32))
-                .map_err(|e| anyhow::anyhow!("set_size: {e}"))?;
+            match &self.inner {
+                ChildInner::WebView(wv) => {
+                    wv.set_position(PhysicalPosition::new(bounds.x, bounds.y))
+                        .map_err(|e| anyhow::anyhow!("set_position: {e}"))?;
+                    wv.set_size(PhysicalSize::new(bounds.w as u32, bounds.h as u32))
+                        .map_err(|e| anyhow::anyhow!("set_size: {e}"))?;
+                }
+            }
             let _ = scale_factor; // Tauri uses physical units directly on mac/Win
         }
         self.bounds = bounds;
@@ -125,25 +162,29 @@ impl ChildEmbed {
     pub(crate) fn set_visible(&mut self, visible: bool) -> anyhow::Result<()> {
         #[cfg(target_os = "linux")]
         {
-            // wry 0.54.4 exposes WebView::set_visible directly; no WidgetExt
-            // detour needed.
-            self.inner
-                .0
-                .set_visible(visible)
-                .map_err(|e| anyhow::anyhow!("set_visible: {e}"))?;
+            match &self.inner {
+                ChildInner::WebView(wv, _) => {
+                    wv.set_visible(visible)
+                        .map_err(|e| anyhow::anyhow!("set_visible: {e}"))?;
+                }
+                ChildInner::Mpv(m) => {
+                    use gtk::prelude::*;
+                    // Occlusion/modal visibility composes with readiness:
+                    // never show a surface mpv hasn't painted yet.
+                    m.area.set_visible(visible && m.ready);
+                }
+            }
         }
         #[cfg(not(target_os = "linux"))]
         {
-            if visible {
-                self.inner
-                    .0
-                    .show()
-                    .map_err(|e| anyhow::anyhow!("show: {e}"))?;
-            } else {
-                self.inner
-                    .0
-                    .hide()
-                    .map_err(|e| anyhow::anyhow!("hide: {e}"))?;
+            match &self.inner {
+                ChildInner::WebView(wv) => {
+                    if visible {
+                        wv.show().map_err(|e| anyhow::anyhow!("show: {e}"))?;
+                    } else {
+                        wv.hide().map_err(|e| anyhow::anyhow!("hide: {e}"))?;
+                    }
+                }
             }
         }
         self.visible = visible;
@@ -156,11 +197,12 @@ impl ChildEmbed {
     pub(crate) fn cookies_for_url(&self, url: &Url) -> anyhow::Result<Vec<CookieView>> {
         #[cfg(target_os = "linux")]
         {
-            let cookies = self
-                .inner
-                .0
-                .cookies_for_url(url.as_str())
-                .map_err(|e| anyhow::anyhow!("cookies_for_url: {e}"))?;
+            let cookies = match &self.inner {
+                ChildInner::WebView(wv, ..) => wv
+                    .cookies_for_url(url.as_str())
+                    .map_err(|e| anyhow::anyhow!("cookies_for_url: {e}"))?,
+                ChildInner::Mpv(_) => anyhow::bail!("mpv child has no cookies"),
+            };
             Ok(cookies
                 .into_iter()
                 .map(|c| CookieView {
@@ -171,11 +213,11 @@ impl ChildEmbed {
         }
         #[cfg(not(target_os = "linux"))]
         {
-            let cookies = self
-                .inner
-                .0
-                .cookies_for_url(url.clone())
-                .map_err(|e| anyhow::anyhow!("cookies_for_url: {e}"))?;
+            let cookies = match &self.inner {
+                ChildInner::WebView(wv) => wv
+                    .cookies_for_url(url.clone())
+                    .map_err(|e| anyhow::anyhow!("cookies_for_url: {e}"))?,
+            };
             Ok(cookies
                 .into_iter()
                 .map(|c| CookieView {
@@ -326,36 +368,68 @@ pub(crate) mod linux {
 #[cfg(target_os = "linux")]
 pub(crate) use linux::FixedHandle;
 
-// Field 0: the WebView. Field 1: the `WebContext` it was built with, owned
-// here so it drops WITH the embed instead of being `Box::leak`'d per mount.
-// Field order is load-bearing — Rust drops tuple fields in declaration order,
-// so the WebView (0) drops first (running `InnerWebView::Drop` →
-// `webview.destroy()`, which detaches the GtkWidget), THEN the context (1) is
-// finalized. Dropping the context after the webview is safe on GTK: the
-// `WebKitWebView` holds its own GObject ref to the underlying
-// `WebKitWebContext`, and we register no custom URI schemes on it (wry's only
-// documented "keep the WebContext alive" caveat).
+// Linux children are either a wry webview (chat embeds) or an mpv surface
+// (inline video). WebView field order is load-bearing — Rust drops tuple/
+// struct fields in declaration order, so the WebView (0) drops first
+// (running `InnerWebView::Drop` → `webview.destroy()`, which detaches the
+// GtkWidget), THEN the context (1) is finalized. See the original comment
+// history for the full WebContext-ownership rationale.
 #[cfg(target_os = "linux")]
 #[allow(dead_code)] // constructed/read only by the non-test embed machinery (#[cfg(not(test))])
-pub(crate) struct ChildInner(
-    pub(crate) std::sync::Arc<wry::WebView>,
-    // Held purely for ownership so it drops with the embed (RAII); never read.
-    #[allow(dead_code)] pub(crate) Box<wry::WebContext>,
-);
+pub(crate) enum ChildInner {
+    WebView(
+        std::sync::Arc<wry::WebView>,
+        // Held purely for ownership so it drops with the embed (RAII).
+        #[allow(dead_code)] Box<wry::WebContext>,
+    ),
+    Mpv(MpvChild),
+}
 
-// SAFETY: like `FixedHandle`, the wry::WebView and WebContext wrap GTK
-// pointers that are not thread-safe. All access (and the drop that runs
-// `webview.destroy()`) happens behind the EmbedHost's parking_lot Mutex on
-// the GTK main thread (invoke commands and lifecycle hooks all route through
-// `glib::MainContext::default().invoke` or run on the main thread already).
-// We never touch either off the main thread.
+/// An mpv inline-video child: a bare GtkDrawingArea in the overlay Fixed
+/// (its XID is mpv's --wid target) plus the mpv process bound to it.
+// TODO(Task 4/5): remove — `generation`/`ready` are read by mount_mpv's
+// sibling verbs, which are unconsumed until the monitor (Task 4) and IPC
+// wiring (Task 5) land.
+#[cfg(target_os = "linux")]
+#[allow(dead_code)]
+pub(crate) struct MpvChild {
+    pub(crate) area: gtk::DrawingArea,
+    pub(crate) process: crate::mpv::MpvProcess,
+    /// The VideoManager session incarnation this mpv consumes — consumer
+    /// events and monitor teardown are guarded on it.
+    pub(crate) generation: u64,
+    /// mpv confirmed playback (monitor saw playback-restart/file-loaded).
+    /// The surface stays HIDDEN until ready so the DOM poster/spinner shows
+    /// through during startup instead of a black rectangle.
+    pub(crate) ready: bool,
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for MpvChild {
+    fn drop(&mut self) {
+        // Main-thread-only paths drop MpvChild (same discipline as the wry
+        // WebView drop — enforced by call sites, serialized by the host
+        // Mutex). Kill mpv first, then detach+destroy the surface widget.
+        self.process.kill();
+        unsafe {
+            use gtk::prelude::WidgetExtManual as _;
+            self.area.destroy();
+        }
+    }
+}
+
+// SAFETY: same argument as before the enum split — GTK/wry pointers are not
+// thread-safe, but all access (and drops) happen behind the EmbedHost Mutex
+// on the GTK main thread.
 #[cfg(target_os = "linux")]
 unsafe impl Send for ChildInner {}
 #[cfg(target_os = "linux")]
 unsafe impl Sync for ChildInner {}
 
 #[cfg(not(target_os = "linux"))]
-pub(crate) struct ChildInner(pub(crate) tauri::webview::Webview);
+pub(crate) enum ChildInner {
+    WebView(tauri::webview::Webview),
+}
 
 // Real GTK/wry child-webview construction — only compiled for non-test builds
 // (unit tests stub the embed machinery to avoid needing a live GTK display).
@@ -746,7 +820,7 @@ impl EmbedHost {
                 app: app.clone(),
             };
             let (webview_arc, ctx) = build_linux::build_child(&g, spec)?;
-            ChildInner(webview_arc, ctx)
+            ChildInner::WebView(webview_arc, ctx)
         };
 
         #[cfg(not(target_os = "linux"))]
@@ -766,7 +840,7 @@ impl EmbedHost {
                 platform: channel.platform,
                 app: app.clone(),
             };
-            ChildInner(build_other::build_child(app, spec)?)
+            ChildInner::WebView(build_other::build_child(app, spec)?)
         };
 
         let child = ChildEmbed {
@@ -833,7 +907,7 @@ impl EmbedHost {
             platform: Platform::Chaturbate,
             bounds: Rect::new(-10_000.0, -10_000.0, 1.0, 1.0),
             visible: false,
-            inner: ChildInner(webview, web_context),
+            inner: ChildInner::WebView(webview, web_context),
         };
         self.inner
             .lock()
@@ -841,6 +915,231 @@ impl EmbedHost {
             .insert(CB_IMPORT_KEY.to_string(), child);
         Ok(())
     }
+
+    /// Mount an mpv inline-video child: create a DrawingArea surface in the
+    /// overlay Fixed, hand its XID to a fresh mpv process playing `spec.url`,
+    /// count mpv as the session's consumer, and start the monitor task.
+    ///
+    /// MAIN THREAD ONLY (GTK) — async callers route through
+    /// `AppHandle::run_on_main_thread` + a oneshot.
+    // TODO(Task 5): remove — consumed by the invoke command wiring the mpv
+    // backend into video_start
+    #[cfg(target_os = "linux")]
+    #[allow(dead_code)]
+    pub fn mount_mpv(
+        &self,
+        app: &tauri::AppHandle,
+        unique_key: &str,
+        bounds: Rect,
+        spec: MpvMountSpec,
+    ) -> anyhow::Result<()> {
+        use anyhow::Context as _;
+        use gtk::glib::Cast as _;
+        use gtk::prelude::*;
+
+        let scale_factor = {
+            use tauri::Manager as _;
+            app.get_webview_window("main")
+                .and_then(|w| w.scale_factor().ok())
+                .unwrap_or(1.0)
+        };
+
+        // Idempotent: already mounted -> just resize (mirrors webview mount).
+        {
+            let mut g = self.inner.lock();
+            if let Some(existing) = g.children.get_mut(unique_key) {
+                existing.set_bounds(bounds, scale_factor)?;
+                return Ok(());
+            }
+        }
+
+        let s = scale_factor.max(1.0);
+        let (x, y) = ((bounds.x / s).round() as i32, (bounds.y / s).round() as i32);
+        let (w, h) = (
+            ((bounds.w / s).max(1.0)).round() as i32,
+            ((bounds.h / s).max(1.0)).round() as i32,
+        );
+
+        // Surface: put -> size -> realize (the GdkWindow/XID doesn't exist
+        // until realize). Created UNSHOWN — mpv renders into the unmapped X
+        // window fine, and mpv_mark_ready maps it once frames flow, so the
+        // DOM poster shows through during startup instead of a black rect.
+        let (xid, area) = {
+            let g = self.inner.lock();
+            let fixed = g
+                .fixed
+                .as_ref()
+                .context("install_overlay was not called yet — gtk::Fixed missing")?;
+            let area = gtk::DrawingArea::new();
+            fixed.0.put(&area, x, y);
+            area.set_size_request(w, h);
+            area.realize();
+            // Empty input region: pointer events fall through the surface to
+            // the React webview so DOM hover/controls work. Pairs with mpv's
+            // --input-cursor-passthrough (same trick on the child window mpv
+            // creates inside ours).
+            area.input_shape_combine_region(Some(&gtk::cairo::Region::create()));
+            let gdk_win = area
+                .window()
+                .context("DrawingArea has no GdkWindow after realize")?;
+            let x11 = gdk_win.downcast::<gdkx11::X11Window>().map_err(|_| {
+                anyhow::anyhow!("embed surface is not an X11 window (native Wayland?)")
+            })?;
+            (x11.xid(), area)
+        };
+
+        let socket_path = crate::mpv::alloc_socket_path();
+        let mpv_spec = crate::mpv::MpvSpawnSpec {
+            wid: xid,
+            url: spec.url.clone(),
+            socket_path: socket_path.clone(),
+            muted: spec.muted,
+            volume: spec.volume,
+        };
+        let process = match crate::mpv::MpvProcess::spawn(&mpv_spec) {
+            Ok(p) => p,
+            Err(e) => {
+                unsafe {
+                    use gtk::prelude::WidgetExtManual as _;
+                    area.destroy();
+                }
+                return Err(e);
+            }
+        };
+        let expected_exit = process.expected_exit.clone();
+
+        let child = ChildEmbed {
+            platform: Platform::Twitch,
+            bounds,
+            visible: true,
+            inner: ChildInner::Mpv(MpvChild {
+                area,
+                process,
+                generation: spec.generation,
+                ready: false,
+            }),
+        };
+        self.inner
+            .lock()
+            .children
+            .insert(unique_key.to_string(), child);
+
+        // Count mpv as the session's consumer BEFORE the monitor task can
+        // possibly observe an exit — Dropped must never precede Connected.
+        {
+            use tauri::Manager as _;
+            app.state::<std::sync::Arc<crate::video::VideoManager>>()
+                .consumer_connected(unique_key, spec.generation);
+        }
+        crate::mpv::spawn_monitor(
+            app.clone(),
+            unique_key.to_string(),
+            spec.generation,
+            socket_path,
+            expected_exit,
+        );
+        Ok(())
+    }
+
+    /// The session generation the mounted mpv child (if any) belongs to.
+    // TODO(Task 5): remove — consumed by the mpv IPC commands
+    #[cfg(target_os = "linux")]
+    #[allow(dead_code)]
+    pub fn mpv_generation(&self, key: &str) -> Option<u64> {
+        let g = self.inner.lock();
+        match &g.children.get(key)?.inner {
+            ChildInner::Mpv(m) => Some(m.generation),
+            _ => None,
+        }
+    }
+
+    /// Monitor callback: mpv confirmed playback — map the surface (unless
+    /// currently occluded/hidden). MAIN THREAD ONLY.
+    // TODO(Task 4): remove — consumed by the mpv IPC-socket monitor
+    #[cfg(target_os = "linux")]
+    #[allow(dead_code)]
+    pub fn mpv_mark_ready(&self, key: &str) {
+        use gtk::prelude::*;
+        let mut g = self.inner.lock();
+        if let Some(child) = g.children.get_mut(key) {
+            let visible = child.visible;
+            if let ChildInner::Mpv(m) = &mut child.inner {
+                m.ready = true;
+                m.area.set_visible(visible);
+            }
+        }
+    }
+
+    /// Live volume over mpv IPC (0.0–1.0 UI scale). Missing key is benign
+    /// (an unmount raced a slider drag).
+    // TODO(Task 5): remove — consumed by the mpv IPC commands
+    #[cfg(target_os = "linux")]
+    #[allow(dead_code)]
+    pub fn mpv_set_volume(&self, key: &str, volume01: f64) -> anyhow::Result<()> {
+        let g = self.inner.lock();
+        match g.children.get(key).map(|c| &c.inner) {
+            Some(ChildInner::Mpv(m)) => m.process.set_property(
+                "volume",
+                serde_json::json!(crate::mpv::mpv_volume(volume01)),
+            ),
+            _ => Ok(()),
+        }
+    }
+
+    /// Live mute over mpv IPC. Missing key is benign.
+    // TODO(Task 5): remove — consumed by the mpv IPC commands
+    #[cfg(target_os = "linux")]
+    #[allow(dead_code)]
+    pub fn mpv_set_muted(&self, key: &str, muted: bool) -> anyhow::Result<()> {
+        let g = self.inner.lock();
+        match g.children.get(key).map(|c| &c.inner) {
+            Some(ChildInner::Mpv(m)) => m.process.set_property("mute", serde_json::json!(muted)),
+            _ => Ok(()),
+        }
+    }
+
+    /// Generation-guarded unmount for the monitor's crash path: never
+    /// destroys a fresh remount that replaced the incarnation the monitor
+    /// was watching. MAIN THREAD ONLY (drop destroys the GtkWidget).
+    // TODO(Task 4): remove — consumed by the mpv IPC-socket monitor
+    #[cfg(target_os = "linux")]
+    #[allow(dead_code)]
+    pub fn unmount_mpv_if_generation(&self, key: &str, generation: u64) -> bool {
+        let mut g = self.inner.lock();
+        let ours = matches!(
+            g.children.get(key),
+            Some(c) if matches!(&c.inner, ChildInner::Mpv(m) if m.generation == generation)
+        );
+        if ours {
+            g.children.remove(key);
+        }
+        ours
+    }
+
+    /// App-exit reap: kill every mpv child process. GTK teardown is skipped
+    /// on purpose — the process is exiting; only the child processes leak.
+    /// Called from run()'s RunEvent::Exit alongside VideoManager::stop_all.
+    // TODO(Task 5): remove — wired into RunEvent::Exit alongside
+    // VideoManager::stop_all
+    #[cfg(target_os = "linux")]
+    #[allow(dead_code)]
+    pub fn stop_all_mpv(&self) {
+        let mut g = self.inner.lock();
+        for child in g.children.values_mut() {
+            if let ChildInner::Mpv(m) = &mut child.inner {
+                m.process.kill();
+            }
+        }
+    }
+}
+
+// Test-build no-op so run()/commands compile under cfg(test) once Task 5
+// wires a call site into RunEvent::Exit.
+// TODO(Task 5): reassess once that call site lands
+#[cfg(all(target_os = "linux", test))]
+impl EmbedHost {
+    #[allow(dead_code)]
+    pub fn stop_all_mpv(&self) {}
 }
 
 #[allow(dead_code)] // injected only by the non-test embed path (#[cfg(not(test))])
