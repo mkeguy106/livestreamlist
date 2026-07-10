@@ -488,6 +488,10 @@ async fn mpv_mount(
         }) {
             let msg = err_string(e);
             emit("error", Some(msg.clone()));
+            // start_direct succeeded but mpv never attached — reap the
+            // consumer-less session or it leaks (Serving w/ 0 consumers
+            // never reaps).
+            video.stop(&unique_key);
             return Err(msg);
         }
     }
@@ -496,11 +500,13 @@ async fn mpv_mount(
         Ok(Err(e)) => {
             let msg = e.to_string();
             emit("error", Some(msg.clone()));
+            video.stop(&unique_key);
             Err(msg)
         }
         Err(e) => {
             let msg = err_string(e);
             emit("error", Some(msg.clone()));
+            video.stop(&unique_key);
             Err(msg)
         }
     }
