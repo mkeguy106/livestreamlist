@@ -404,6 +404,203 @@ fn frontend_log(level: String, message: String) {
     }
 }
 
+/// Which inline-video backend this build/platform uses. Slice A: mpv on
+/// Linux; mpegts elsewhere (Windows flips in slice C).
+#[tauri::command]
+fn video_backend() -> &'static str {
+    if cfg!(target_os = "linux") {
+        "mpv"
+    } else {
+        "mpegts"
+    }
+}
+
+// mpv_* commands exist in two variants: the real Linux implementation, and
+// a stub for smoke/test builds and non-Linux targets (EmbedHost's mpv verbs
+// are cfg(target_os = "linux") + cfg(not(test)); non-Linux never selects the
+// mpv backend, so the stub is a backstop, not a path).
+#[cfg(all(target_os = "linux", not(any(feature = "smoke", test))))]
+#[tauri::command]
+// Args map 1:1 to the frontend IPC call's named parameters.
+#[allow(clippy::too_many_arguments)]
+async fn mpv_mount(
+    app: tauri::AppHandle,
+    embeds: State<'_, Arc<embed::EmbedHost>>,
+    video: State<'_, Arc<video::VideoManager>>,
+    unique_key: String,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    quality: Option<String>,
+    muted: bool,
+    volume: f64,
+) -> Result<bool, String> {
+    use tauri::Emitter as _;
+    let emit = |state: &str, message: Option<String>| {
+        let _ = app.emit(
+            &format!("mpv:status:{unique_key}"),
+            video::VideoStatusEvent {
+                state: state.to_string(),
+                message,
+            },
+        );
+    };
+    emit("starting", None);
+
+    // Streamlink first (async, off the main thread — readiness can take
+    // seconds). "cap:"-prefixed rejections become their own UI state.
+    let direct = match video.start_direct(&unique_key, quality).await {
+        Ok(d) => d,
+        Err(e) => {
+            let msg = e.to_string();
+            let state = if msg.starts_with("cap:") {
+                "cap"
+            } else {
+                "error"
+            };
+            emit(state, Some(msg.clone()));
+            return Err(msg);
+        }
+    };
+
+    // GTK surface + mpv spawn on the main thread; result back via oneshot.
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    {
+        let host = embeds.inner().clone();
+        let app_for_mount = app.clone();
+        let key = unique_key.clone();
+        let spec = embed::MpvMountSpec {
+            url: direct.url,
+            generation: direct.generation,
+            muted,
+            volume,
+        };
+        let bounds = embed::Rect::new(x, y, width, height);
+        app.run_on_main_thread(move || {
+            let _ = tx.send(host.mount_mpv(&app_for_mount, &key, bounds, spec));
+        })
+        .map_err(err_string)?;
+    }
+    match rx.await {
+        Ok(Ok(())) => Ok(true),
+        Ok(Err(e)) => {
+            let msg = e.to_string();
+            emit("error", Some(msg.clone()));
+            Err(msg)
+        }
+        Err(e) => Err(err_string(e)),
+    }
+}
+
+#[cfg(any(not(target_os = "linux"), feature = "smoke", test))]
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+async fn mpv_mount<R: tauri::Runtime>(
+    _app: tauri::AppHandle<R>,
+    _unique_key: String,
+    _x: f64,
+    _y: f64,
+    _width: f64,
+    _height: f64,
+    _quality: Option<String>,
+    _muted: bool,
+    _volume: f64,
+) -> Result<bool, String> {
+    Err("mpv backend unavailable in this build".into())
+}
+
+#[cfg(all(target_os = "linux", not(any(feature = "smoke", test))))]
+#[tauri::command]
+fn mpv_bounds(
+    app: tauri::AppHandle,
+    embeds: State<'_, Arc<embed::EmbedHost>>,
+    unique_key: String,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+) -> Result<(), String> {
+    embeds
+        .set_bounds(&app, &unique_key, embed::Rect::new(x, y, width, height))
+        .map_err(err_string)
+}
+
+#[cfg(any(not(target_os = "linux"), feature = "smoke", test))]
+#[tauri::command]
+fn mpv_bounds<R: tauri::Runtime>(
+    _app: tauri::AppHandle<R>,
+    _unique_key: String,
+    _x: f64,
+    _y: f64,
+    _width: f64,
+    _height: f64,
+) -> Result<(), String> {
+    Ok(())
+}
+
+#[cfg(all(target_os = "linux", not(any(feature = "smoke", test))))]
+#[tauri::command]
+fn mpv_set_visible(
+    embeds: State<'_, Arc<embed::EmbedHost>>,
+    unique_key: String,
+    visible: bool,
+) -> Result<(), String> {
+    embeds.set_visible(&unique_key, visible).map_err(err_string)
+}
+
+#[cfg(any(not(target_os = "linux"), feature = "smoke", test))]
+#[tauri::command]
+fn mpv_set_visible(_unique_key: String, _visible: bool) -> Result<(), String> {
+    Ok(())
+}
+
+#[cfg(all(target_os = "linux", not(any(feature = "smoke", test))))]
+#[tauri::command]
+fn mpv_unmount(embeds: State<'_, Arc<embed::EmbedHost>>, unique_key: String) {
+    // Drop of MpvChild kills mpv (expected_exit set) and destroys the
+    // surface; the monitor then reports consumer_dropped -> linger.
+    embeds.unmount(&unique_key);
+}
+
+#[cfg(any(not(target_os = "linux"), feature = "smoke", test))]
+#[tauri::command]
+fn mpv_unmount(_unique_key: String) {}
+
+#[cfg(all(target_os = "linux", not(any(feature = "smoke", test))))]
+#[tauri::command]
+fn mpv_set_volume(
+    embeds: State<'_, Arc<embed::EmbedHost>>,
+    unique_key: String,
+    volume: f64,
+) -> Result<(), String> {
+    embeds
+        .mpv_set_volume(&unique_key, volume)
+        .map_err(err_string)
+}
+
+#[cfg(any(not(target_os = "linux"), feature = "smoke", test))]
+#[tauri::command]
+fn mpv_set_volume(_unique_key: String, _volume: f64) -> Result<(), String> {
+    Ok(())
+}
+
+#[cfg(all(target_os = "linux", not(any(feature = "smoke", test))))]
+#[tauri::command]
+fn mpv_set_muted(
+    embeds: State<'_, Arc<embed::EmbedHost>>,
+    unique_key: String,
+    muted: bool,
+) -> Result<(), String> {
+    embeds.mpv_set_muted(&unique_key, muted).map_err(err_string)
+}
+
+#[cfg(any(not(target_os = "linux"), feature = "smoke", test))]
+#[tauri::command]
+fn mpv_set_muted(_unique_key: String, _muted: bool) -> Result<(), String> {
+    Ok(())
+}
+
 #[derive(serde::Serialize)]
 struct ImportResult {
     added: u32,
@@ -2005,6 +2202,13 @@ macro_rules! register_handlers {
             $crate::video_start,
             $crate::video_stop,
             $crate::frontend_log,
+            $crate::video_backend,
+            $crate::mpv_mount,
+            $crate::mpv_bounds,
+            $crate::mpv_set_visible,
+            $crate::mpv_unmount,
+            $crate::mpv_set_volume,
+            $crate::mpv_set_muted,
             $crate::open_in_browser,
             $crate::open_url,
             $crate::list_socials,
@@ -2263,6 +2467,12 @@ pub fn run() {
             if let tauri::RunEvent::Exit = event {
                 if let Some(vm) = app_handle.try_state::<Arc<video::VideoManager>>() {
                     vm.stop_all();
+                }
+                #[cfg(target_os = "linux")]
+                if let Some(host) = app_handle.try_state::<Arc<embed::EmbedHost>>() {
+                    // Same rationale as streamlink: process::exit skips Drop;
+                    // PDEATHSIG covers crashes, this covers clean exits.
+                    host.stop_all_mpv();
                 }
             }
         });

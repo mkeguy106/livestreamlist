@@ -108,12 +108,11 @@ pub(crate) struct MpvProcess {
     pub(crate) expected_exit: Arc<AtomicBool>,
 }
 
-// `spawn`/`set_property` are exercised by embed::mount_mpv (Task 3) and
-// mpv_set_volume/mpv_set_muted (Task 5's IPC commands), but those call sites
-// are #[cfg(not(test))] — under the `--all-targets` test-target compile they
+// `spawn`/`set_property` are exercised by embed::mount_mpv and the
+// mpv_set_volume/mpv_set_muted IPC commands, but those call sites are
+// #[cfg(not(test))] — under the `--all-targets` test-target compile they
 // have no caller (spawning a real mpv process isn't unit-testable), so the
 // allow stays until this crate has a caller reachable in both builds.
-// TODO(Task 5): reassess once the IPC commands are wired in
 #[allow(dead_code)]
 impl MpvProcess {
     pub(crate) fn spawn(spec: &MpvSpawnSpec) -> anyhow::Result<Self> {

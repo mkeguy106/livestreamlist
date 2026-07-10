@@ -37,8 +37,10 @@ impl Rect {
 }
 
 /// Everything `mount_mpv` needs beyond geometry.
-// TODO(Task 5): remove — constructed by the invoke command wiring the mpv
-// backend into video_start
+// Constructed by lib.rs's real `mpv_mount` command, which is
+// #[cfg(not(test))] — under the `--all-targets` test-target compile there is
+// no caller, so the allow stays until this crate has a caller reachable in
+// both builds.
 #[cfg(target_os = "linux")]
 #[allow(dead_code)]
 pub struct MpvMountSpec {
@@ -922,10 +924,7 @@ impl EmbedHost {
     ///
     /// MAIN THREAD ONLY (GTK) — async callers route through
     /// `AppHandle::run_on_main_thread` + a oneshot.
-    // TODO(Task 5): remove — consumed by the invoke command wiring the mpv
-    // backend into video_start
     #[cfg(target_os = "linux")]
-    #[allow(dead_code)]
     pub fn mount_mpv(
         &self,
         app: &tauri::AppHandle,
@@ -1042,9 +1041,8 @@ impl EmbedHost {
     }
 
     /// The session generation the mounted mpv child (if any) belongs to.
-    // TODO(Task 5): remove — consumed by the mpv IPC commands
+    // Called by mpv::spawn_monitor's generation check.
     #[cfg(target_os = "linux")]
-    #[allow(dead_code)]
     pub fn mpv_generation(&self, key: &str) -> Option<u64> {
         let g = self.inner.lock();
         match &g.children.get(key)?.inner {
@@ -1075,9 +1073,7 @@ impl EmbedHost {
 
     /// Live volume over mpv IPC (0.0–1.0 UI scale). Missing key is benign
     /// (an unmount raced a slider drag).
-    // TODO(Task 5): remove — consumed by the mpv IPC commands
     #[cfg(target_os = "linux")]
-    #[allow(dead_code)]
     pub fn mpv_set_volume(&self, key: &str, volume01: f64) -> anyhow::Result<()> {
         let g = self.inner.lock();
         match g.children.get(key).map(|c| &c.inner) {
@@ -1090,9 +1086,7 @@ impl EmbedHost {
     }
 
     /// Live mute over mpv IPC. Missing key is benign.
-    // TODO(Task 5): remove — consumed by the mpv IPC commands
     #[cfg(target_os = "linux")]
-    #[allow(dead_code)]
     pub fn mpv_set_muted(&self, key: &str, muted: bool) -> anyhow::Result<()> {
         let g = self.inner.lock();
         match g.children.get(key).map(|c| &c.inner) {
@@ -1125,10 +1119,7 @@ impl EmbedHost {
     /// App-exit reap: kill every mpv child process. GTK teardown is skipped
     /// on purpose — the process is exiting; only the child processes leak.
     /// Called from run()'s RunEvent::Exit alongside VideoManager::stop_all.
-    // TODO(Task 5): remove — wired into RunEvent::Exit alongside
-    // VideoManager::stop_all
     #[cfg(target_os = "linux")]
-    #[allow(dead_code)]
     pub fn stop_all_mpv(&self) {
         let mut g = self.inner.lock();
         for child in g.children.values_mut() {
@@ -1139,12 +1130,10 @@ impl EmbedHost {
     }
 }
 
-// Test-build no-op so run()/commands compile under cfg(test) once Task 5
-// wires a call site into RunEvent::Exit.
-// TODO(Task 5): reassess once that call site lands
+// Test-build no-op so run()'s RunEvent::Exit call to host.stop_all_mpv()
+// (the real impl above is #[cfg(not(test))]) still resolves under cfg(test).
 #[cfg(all(target_os = "linux", test))]
 impl EmbedHost {
-    #[allow(dead_code)]
     pub fn stop_all_mpv(&self) {}
 }
 
