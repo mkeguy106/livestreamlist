@@ -419,6 +419,12 @@ fn video_backend() -> &'static str {
 // a stub for smoke/test builds and non-Linux targets (EmbedHost's mpv verbs
 // are cfg(target_os = "linux") + cfg(not(test)); non-Linux never selects the
 // mpv backend, so the stub is a backstop, not a path).
+/// Start (or resume) an inline mpv session and mount its surface.
+///
+/// Quality switches must unmount first — a second mount on an
+/// already-mounted key only resizes (mount_mpv's idempotent branch) and
+/// will NOT restart mpv against a new session/URL. (The frontend's
+/// remountKey flow relies on this.)
 #[cfg(all(target_os = "linux", not(any(feature = "smoke", test))))]
 #[tauri::command]
 // Args map 1:1 to the frontend IPC call's named parameters.
@@ -477,10 +483,13 @@ async fn mpv_mount(
             volume,
         };
         let bounds = embed::Rect::new(x, y, width, height);
-        app.run_on_main_thread(move || {
+        if let Err(e) = app.run_on_main_thread(move || {
             let _ = tx.send(host.mount_mpv(&app_for_mount, &key, bounds, spec));
-        })
-        .map_err(err_string)?;
+        }) {
+            let msg = err_string(e);
+            emit("error", Some(msg.clone()));
+            return Err(msg);
+        }
     }
     match rx.await {
         Ok(Ok(())) => Ok(true),
@@ -489,7 +498,11 @@ async fn mpv_mount(
             emit("error", Some(msg.clone()));
             Err(msg)
         }
-        Err(e) => Err(err_string(e)),
+        Err(e) => {
+            let msg = err_string(e);
+            emit("error", Some(msg.clone()));
+            Err(msg)
+        }
     }
 }
 

@@ -922,9 +922,16 @@ impl EmbedHost {
     /// overlay Fixed, hand its XID to a fresh mpv process playing `spec.url`,
     /// count mpv as the session's consumer, and start the monitor task.
     ///
+    /// Idempotent on an already-mounted key: only resizes — it will NOT
+    /// restart mpv against a new session/URL (quality switches must
+    /// unmount first).
+    ///
     /// MAIN THREAD ONLY (GTK) — async callers route through
     /// `AppHandle::run_on_main_thread` + a oneshot.
+    // Only called from the not(smoke/test) `mpv_mount` command variant;
+    // dead in smoke builds.
     #[cfg(target_os = "linux")]
+    #[allow(dead_code)]
     pub fn mount_mpv(
         &self,
         app: &tauri::AppHandle,
@@ -1041,8 +1048,11 @@ impl EmbedHost {
     }
 
     /// The session generation the mounted mpv child (if any) belongs to.
-    // Called by mpv::spawn_monitor's generation check.
+    // Called by mpv::spawn_monitor's generation check, but the monitor is
+    // only reachable from the not(smoke/test) `mpv_mount` command variant;
+    // dead in smoke builds.
     #[cfg(target_os = "linux")]
+    #[allow(dead_code)]
     pub fn mpv_generation(&self, key: &str) -> Option<u64> {
         let g = self.inner.lock();
         match &g.children.get(key)?.inner {
@@ -1073,7 +1083,10 @@ impl EmbedHost {
 
     /// Live volume over mpv IPC (0.0–1.0 UI scale). Missing key is benign
     /// (an unmount raced a slider drag).
+    // Only called from the not(smoke/test) `mpv_set_volume` command
+    // variant; dead in smoke builds.
     #[cfg(target_os = "linux")]
+    #[allow(dead_code)]
     pub fn mpv_set_volume(&self, key: &str, volume01: f64) -> anyhow::Result<()> {
         let g = self.inner.lock();
         match g.children.get(key).map(|c| &c.inner) {
@@ -1086,7 +1099,10 @@ impl EmbedHost {
     }
 
     /// Live mute over mpv IPC. Missing key is benign.
+    // Only called from the not(smoke/test) `mpv_set_muted` command
+    // variant; dead in smoke builds.
     #[cfg(target_os = "linux")]
+    #[allow(dead_code)]
     pub fn mpv_set_muted(&self, key: &str, muted: bool) -> anyhow::Result<()> {
         let g = self.inner.lock();
         match g.children.get(key).map(|c| &c.inner) {
