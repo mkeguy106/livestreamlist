@@ -68,7 +68,6 @@ pub(crate) fn encode_ipc_command(args: &[serde_json::Value]) -> String {
 }
 
 #[derive(Debug)]
-#[allow(dead_code)]
 pub(crate) enum MpvEvent {
     /// Playback (re)started — first frames are flowing.
     Ready,
@@ -77,7 +76,6 @@ pub(crate) enum MpvEvent {
 }
 
 /// Classify one line from mpv's IPC socket. Pure — unit-tested.
-#[allow(dead_code)]
 pub(crate) fn parse_mpv_event(line: &str) -> Option<MpvEvent> {
     let v: serde_json::Value = serde_json::from_str(line).ok()?;
     match v.get("event")?.as_str()? {
@@ -195,17 +193,124 @@ impl Drop for MpvProcess {
     }
 }
 
-/// Task 4 replaces this stub with the real IPC-socket monitor.
-// TODO(Task 5): remove — reachable once mount_mpv is wired to video_start
 #[cfg(not(test))]
-#[allow(dead_code)]
+const SOCKET_CONNECT_ATTEMPTS: u32 = 100; // × 100 ms = 10 s budget
+#[cfg(not(test))]
+const SOCKET_CONNECT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// Watch one mpv process via its IPC socket: mark the surface ready on the
+/// first playback event, and on socket EOF (mpv exited) start the session
+/// linger + — for UNEXPECTED exits — tear down the surface and tell React.
+///
+/// Runs on the async runtime; every GTK touch routes through
+/// run_on_main_thread. All teardown is generation-guarded so a remount
+/// under the same key is never destroyed by a stale monitor.
+#[cfg(not(test))]
 pub(crate) fn spawn_monitor(
-    _app: tauri::AppHandle,
-    _unique_key: String,
-    _generation: u64,
-    _socket_path: PathBuf,
-    _expected_exit: Arc<AtomicBool>,
+    app: tauri::AppHandle,
+    unique_key: String,
+    generation: u64,
+    socket_path: PathBuf,
+    expected_exit: Arc<AtomicBool>,
 ) {
+    tauri::async_runtime::spawn(async move {
+        let mut emitted_playing = false;
+        let mut end_error: Option<String> = None;
+
+        match connect_with_retry(&socket_path).await {
+            None => {
+                end_error = Some("mpv exited during startup (no IPC socket)".to_string());
+            }
+            Some(stream) => {
+                use tokio::io::AsyncBufReadExt as _;
+                let mut lines = tokio::io::BufReader::new(stream).lines();
+                while let Ok(Some(line)) = lines.next_line().await {
+                    match parse_mpv_event(&line) {
+                        Some(MpvEvent::Ready) if !emitted_playing => {
+                            emitted_playing = true;
+                            mark_ready_on_main(&app, &unique_key, generation);
+                            emit_status(&app, &unique_key, "playing", None);
+                        }
+                        Some(MpvEvent::EndFile { error: true }) => {
+                            end_error = Some("mpv playback error".to_string());
+                        }
+                        _ => {}
+                    }
+                }
+                // EOF: mpv exited (stream over, crash, or our kill).
+            }
+        }
+
+        // The mpv consumer is gone either way — linger starts now (the
+        // reaper's generation guard makes a stale drop inert).
+        {
+            use tauri::Manager as _;
+            app.state::<Arc<crate::video::VideoManager>>()
+                .consumer_dropped(&unique_key, generation);
+        }
+
+        if expected_exit.load(Ordering::SeqCst) {
+            return; // deliberate unmount/quit — the caller owns UI state
+        }
+
+        // Unexpected exit: surface teardown (gen-guarded, main thread) +
+        // status for the React panel.
+        let (state, message) = match end_error {
+            Some(m) => ("error", Some(m)),
+            // Clean EOF after real playback = the live stream ended.
+            None if emitted_playing => ("ended", None),
+            None => ("error", Some("mpv exited during startup".to_string())),
+        };
+        unmount_on_main(&app, &unique_key, generation);
+        emit_status(&app, &unique_key, state, message.as_deref());
+    });
+}
+
+/// mpv creates the IPC socket shortly after exec; retry-connect with a
+/// bounded budget. None = the socket never appeared (mpv died instantly).
+#[cfg(not(test))]
+async fn connect_with_retry(path: &std::path::Path) -> Option<tokio::net::UnixStream> {
+    for _ in 0..SOCKET_CONNECT_ATTEMPTS {
+        if let Ok(s) = tokio::net::UnixStream::connect(path).await {
+            return Some(s);
+        }
+        tokio::time::sleep(SOCKET_CONNECT_INTERVAL).await;
+    }
+    None
+}
+
+#[cfg(not(test))]
+fn emit_status(app: &tauri::AppHandle, unique_key: &str, state: &str, message: Option<&str>) {
+    use tauri::Emitter as _;
+    let _ = app.emit(
+        &format!("mpv:status:{unique_key}"),
+        crate::video::VideoStatusEvent {
+            state: state.to_string(),
+            message: message.map(String::from),
+        },
+    );
+}
+
+#[cfg(not(test))]
+fn mark_ready_on_main(app: &tauri::AppHandle, unique_key: &str, generation: u64) {
+    use tauri::Manager as _;
+    let host = app.state::<Arc<crate::embed::EmbedHost>>().inner().clone();
+    let key = unique_key.to_string();
+    let _ = app.run_on_main_thread(move || {
+        if host.mpv_generation(&key) == Some(generation) {
+            host.mpv_mark_ready(&key);
+        }
+    });
+}
+
+#[cfg(not(test))]
+fn unmount_on_main(app: &tauri::AppHandle, unique_key: &str, generation: u64) {
+    use tauri::Manager as _;
+    let host = app.state::<Arc<crate::embed::EmbedHost>>().inner().clone();
+    let key = unique_key.to_string();
+    let _ = app.run_on_main_thread(move || {
+        host.unmount_mpv_if_generation(&key, generation);
+    });
 }
 
 #[cfg(test)]

@@ -506,7 +506,10 @@ impl VideoManager {
 
     /// Report an external (mpv) consumer detaching — starts the linger
     /// clock once the count reaches zero (reaper-side).
-    // TODO(Task 5): remove — consumed by the mpv IPC commands
+    // Called by mpv::spawn_monitor (Task 4), but that call site is
+    // #[cfg(not(test))] — under the `--all-targets` test-target compile
+    // there is no caller, so the allow stays until Task 5's IPC wiring adds
+    // an always-compiled one.
     #[allow(dead_code)]
     pub fn consumer_dropped(&self, unique_key: &str, generation: u64) {
         let _ = self.events_tx.send(ConsumerEvent::Dropped {

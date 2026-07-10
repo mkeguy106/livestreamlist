@@ -1055,7 +1055,10 @@ impl EmbedHost {
 
     /// Monitor callback: mpv confirmed playback — map the surface (unless
     /// currently occluded/hidden). MAIN THREAD ONLY.
-    // TODO(Task 4): remove — consumed by the mpv IPC-socket monitor
+    // Called by mpv::spawn_monitor's mark_ready_on_main (Task 4), but that
+    // call site is #[cfg(not(test))] — under the `--all-targets`
+    // test-target compile there is no caller, so the allow stays until
+    // Task 5's IPC wiring adds an always-compiled one.
     #[cfg(target_os = "linux")]
     #[allow(dead_code)]
     pub fn mpv_mark_ready(&self, key: &str) {
@@ -1101,7 +1104,10 @@ impl EmbedHost {
     /// Generation-guarded unmount for the monitor's crash path: never
     /// destroys a fresh remount that replaced the incarnation the monitor
     /// was watching. MAIN THREAD ONLY (drop destroys the GtkWidget).
-    // TODO(Task 4): remove — consumed by the mpv IPC-socket monitor
+    // Called by mpv::spawn_monitor's unmount_on_main (Task 4), but that
+    // call site is #[cfg(not(test))] — under the `--all-targets`
+    // test-target compile there is no caller, so the allow stays until
+    // Task 5's IPC wiring adds an always-compiled one.
     #[cfg(target_os = "linux")]
     #[allow(dead_code)]
     pub fn unmount_mpv_if_generation(&self, key: &str, generation: u64) -> bool {
