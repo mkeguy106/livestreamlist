@@ -399,8 +399,9 @@ pub(crate) struct MpvChild {
     /// events and monitor teardown are guarded on it.
     pub(crate) generation: u64,
     /// mpv confirmed playback (monitor saw playback-restart/file-loaded).
-    /// The surface stays HIDDEN until ready so the DOM poster/spinner shows
-    /// through during startup instead of a black rectangle.
+    /// Does NOT gate GTK visibility (the surface is created shown — GTK3
+    /// can't allocate hidden widgets); an idempotent remount reads it to
+    /// re-emit "playing" to a freshly-reloaded webview.
     pub(crate) ready: bool,
 }
 
@@ -1074,8 +1075,8 @@ impl EmbedHost {
         }
     }
 
-    /// Monitor callback: mpv confirmed playback — map the surface (unless
-    /// currently occluded/hidden). MAIN THREAD ONLY.
+    /// Monitor callback: mpv confirmed playback. Only flips the `ready`
+    /// flag (no GTK) — see the field doc on `MpvChild::ready`.
     // Called by mpv::spawn_monitor's mark_ready_on_main (Task 4), but that
     // call site is #[cfg(not(test))] — under the `--all-targets`
     // test-target compile there is no caller, so the allow stays until
