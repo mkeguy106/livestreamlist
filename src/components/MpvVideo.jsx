@@ -21,8 +21,14 @@ import { usePlayerState } from '../hooks/usePlayerState.js';
 import { EmbedLayerContext } from './EmbedLayer.jsx';
 import EmbedSlot from './EmbedSlot.jsx';
 import Tooltip from './Tooltip.jsx';
+import { initialMpvMuted, mpvQualityLabel, resolveMpvQuality } from '../utils/mpvMountArgs.js';
 
 const QUALITIES = ['best', '1080p60', '720p60', '720p', '480p'];
+const MAX_AUTO_RETRIES = 3;
+// Longer than the mpegts ladder on purpose: a retry inside VideoManager's
+// ≤5 s sweep window resumes the corpse streamlink port of a just-died
+// stream and fails again — the third attempt lands past it.
+const AUTO_RETRY_BACKOFF_MS = [1000, 2500, 5000];
 
 export default function MpvVideo({ channelKey, thumbnailUrl, variant = 'column', onClose }) {
   const { settings, patch } = usePreferences();
@@ -35,7 +41,7 @@ export default function MpvVideo({ channelKey, thumbnailUrl, variant = 'column',
   const [hover, setHover] = useState(false);
   const [qualityOpen, setQualityOpen] = useState(false);
   const [muted, setMuted] = useState(
-    chan.muted ?? ((settings?.video?.autoplay_unmuted ?? true) ? false : true),
+    initialMpvMuted(variant, chan.muted, settings?.video),
   );
   const [volume, setVolume] = useState(chan.volume ?? 0.5);
   const phaseRef = useRef(phase);
@@ -47,23 +53,40 @@ export default function MpvVideo({ channelKey, thumbnailUrl, variant = 'column',
   // still pulling the old quality.
   const sessionQualityRef = useRef(null);
 
-  // Mount args read by EmbedLayer at mpv_mount time. Kept in a ref so
+  // Mount args read by EmbedLayer at mpv_mount time. Kept in refs so
   // getMountArgs stays identity-stable (EmbedSlot register-effect rule).
+  // Focus requests `null` (Rust resolves per-channel → default_quality) so
+  // the label ref carries what Rust WILL resolve, for the quality button.
   const mountArgsRef = useRef({});
   mountArgsRef.current = {
-    quality: chan.quality ?? settings?.video?.column_quality ?? '720p60',
+    quality: resolveMpvQuality(variant, chan.quality, settings?.video),
     muted,
     volume,
   };
+  const mountLabelRef = useRef('');
+  mountLabelRef.current = mpvQualityLabel(variant, chan.quality, settings?.video);
   const getMountArgs = useCallback(() => {
-    sessionQualityRef.current = mountArgsRef.current.quality;
+    sessionQualityRef.current = mountLabelRef.current;
     return mountArgsRef.current;
   }, []);
+
+  const autoRetriesRef = useRef(0);
+  const retryTimerRef = useRef(null);
+  const cancelPendingRetry = useCallback(() => {
+    if (retryTimerRef.current) {
+      clearTimeout(retryTimerRef.current);
+      retryTimerRef.current = null;
+    }
+  }, []);
+
+  const layerRef = useRef(layer);
+  useEffect(() => { layerRef.current = layer; }, [layer]);
 
   // All phase transitions come from Rust (mpv_mount + the monitor task).
   useEffect(() => {
     let unlisten = null;
     let cancelled = false;
+    autoRetriesRef.current = 0; // fresh channel = fresh budget
     (async () => {
       const un = await listenEvent(`mpv:status:${channelKey}`, (payload) => {
         const state = payload?.state;
@@ -71,19 +94,39 @@ export default function MpvVideo({ channelKey, thumbnailUrl, variant = 'column',
         // teardown must not clobber the popout/popped hand-off UI.
         if (phaseRef.current === 'popout' || phaseRef.current === 'popped') return;
         if (state === 'starting') setPhase('starting');
-        else if (state === 'playing') setPhase('playing');
+        else if (state === 'playing') {
+          autoRetriesRef.current = 0; // recovered — refill the budget
+          setPhase('playing');
+        }
         else if (state === 'cap') setPhase('cap');
         else if (state === 'ended') setPhase('ended');
         else if (state === 'error') {
-          setErrMsg(payload?.message || 'stream error');
-          setPhase('error');
+          // Bounded auto-retry before surfacing the chip (crash, streamlink
+          // hiccup, mpv startup exit). ended/cap never reach here.
+          if (autoRetriesRef.current < MAX_AUTO_RETRIES) {
+            const attempt = autoRetriesRef.current;
+            autoRetriesRef.current += 1;
+            setPhase('starting'); // keep the spinner — no error flash
+            cancelPendingRetry();
+            retryTimerRef.current = setTimeout(() => {
+              retryTimerRef.current = null;
+              layerRef.current?.remountKey?.(channelKey);
+            }, AUTO_RETRY_BACKOFF_MS[attempt] ?? 5000);
+          } else {
+            setErrMsg(payload?.message || 'stream error');
+            setPhase('error');
+          }
         }
       });
       if (cancelled) { un(); return; }
       unlisten = un;
     })();
-    return () => { cancelled = true; if (unlisten) unlisten(); };
-  }, [channelKey]);
+    return () => {
+      cancelled = true;
+      cancelPendingRetry();
+      if (unlisten) unlisten();
+    };
+  }, [channelKey, cancelPendingRetry]);
 
   // Hover-occlusion: hide the native surface while the cursor is over the
   // panel so the DOM poster + control strip are visible and clickable.
@@ -122,23 +165,29 @@ export default function MpvVideo({ channelKey, thumbnailUrl, variant = 'column',
   };
   const commitVolume = () => patchChannel({ volume });
   const pickQuality = (q) => {
+    cancelPendingRetry();
     setQualityOpen(false);
     patchChannel({ quality: q });
     mountArgsRef.current = { ...mountArgsRef.current, quality: q };
+    mountLabelRef.current = q;
     setPhase('starting');
     layer?.remountKey?.(channelKey); // kill + respawn against the new URL
   };
   const popout = () => {
+    cancelPendingRetry();
     phaseRef.current = 'popout'; // beat the teardown events synchronously
     setPhase('popout');
     videoStop(channelKey).catch(() => {}); // explicit stop — bypass linger
     launchStream(channelKey);
   };
   const stop = () => {
+    cancelPendingRetry();
     videoStop(channelKey).catch(() => {});
     onClose?.(); // unmount -> layer unregister -> mpv_unmount
   };
   const retry = () => {
+    cancelPendingRetry();
+    autoRetriesRef.current = 0;
     setErrMsg('');
     setPhase('starting');
     // remountKey, not a plain retry-reflow: after a monitor-driven
@@ -170,7 +219,7 @@ export default function MpvVideo({ channelKey, thumbnailUrl, variant = 'column',
     return () => clearTimeout(id);
   }, [phase]);
 
-  const currentQuality = sessionQualityRef.current ?? mountArgsRef.current.quality;
+  const currentQuality = sessionQualityRef.current ?? mountLabelRef.current;
   const wrapStyle =
     variant === 'focus'
       ? { position: 'absolute', inset: 0 }
