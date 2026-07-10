@@ -24,6 +24,9 @@ pub(crate) struct MpvSpawnSpec {
     pub muted: bool,
     /// UI scale 0.0–1.0 (converted to mpv's 0–100).
     pub volume: f64,
+    /// Mixer label for this stream (the channel's unique_key) — without it
+    /// every stream shows as its localhost URL in the system mixer.
+    pub title: String,
 }
 
 /// mpv's volume property is 0–100.
@@ -52,6 +55,15 @@ pub(crate) fn build_mpv_args(spec: &MpvSpawnSpec) -> Vec<String> {
         // EOF (stream over / streamlink gone) exits mpv; the monitor task
         // turns that into an "ended" status.
         "--keep-open=no".to_string(),
+        // Own audio identity: PipeWire/WirePlumber stream-restore keys on the
+        // application id, and plain "mpv" SHARES saved volume/mute state with
+        // the user's popout mpv — a remembered system-mixer mute on "mpv"
+        // silently muted every inline stream (found live: mpv's own softvol
+        // said unmuted while the pipewire stream restored muted). A dedicated
+        // client name gives inline streams their own restore entry and a
+        // recognizable name in the mixer.
+        "--audio-client-name=livestreamlist".to_string(),
+        format!("--force-media-title={}", spec.title),
         format!("--input-ipc-server={}", spec.socket_path.display()),
         format!("--mute={}", if spec.muted { "yes" } else { "no" }),
         format!("--volume={}", mpv_volume(spec.volume)),
@@ -327,6 +339,7 @@ mod tests {
             socket_path: std::path::PathBuf::from("/tmp/lsl-mpv-1-0.sock"),
             muted: true,
             volume: 0.5,
+            title: "twitch:gems".into(),
         };
         let args = build_mpv_args(&spec);
         // The recipe that makes embedded presentation work at all:
@@ -339,6 +352,9 @@ mod tests {
         assert!(args.contains(&"--input-default-bindings=no".to_string()));
         assert!(args.contains(&"--osc=no".to_string()));
         assert!(args.contains(&"--input-ipc-server=/tmp/lsl-mpv-1-0.sock".to_string()));
+        // Own restore identity + a readable mixer label (see build_mpv_args).
+        assert!(args.contains(&"--audio-client-name=livestreamlist".to_string()));
+        assert!(args.contains(&"--force-media-title=twitch:gems".to_string()));
         assert!(args.contains(&"--mute=yes".to_string()));
         assert!(args.contains(&"--volume=50".to_string()));
         // wid then url close the argv (url MUST be last — everything after a
@@ -355,6 +371,7 @@ mod tests {
             socket_path: std::path::PathBuf::from("/tmp/s.sock"),
             muted: false,
             volume: 1.0,
+            title: "twitch:gems".into(),
         };
         let args = build_mpv_args(&spec);
         assert!(args.contains(&"--mute=no".to_string()));

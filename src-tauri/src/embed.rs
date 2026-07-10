@@ -1014,6 +1014,7 @@ impl EmbedHost {
             socket_path: socket_path.clone(),
             muted: spec.muted,
             volume: spec.volume,
+            title: unique_key.to_string(),
         };
         let process = match crate::mpv::MpvProcess::spawn(&mpv_spec) {
             Ok(p) => p,
