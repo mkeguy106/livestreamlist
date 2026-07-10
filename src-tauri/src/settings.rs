@@ -369,7 +369,7 @@ fn default_column_quality() -> String {
     "720p60".into()
 }
 fn default_video_max_concurrent() -> u32 {
-    6
+    9
 }
 fn default_video_linger_seconds() -> u32 {
     60
@@ -760,7 +760,7 @@ mod tests {
         assert!(s.video.channels.is_empty());
         assert_eq!(s.video.default_quality, "best");
         assert_eq!(s.video.column_quality, "720p60");
-        assert_eq!(s.video.max_concurrent, 6);
+        assert_eq!(s.video.max_concurrent, 9);
         assert_eq!(s.video.linger_seconds, 60);
         assert!(s.video.use_twitch_auth);
         assert!(s.video.autoplay_columns, "autoplay_columns default true");
