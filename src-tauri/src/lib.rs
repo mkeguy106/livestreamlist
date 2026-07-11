@@ -9,7 +9,7 @@ mod chat;
 mod config;
 mod embed;
 mod login_popup;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 mod mpv;
 mod notify;
 mod platforms;
