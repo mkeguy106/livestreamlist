@@ -209,6 +209,24 @@ const SOCKET_CONNECT_ATTEMPTS: u32 = 100; // × 100 ms = 10 s budget
 #[cfg(not(test))]
 const SOCKET_CONNECT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
 
+/// Terminal-state classification for the monitor's finalize step. Pure —
+/// unit-tested. A clean stream end always announces itself with an
+/// `end-file` event before the socket closes; EOF without one means mpv
+/// was killed or crashed (verified live: SIGKILL produces exactly that),
+/// which must surface as an error so the frontend's auto-retry ladder runs.
+pub(crate) fn finalize_state(
+    end_error: Option<String>,
+    emitted_playing: bool,
+    saw_end_file: bool,
+) -> (&'static str, Option<String>) {
+    match end_error {
+        Some(m) => ("error", Some(m)),
+        None if emitted_playing && saw_end_file => ("ended", None),
+        None if emitted_playing => ("error", Some("mpv terminated unexpectedly".to_string())),
+        None => ("error", Some("mpv exited during startup".to_string())),
+    }
+}
+
 /// Watch one mpv process via its IPC socket: mark the surface ready on the
 /// first playback event, and on socket EOF (mpv exited) start the session
 /// linger + — for UNEXPECTED exits — tear down the surface and tell React.
@@ -227,6 +245,7 @@ pub(crate) fn spawn_monitor(
     tauri::async_runtime::spawn(async move {
         let mut emitted_playing = false;
         let mut end_error: Option<String> = None;
+        let mut saw_end_file = false;
 
         match connect_with_retry(&socket_path).await {
             None => {
@@ -245,8 +264,11 @@ pub(crate) fn spawn_monitor(
                             mark_ready_on_main(&app, &unique_key, generation);
                             emit_status(&app, &unique_key, "playing", None);
                         }
-                        Some(MpvEvent::EndFile { error: true }) => {
-                            end_error = Some("mpv playback error".to_string());
+                        Some(MpvEvent::EndFile { error }) => {
+                            saw_end_file = true;
+                            if error {
+                                end_error = Some("mpv playback error".to_string());
+                            }
                         }
                         _ => {}
                     }
@@ -269,12 +291,7 @@ pub(crate) fn spawn_monitor(
 
         // Unexpected exit: surface teardown (gen-guarded, main thread) +
         // status for the React panel.
-        let (state, message) = match end_error {
-            Some(m) => ("error", Some(m)),
-            // Clean EOF after real playback = the live stream ended.
-            None if emitted_playing => ("ended", None),
-            None => ("error", Some("mpv exited during startup".to_string())),
-        };
+        let (state, message) = finalize_state(end_error, emitted_playing, saw_end_file);
         unmount_on_main(&app, &unique_key, generation);
         emit_status(&app, &unique_key, state, message.as_deref());
     });
@@ -429,5 +446,31 @@ mod tests {
         let b = alloc_socket_path();
         assert_ne!(a, b);
         assert!(a.to_string_lossy().contains("livestreamlist-mpv-"));
+    }
+
+    #[test]
+    fn finalize_state_classifies_terminations() {
+        // Clean stream end: played + end-file announced -> ended.
+        assert_eq!(finalize_state(None, true, true), ("ended", None));
+        // Crash/SIGKILL: played but socket EOF with NO end-file -> error
+        // (the auto-retry ladder keys on this).
+        assert_eq!(
+            finalize_state(None, true, false),
+            ("error", Some("mpv terminated unexpectedly".to_string()))
+        );
+        // Playback error reported by mpv wins regardless of the other flags.
+        assert_eq!(
+            finalize_state(Some("mpv playback error".into()), true, true),
+            ("error", Some("mpv playback error".to_string()))
+        );
+        // Never played: startup exit (with or without end-file).
+        assert_eq!(
+            finalize_state(None, false, false),
+            ("error", Some("mpv exited during startup".to_string()))
+        );
+        assert_eq!(
+            finalize_state(None, false, true),
+            ("error", Some("mpv exited during startup".to_string()))
+        );
     }
 }
