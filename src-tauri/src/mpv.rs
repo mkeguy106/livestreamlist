@@ -1,4 +1,4 @@
-//! Embedded-mpv process management (inline video slice A — Linux only).
+//! Embedded-mpv process management (inline video — Linux + Windows).
 //!
 //! One `MpvProcess` per playing channel: mpv renders into a foreign X11
 //! window (`--wid`) with the LOAD-BEARING recipe `--vo=x11 --hwdec=auto-copy`
@@ -7,6 +7,10 @@
 //! `x11` blits reliably while `auto-copy` keeps decode on nvdec). Control is
 //! one-shot JSON lines over mpv's IPC socket; observation (playback start,
 //! crash/EOF) is the monitor task (`spawn_monitor`, Task 4).
+//!
+//! Windows (slice C): mpv renders into a child HWND with the default `gpu`
+//! vo and JSON IPC over a named pipe; UNVERIFIED on real hardware —
+//! `LSL_MPV_VO` overrides the vo in the field.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -34,6 +38,30 @@ pub(crate) fn mpv_volume(volume01: f64) -> u32 {
     (volume01.clamp(0.0, 1.0) * 100.0).round() as u32
 }
 
+/// Per-OS default video output. Linux `x11` is LOAD-BEARING (the default
+/// `gpu` presents BLACK into an embedded child window on the target
+/// NVIDIA/KDE box — see the module docs and the spike). Windows uses the
+/// default `gpu` vo into a child HWND per the spec's platform matrix —
+/// UNVERIFIED on real hardware (slice C ships best-effort).
+pub(crate) fn default_vo() -> &'static str {
+    if cfg!(target_os = "linux") {
+        "x11"
+    } else {
+        "gpu"
+    }
+}
+
+/// The vo actually used: a non-blank `LSL_MPV_VO` env override wins (the
+/// field-debugging escape hatch for the unverified Windows path — e.g.
+/// `LSL_MPV_VO=d3d11`), else the per-OS default. Pure for testability;
+/// `build_mpv_args` feeds it the real env.
+pub(crate) fn resolve_vo(env_override: Option<&str>) -> String {
+    match env_override {
+        Some(v) if !v.trim().is_empty() => v.trim().to_string(),
+        _ => default_vo().to_string(),
+    }
+}
+
 /// Pure argv builder (after the `mpv` binary). The url must be last.
 pub(crate) fn build_mpv_args(spec: &MpvSpawnSpec) -> Vec<String> {
     vec![
@@ -43,7 +71,10 @@ pub(crate) fn build_mpv_args(spec: &MpvSpawnSpec) -> Vec<String> {
         // LOAD-BEARING: --vo=gpu presents black into an embedded child
         // window on NVIDIA/KDE; x11 blits reliably, auto-copy keeps decode
         // on nvdec. See the spike + spec.
-        "--vo=x11".to_string(),
+        format!(
+            "--vo={}",
+            resolve_vo(std::env::var("LSL_MPV_VO").ok().as_deref())
+        ),
         "--hwdec=auto-copy".to_string(),
         "--profile=low-latency".to_string(),
         // No mpv-native UI/input — controls are the app's DOM strip; pointer
@@ -106,10 +137,16 @@ static SOCKET_SEQ: AtomicU64 = AtomicU64::new(0);
 /// from colliding).
 pub(crate) fn alloc_socket_path() -> PathBuf {
     let n = SOCKET_SEQ.fetch_add(1, Ordering::Relaxed);
-    std::env::temp_dir().join(format!(
-        "livestreamlist-mpv-{}-{n}.sock",
-        std::process::id()
-    ))
+    let name = format!("livestreamlist-mpv-{}-{n}", std::process::id());
+    #[cfg(windows)]
+    {
+        // mpv on Windows serves JSON IPC over a named pipe.
+        PathBuf::from(format!(r"\\.\pipe\{name}"))
+    }
+    #[cfg(not(windows))]
+    {
+        std::env::temp_dir().join(format!("{name}.sock"))
+    }
 }
 
 pub(crate) struct MpvProcess {
@@ -118,6 +155,10 @@ pub(crate) struct MpvProcess {
     /// Set before any deliberate kill so the monitor task can distinguish
     /// unmount/quit from a crash.
     pub(crate) expected_exit: Arc<AtomicBool>,
+    /// Windows: owns the KILL_ON_JOB_CLOSE job object binding mpv's lifetime
+    /// to ours (the PDEATHSIG analog). Held for RAII only.
+    #[cfg(windows)]
+    _job: Option<job::JobHandle>,
 }
 
 // `spawn`/`set_property` are exercised by embed::mount_mpv and the
@@ -128,32 +169,41 @@ pub(crate) struct MpvProcess {
 #[allow(dead_code)]
 impl MpvProcess {
     pub(crate) fn spawn(spec: &MpvSpawnSpec) -> anyhow::Result<Self> {
-        use std::os::unix::process::CommandExt as _;
         let mut cmd = std::process::Command::new("mpv");
         cmd.args(build_mpv_args(spec))
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null());
-        // SAFETY: prctl/getppid/raise are async-signal-safe and nothing else
-        // runs between fork and exec. PDEATHSIG=SIGKILL means an abrupt
-        // parent death (crash, SIGKILL — paths where neither Drop nor
-        // RunEvent::Exit run) cannot orphan mpv (the spike orphaned mpv
-        // exactly this way).
-        let parent_pid = std::process::id() as libc::pid_t;
-        unsafe {
-            cmd.pre_exec(move || {
-                if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) != 0 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                // PDEATHSIG race: if the parent died between fork() and the
-                // prctl above, the deathsig bound to the reparented parent
-                // and will never fire — detect that by re-checking the ppid
-                // and self-terminate.
-                if libc::getppid() != parent_pid {
-                    libc::raise(libc::SIGKILL);
-                }
-                Ok(())
-            });
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt as _;
+            // SAFETY: prctl/getppid/raise are async-signal-safe and nothing
+            // else runs between fork and exec. PDEATHSIG=SIGKILL means an
+            // abrupt parent death (crash, SIGKILL — paths where neither Drop
+            // nor RunEvent::Exit run) cannot orphan mpv.
+            let parent_pid = std::process::id() as libc::pid_t;
+            unsafe {
+                cmd.pre_exec(move || {
+                    if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) != 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    // PDEATHSIG race: if the parent died between fork() and
+                    // the prctl above, the deathsig bound to the reparented
+                    // parent and will never fire — detect that by
+                    // re-checking the ppid and self-terminate.
+                    if libc::getppid() != parent_pid {
+                        libc::raise(libc::SIGKILL);
+                    }
+                    Ok(())
+                });
+            }
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt as _;
+            // No console window flash for the child.
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            cmd.creation_flags(CREATE_NO_WINDOW);
         }
         let child = cmd.spawn().map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
@@ -162,10 +212,18 @@ impl MpvProcess {
                 anyhow::anyhow!("spawning mpv: {e}")
             }
         })?;
+        // Windows PDEATHSIG analog: a Job Object with KILL_ON_JOB_CLOSE —
+        // the kernel closes our job handle when this process dies (any way),
+        // killing mpv with it. Best-effort: failure logs and continues
+        // (RunEvent::Exit + Drop still reap on normal paths).
+        #[cfg(windows)]
+        let job = job::assign_kill_on_close(&child);
         Ok(Self {
             child,
             socket_path: spec.socket_path.clone(),
             expected_exit: Arc::new(AtomicBool::new(false)),
+            #[cfg(windows)]
+            _job: job,
         })
     }
 
@@ -173,17 +231,29 @@ impl MpvProcess {
     /// (mpv accepts many sequential connections; sub-ms on localhost).
     pub(crate) fn set_property(&self, name: &str, value: serde_json::Value) -> anyhow::Result<()> {
         use std::io::Write as _;
-        let mut s = std::os::unix::net::UnixStream::connect(&self.socket_path)
-            .with_context(|| format!("connecting mpv ipc {}", self.socket_path.display()))?;
-        s.set_write_timeout(Some(std::time::Duration::from_millis(500)))?;
-        s.write_all(
-            encode_ipc_command(&[
-                serde_json::json!("set_property"),
-                serde_json::json!(name),
-                value,
-            ])
-            .as_bytes(),
-        )?;
+        let line = encode_ipc_command(&[
+            serde_json::json!("set_property"),
+            serde_json::json!(name),
+            value,
+        ]);
+        #[cfg(unix)]
+        {
+            let mut s = std::os::unix::net::UnixStream::connect(&self.socket_path)
+                .with_context(|| format!("connecting mpv ipc {}", self.socket_path.display()))?;
+            s.set_write_timeout(Some(std::time::Duration::from_millis(500)))?;
+            s.write_all(line.as_bytes())?;
+        }
+        #[cfg(windows)]
+        {
+            // Named-pipe client via CreateFile semantics — std::fs opens
+            // \\.\pipe\ paths directly.
+            let mut f = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&self.socket_path)
+                .with_context(|| format!("connecting mpv ipc {}", self.socket_path.display()))?;
+            f.write_all(line.as_bytes())?;
+        }
         Ok(())
     }
 
@@ -194,6 +264,7 @@ impl MpvProcess {
         self.expected_exit.store(true, Ordering::SeqCst);
         let _ = self.child.kill();
         let _ = self.child.wait();
+        #[cfg(unix)]
         let _ = std::fs::remove_file(&self.socket_path);
     }
 }
@@ -297,12 +368,23 @@ pub(crate) fn spawn_monitor(
     });
 }
 
-/// mpv creates the IPC socket shortly after exec; retry-connect with a
-/// bounded budget. None = the socket never appeared (mpv died instantly).
+#[cfg(all(not(test), unix))]
+type IpcStream = tokio::net::UnixStream;
+#[cfg(all(not(test), windows))]
+type IpcStream = tokio::net::windows::named_pipe::NamedPipeClient;
+
+/// mpv creates the IPC endpoint shortly after exec; retry-connect with a
+/// bounded budget. None = it never appeared (mpv died instantly).
 #[cfg(not(test))]
-async fn connect_with_retry(path: &std::path::Path) -> Option<tokio::net::UnixStream> {
+async fn connect_with_retry(path: &std::path::Path) -> Option<IpcStream> {
     for _ in 0..SOCKET_CONNECT_ATTEMPTS {
+        #[cfg(unix)]
         if let Ok(s) = tokio::net::UnixStream::connect(path).await {
+            return Some(s);
+        }
+        #[cfg(windows)]
+        if let Ok(s) = tokio::net::windows::named_pipe::ClientOptions::new().open(path.as_os_str())
+        {
             return Some(s);
         }
         tokio::time::sleep(SOCKET_CONNECT_INTERVAL).await;
@@ -344,6 +426,65 @@ fn unmount_on_main(app: &tauri::AppHandle, unique_key: &str, generation: u64) {
     });
 }
 
+/// Windows Job Object plumbing — the PDEATHSIG analog. `cfg(windows)` only.
+#[cfg(windows)]
+pub(crate) mod job {
+    use std::os::windows::io::AsRawHandle as _;
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows_sys::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+        SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    };
+
+    /// Owning handle to a job configured KILL_ON_JOB_CLOSE with the mpv
+    /// child assigned: when the last handle closes (including our process
+    /// dying abruptly), the kernel kills the child.
+    pub(crate) struct JobHandle(HANDLE);
+    // SAFETY: a job HANDLE is a kernel object reference; it is not
+    // thread-affine. We only close it (Drop).
+    unsafe impl Send for JobHandle {}
+    unsafe impl Sync for JobHandle {}
+    impl Drop for JobHandle {
+        fn drop(&mut self) {
+            unsafe {
+                CloseHandle(self.0);
+            }
+        }
+    }
+
+    pub(crate) fn assign_kill_on_close(child: &std::process::Child) -> Option<JobHandle> {
+        unsafe {
+            let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+            if job.is_null() {
+                log::warn!("mpv job object: CreateJobObjectW failed — no orphan protection");
+                return None;
+            }
+            let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+            info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            if SetInformationJobObject(
+                job,
+                JobObjectExtendedLimitInformation,
+                &info as *const _ as *const core::ffi::c_void,
+                std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            ) == 0
+            {
+                log::warn!("mpv job object: SetInformationJobObject failed");
+                CloseHandle(job);
+                return None;
+            }
+            if AssignProcessToJobObject(job, child.as_raw_handle() as HANDLE) == 0 {
+                // Can fail inside some launcher-managed jobs on old Windows;
+                // nested jobs are fine on Win8+. Best-effort.
+                log::warn!("mpv job object: AssignProcessToJobObject failed");
+                CloseHandle(job);
+                return None;
+            }
+            Some(JobHandle(job))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -360,6 +501,9 @@ mod tests {
         };
         let args = build_mpv_args(&spec);
         // The recipe that makes embedded presentation work at all:
+        // Per-OS default vo (Linux x11 is load-bearing; Windows gpu per spec).
+        assert!(args.contains(&format!("--vo={}", default_vo())));
+        #[cfg(target_os = "linux")]
         assert!(args.contains(&"--vo=x11".to_string()));
         assert!(args.contains(&"--hwdec=auto-copy".to_string()));
         assert!(args.contains(&"--no-config".to_string()));
@@ -368,7 +512,9 @@ mod tests {
         assert!(args.contains(&"--input-cursor-passthrough".to_string()));
         assert!(args.contains(&"--input-default-bindings=no".to_string()));
         assert!(args.contains(&"--osc=no".to_string()));
-        assert!(args.contains(&"--input-ipc-server=/tmp/lsl-mpv-1-0.sock".to_string()));
+        assert!(args
+            .iter()
+            .any(|a| a.starts_with("--input-ipc-server=") && a.contains("lsl-mpv-1-0")));
         // Own restore identity + a readable mixer label (see build_mpv_args).
         assert!(args.contains(&"--audio-client-name=livestreamlist".to_string()));
         assert!(args.contains(&"--force-media-title=twitch:gems".to_string()));
@@ -472,5 +618,36 @@ mod tests {
             finalize_state(None, false, true),
             ("error", Some("mpv exited during startup".to_string()))
         );
+    }
+
+    #[test]
+    fn default_vo_is_per_os() {
+        #[cfg(target_os = "linux")]
+        assert_eq!(default_vo(), "x11"); // LOAD-BEARING — see module docs
+        #[cfg(target_os = "windows")]
+        assert_eq!(default_vo(), "gpu"); // spec: Platform matrix row
+    }
+
+    #[test]
+    fn resolve_vo_env_override_wins_and_blank_is_ignored() {
+        assert_eq!(resolve_vo(None), default_vo());
+        assert_eq!(resolve_vo(Some("")), default_vo());
+        assert_eq!(resolve_vo(Some("  ")), default_vo());
+        assert_eq!(resolve_vo(Some("d3d11")), "d3d11");
+        assert_eq!(resolve_vo(Some(" gpu-next ")), "gpu-next");
+    }
+
+    #[test]
+    fn alloc_socket_path_shape_is_per_os() {
+        let p = alloc_socket_path();
+        let s = p.to_string_lossy();
+        assert!(s.contains("livestreamlist-mpv-"));
+        #[cfg(windows)]
+        assert!(
+            s.starts_with(r"\\.\pipe\"),
+            "windows ipc must be a named pipe: {s}"
+        );
+        #[cfg(unix)]
+        assert!(s.ends_with(".sock"));
     }
 }
