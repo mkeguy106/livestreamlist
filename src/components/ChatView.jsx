@@ -35,7 +35,57 @@ const AT_BOTTOM_PX = 24;
  *   - "irc"     — Command / Focus layouts: timestamp, username, message in a grid
  *   - "compact" — Columns layout: single-line user + message
  */
-export default function ChatView({
+export default function ChatView(props) {
+  // Dispatcher only — calls NO hooks. YouTube/Chaturbate chats are embedded
+  // webviews; everything else gets the built-in IRC-style pane. These are
+  // two real components, NOT an early return inside one component, because
+  // the two paths call different hook sets: a single component whose hook
+  // count changes between renders (Focus re-renders the same unkeyed
+  // ChatView instance when the featured channel switches platform) throws
+  // React's "Rendered more hooks than during the previous render", which
+  // unmounts the entire React root — the app becomes a black window with a
+  // healthy process and zero log output. That was the root cause of the
+  // "Focus + Chaturbate black window" bug (it was never CB- or WebKit-
+  // specific); see docs/superpowers/diagnosis/2026-07-11-cb-black-window.md.
+  // A platform change here swaps the child component TYPE, so React cleanly
+  // remounts, and each child's own hook count is stable across its renders.
+  const platform = props.channelKey?.split(':')[0];
+  if (platform === 'youtube' || platform === 'chaturbate') {
+    return <EmbedChatView {...props} />;
+  }
+  return <IrcChatView {...props} />;
+}
+
+// YouTube and Chaturbate don't have a built-in chat client — we mount the
+// platform's own /live_chat (or room) page as a child webview overlaid on
+// the chat pane.
+function EmbedChatView({ channelKey, header = null, isLive = true, isActiveTab = true }) {
+  const platform = channelKey?.split(':')[0];
+  return (
+    <div
+      style={{
+        flex: 1,
+        display: 'flex',
+        flexDirection: 'column',
+        minHeight: 0,
+        overflow: 'hidden',
+      }}
+    >
+      {header}
+      {platform === 'chaturbate' && <ChaturbateAuthBanner />}
+      <div style={{ flex: 1, position: 'relative', minHeight: 0, overflow: 'hidden' }}>
+        <EmbedSlot
+          channelKey={channelKey}
+          isLive={isLive}
+          active={isActiveTab}
+          placeholderText="Channel isn't live — chat will appear here when it goes live."
+        />
+      </div>
+    </div>
+  );
+}
+
+function IrcChatView({
   channelKey,
   variant = 'irc',
   header = null,
@@ -47,43 +97,15 @@ export default function ChatView({
   onUsernameContext,
   onUsernameHover,
 }) {
+  const platform = channelKey?.split(':')[0];
+
   // Sub-anniversary banner + web-session connect prompt (Twitch only).
-  // Hook must be called unconditionally before any early returns.
   const { info: anniversaryInfo, connectPromptVisible, share: shareAnniversary, dismiss: dismissAnniversary, dismissPrompt } =
     useSubAnniversary(channelKey);
 
   // Event banner for sub/gift/raid/announcement USERNOTICE events.
   // Filtered by settings.chat.event_banners (master + per-kind toggles).
   const { current: eventBanner, dismiss: dismissEventBanner } = useEventBanner(channelKey);
-
-  // YouTube and Chaturbate don't have a built-in chat client — we mount the
-  // platform's own /live_chat (or room) page as a child webview overlaid on
-  // the chat pane. Branch out before the IRC-style state machinery runs.
-  const platform = channelKey?.split(':')[0];
-  if (platform === 'youtube' || platform === 'chaturbate') {
-    return (
-      <div
-        style={{
-          flex: 1,
-          display: 'flex',
-          flexDirection: 'column',
-          minHeight: 0,
-          overflow: 'hidden',
-        }}
-      >
-        {header}
-        {platform === 'chaturbate' && <ChaturbateAuthBanner />}
-        <div style={{ flex: 1, position: 'relative', minHeight: 0, overflow: 'hidden' }}>
-          <EmbedSlot
-            channelKey={channelKey}
-            isLive={isLive}
-            active={isActiveTab}
-            placeholderText="Channel isn't live — chat will appear here when it goes live."
-          />
-        </div>
-      </div>
-    );
-  }
 
   const { nicknames } = useNicknames();
   const auth = useAuth();

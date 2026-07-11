@@ -1,8 +1,14 @@
 /* Direction C — "Focus"
- * One featured channel (selectedKey) with a tab strip of all channels above.
+ * One explicitly-picked featured channel (ctx.focusKey). Opens blank with a
+ * centered live-channel picker; a live-only strip across the top is the
+ * quick switcher (offline channels never appear here). The featured channel
+ * going offline falls back to the picker — App clears focusKey; the
+ * live-gated lookup below also covers the render in between.
  */
 
 import ChatView from '../components/ChatView.jsx';
+import FocusLiveStrip from '../components/FocusLiveStrip.jsx';
+import FocusPicker from '../components/FocusPicker.jsx';
 import PlaySplitButton from '../components/PlaySplitButton.jsx';
 import SocialsBanner from '../components/SocialsBanner.jsx';
 import TitleBanner from '../components/TitleBanner.jsx';
@@ -13,9 +19,8 @@ import { formatUptime, formatViewers } from '../utils/format.js';
 export default function Focus({ ctx }) {
   const {
     livestreams,
-    selectedKey,
-    setSelectedKey,
-    openAddDialog,
+    focusKey,
+    setFocusKey,
     launchStream,
     openInBrowser,
     onUsernameOpen,
@@ -23,139 +28,83 @@ export default function Focus({ ctx }) {
     onUsernameHover,
   } = ctx;
 
-  // Tabs: live first (viewer-desc), then offline alpha
-  const sorted = [...livestreams].sort((a, b) => {
-    if (a.is_live !== b.is_live) return a.is_live ? -1 : 1;
-    if (a.is_live) return (b.viewers ?? 0) - (a.viewers ?? 0);
-    return a.display_name.localeCompare(b.display_name);
-  });
-
-  const featured = sorted.find((l) => l.unique_key === selectedKey) ?? sorted[0];
+  const featured = focusKey
+    ? livestreams.find((l) => l.unique_key === focusKey && l.is_live) ?? null
+    : null;
 
   return (
     <>
-      {/* Tab strip */}
-      <div
-        style={{
-          height: 38,
-          display: 'flex',
-          alignItems: 'stretch',
-          borderBottom: 'var(--hair)',
-          overflowX: 'auto',
-          flexShrink: 0,
-        }}
-      >
-        {sorted.map((t) => {
-          const active = t.unique_key === featured?.unique_key;
-          const letter = t.platform.charAt(0);
-          return (
-            <button
-              key={t.unique_key}
-              type="button"
-              onClick={() => setSelectedKey(t.unique_key)}
-              style={{
-                flex: '0 0 auto',
-                padding: '0 14px',
-                display: 'flex',
-                alignItems: 'center',
-                gap: 8,
-                borderRight: 'var(--hair)',
-                borderTop: 'none',
-                borderLeft: 'none',
-                background: active ? 'var(--zinc-900)' : 'transparent',
-                borderBottom: active ? '2px solid var(--zinc-100)' : '2px solid transparent',
-                color: t.is_live ? 'var(--zinc-100)' : 'var(--zinc-600)',
-                cursor: 'pointer',
-                fontFamily: 'inherit',
-              }}
-            >
-              <span className={`rx-status-dot ${t.is_live ? 'live' : 'off'}`} />
-              <span style={{ fontSize: 'var(--t-12)', fontWeight: active ? 600 : 500 }}>{t.display_name}</span>
-              <span className={`rx-plat ${letter}`}>{letter.toUpperCase()}</span>
-              {t.is_live && (
-                <span className="rx-mono" style={{ fontSize: 10, color: 'var(--zinc-500)' }}>
-                  {formatViewers(t.viewers)}
-                </span>
-              )}
-            </button>
-          );
-        })}
-        <button
-          type="button"
-          onClick={openAddDialog}
-          style={{
-            padding: '0 12px',
-            display: 'flex',
-            alignItems: 'center',
-            color: 'var(--zinc-500)',
-            background: 'transparent',
-            border: 'none',
-            cursor: 'pointer',
-            fontFamily: 'inherit',
-          }}
-        >
-          <span className="rx-chiclet">＋</span>
-        </button>
-      </div>
+      <FocusLiveStrip
+        livestreams={livestreams}
+        focusedKey={featured?.unique_key ?? null}
+        onPick={setFocusKey}
+      />
 
-      {/* Split */}
-      <div style={{ flex: 1, display: 'flex', minHeight: 0 }}>
-        <div style={{ flex: '1 1 60%', display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-          {featured ? (
+      {featured ? (
+        <div style={{ flex: 1, display: 'flex', minHeight: 0 }}>
+          <div style={{ flex: '1 1 60%', display: 'flex', flexDirection: 'column', minWidth: 0 }}>
             <FeaturedStream
               channel={featured}
               onLaunch={(quality) => launchStream(featured.unique_key, quality)}
               onOpenBrowser={() => openInBrowser(featured.unique_key)}
             />
-          ) : (
-            <div
-              style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--zinc-500)' }}
-            >
-              no channel selected
-            </div>
-          )}
-        </div>
+          </div>
 
+          <div
+            style={{
+              flex: '1 1 40%',
+              display: 'flex',
+              flexDirection: 'column',
+              minWidth: 340,
+              borderLeft: 'var(--hair)',
+              minHeight: 0,
+            }}
+          >
+            <ChatView
+              channelKey={featured.unique_key}
+              variant="irc"
+              isLive
+              onUsernameOpen={onUsernameOpen}
+              onUsernameContext={onUsernameContext}
+              onUsernameHover={onUsernameHover}
+              header={
+                <>
+                  <div
+                    style={{
+                      padding: '10px 14px',
+                      borderBottom: 'var(--hair)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 10,
+                    }}
+                  >
+                    <span className="rx-chiclet">CHAT</span>
+                    <span className="rx-mono" style={{ fontSize: 10, color: 'var(--zinc-500)' }}>
+                      {featured.display_name}
+                    </span>
+                  </div>
+                  <TitleBanner channel={featured} />
+                  <SocialsBanner channelKey={featured.unique_key} />
+                </>
+              }
+            />
+          </div>
+        </div>
+      ) : (
         <div
           style={{
-            flex: '1 1 40%',
+            flex: 1,
             display: 'flex',
-            flexDirection: 'column',
-            minWidth: 340,
-            borderLeft: 'var(--hair)',
+            alignItems: 'flex-start',
+            justifyContent: 'center',
+            paddingTop: 90,
             minHeight: 0,
+            overflow: 'hidden',
           }}
         >
-          <ChatView
-            channelKey={featured?.unique_key}
-            variant="irc"
-            isLive={Boolean(featured?.is_live)}
-            onUsernameOpen={onUsernameOpen}
-            onUsernameContext={onUsernameContext}
-            onUsernameHover={onUsernameHover}
-            header={
-              <>
-                <div
-                  style={{
-                    padding: '10px 14px',
-                    borderBottom: 'var(--hair)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 10,
-                  }}
-                >
-                  <span className="rx-chiclet">CHAT</span>
-                  <span className="rx-mono" style={{ fontSize: 10, color: 'var(--zinc-500)' }}>
-                    {featured?.display_name ?? ''}
-                  </span>
-                </div>
-                <TitleBanner channel={featured} />
-                <SocialsBanner channelKey={featured?.unique_key} />
-              </>
-            }
-          />
+          <FocusPicker livestreams={livestreams} onPick={setFocusKey} />
         </div>
-      </div>
+      )}
     </>
   );
 }

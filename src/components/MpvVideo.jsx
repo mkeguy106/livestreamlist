@@ -5,9 +5,11 @@
  * (mpv --wid into the GTK overlay Fixed — src-tauri/src/embed.rs). This
  * component owns:
  *  - DOM states driven by mpv:status events (poster/spinner/error/cap/ended)
- *  - the occlusion control strip: hovering the panel hides the native
- *    surface (layer.occludeKey) so the DOM strip under it is visible and
- *    clickable; audio keeps playing (mpv is only hidden, not stopped)
+ *  - the column variant's occlusion control strip: hovering the panel hides
+ *    the native surface (layer.occludeKey) so the DOM strip under it is
+ *    visible and clickable; audio keeps playing (mpv is only hidden, not
+ *    stopped). The focus variant instead renders a persistent control bar
+ *    below the video rect, so the surface is never hidden while playing
  *  - per-channel volume/muted/quality persistence — same settings shape as
  *    the mpegts path (settings.video.channels[key])
  *
@@ -35,6 +37,7 @@ export default function MpvVideo({ channelKey, thumbnailUrl, variant = 'column',
   const layer = useContext(EmbedLayerContext);
   const chan = settings?.video?.channels?.[channelKey] || {};
   const playing = usePlayerState(); // popout hand-off (external mpv player)
+  const isColumn = variant === 'column';
 
   const [phase, setPhase] = useState('starting'); // starting|playing|ended|error|cap|popout|popped
   const [errMsg, setErrMsg] = useState('');
@@ -139,14 +142,18 @@ export default function MpvVideo({ channelKey, thumbnailUrl, variant = 'column',
     };
   }, [channelKey, cancelPendingRetry]);
 
-  // Hover-occlusion: hide the native surface while the cursor is over the
-  // panel so the DOM poster + control strip are visible and clickable.
-  const occluded = hover || qualityOpen;
+  // Hover-occlusion is a COLUMN-only mechanism: hovering a column's video
+  // hides the native surface so the DOM strip is visible. The focus variant
+  // has a persistent bar BELOW the surface instead — the surface is never
+  // hidden while playing (redesign spec #226); only the global modal path
+  // (`hidden` in EmbedLayer) still occludes it.
+  const occluded = isColumn && (hover || qualityOpen);
   useEffect(() => {
+    if (!isColumn) return undefined;
     if (!layer?.occludeKey) return undefined;
     layer.occludeKey(channelKey, occluded);
     return () => layer.occludeKey(channelKey, false);
-  }, [occluded, channelKey, layer]);
+  }, [occluded, channelKey, layer, isColumn]);
 
   const patchChannel = useCallback(
     (fields) =>
@@ -231,22 +238,133 @@ export default function MpvVideo({ channelKey, thumbnailUrl, variant = 'column',
   }, [phase]);
 
   const currentQuality = sessionQualityRef.current ?? mountLabelRef.current;
-  const wrapStyle =
-    variant === 'focus'
-      ? { position: 'absolute', inset: 0 }
-      : {
-          width: '100%',
-          aspectRatio: '16 / 9',
-          flexShrink: 0,
-          position: 'relative',
-          borderBottom: 'var(--hair)',
-        };
 
-  // The native surface covers this DOM while playing+unoccluded; everything
-  // rendered here is the "surface hidden" experience (startup, hover, states).
+  // Poster + non-playing states — shared by both variants, rendered inside
+  // the EmbedSlot (the native surface covers them while playing+shown).
+  const slotChildren = (
+    <>
+      {thumbnailUrl && (
+        <img
+          src={thumbnailUrl}
+          alt=""
+          style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', opacity: 0.35 }}
+        />
+      )}
+
+      {phase !== 'playing' && (
+        <div
+          style={{
+            position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column',
+            alignItems: 'center', justifyContent: 'center', gap: 8,
+            color: 'var(--zinc-400)', fontSize: 'var(--t-11)', textAlign: 'center', padding: 12,
+          }}
+        >
+          {(phase === 'starting' || phase === 'popout') && (
+            <span className="rx-mono" style={{ animation: 'rx-spin 800ms linear infinite', display: 'inline-block' }}>◌</span>
+          )}
+          {phase === 'starting' && <span>starting stream…</span>}
+          {phase === 'popout' && <span>Starting external player…</span>}
+          {phase === 'popped' && <span>Playing in external player</span>}
+          {phase === 'cap' && (
+            <span>Max simultaneous videos reached — raise it in Preferences → Video.</span>
+          )}
+          {phase === 'ended' && <span>stream ended</span>}
+          {phase === 'error' && (
+            <span className="rx-mono" style={{ color: 'var(--warn, #f59e0b)', wordBreak: 'break-all' }}>{errMsg}</span>
+          )}
+          {(phase === 'ended' || phase === 'error') && (
+            <button type="button" className="rx-btn" onClick={retry}>Retry</button>
+          )}
+          {phase === 'popped' && (
+            <button type="button" className="rx-btn" onClick={retry}>Play inline</button>
+          )}
+        </div>
+      )}
+    </>
+  );
+
+  if (variant === 'focus') {
+    // Focus: video rect + persistent control bar BELOW it. No hover
+    // handlers, no occlusion — the EmbedSlot rect excludes the bar, so the
+    // native surface never covers the controls.
+    return (
+      <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column' }}>
+        <div style={{ flex: 1, minHeight: 0, position: 'relative', background: '#000', overflow: 'hidden' }}>
+          <EmbedSlot
+            channelKey={channelKey}
+            isLive
+            active
+            backend="mpv"
+            getMountArgs={getMountArgs}
+          >
+            {slotChildren}
+          </EmbedSlot>
+        </div>
+        <div
+          style={{
+            height: 34, flexShrink: 0, display: 'flex', alignItems: 'center', gap: 10,
+            padding: '0 10px', borderTop: 'var(--hair)', background: 'var(--zinc-950)',
+          }}
+        >
+          <Tooltip text={muted ? 'Unmute' : 'Mute'}>
+            <button type="button" aria-label={muted ? 'Unmute' : 'Mute'} onClick={toggleMute} style={ctlStyle}>
+              {muted ? '🔇' : '🔊'}
+            </button>
+          </Tooltip>
+          <input
+            type="range"
+            min="0"
+            max="1"
+            step="0.05"
+            value={volume}
+            onChange={(e) => onVolume(Number(e.target.value))}
+            onMouseUp={commitVolume}
+            aria-label="Volume"
+            style={{ width: 110 }}
+          />
+          <div style={{ flex: 1 }} />
+          <div
+            role="group"
+            aria-label="Quality"
+            style={{ display: 'flex', border: 'var(--hair)', borderRadius: 'var(--r-2)', overflow: 'hidden' }}
+          >
+            {QUALITIES.map((q) => (
+              <button
+                key={q}
+                type="button"
+                className="rx-mono"
+                aria-pressed={q === currentQuality}
+                onClick={() => pickQuality(q)}
+                style={{
+                  ...ctlStyle, fontSize: 10, padding: '4px 8px', borderRadius: 0,
+                  background: q === currentQuality ? 'var(--zinc-800)' : 'transparent',
+                  color: q === currentQuality ? 'var(--zinc-100)' : 'var(--zinc-400)',
+                }}
+              >
+                {q}
+              </button>
+            ))}
+          </div>
+          <Tooltip text="Pop out to mpv" align="right">
+            <button type="button" aria-label="Pop out to mpv" onClick={popout} style={ctlStyle}>⧉</button>
+          </Tooltip>
+        </div>
+      </div>
+    );
+  }
+
+  // Column: unchanged — hover occlusion reveals the DOM strip over the rect.
   return (
     <div
-      style={{ ...wrapStyle, background: '#000', overflow: 'hidden' }}
+      style={{
+        width: '100%',
+        aspectRatio: '16 / 9',
+        flexShrink: 0,
+        position: 'relative',
+        borderBottom: 'var(--hair)',
+        background: '#000',
+        overflow: 'hidden',
+      }}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => { setHover(false); setQualityOpen(false); }}
     >
@@ -257,43 +375,7 @@ export default function MpvVideo({ channelKey, thumbnailUrl, variant = 'column',
         backend="mpv"
         getMountArgs={getMountArgs}
       >
-        {thumbnailUrl && (
-          <img
-            src={thumbnailUrl}
-            alt=""
-            style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', opacity: 0.35 }}
-          />
-        )}
-
-        {phase !== 'playing' && (
-          <div
-            style={{
-              position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column',
-              alignItems: 'center', justifyContent: 'center', gap: 8,
-              color: 'var(--zinc-400)', fontSize: 'var(--t-11)', textAlign: 'center', padding: 12,
-            }}
-          >
-            {(phase === 'starting' || phase === 'popout') && (
-              <span className="rx-mono" style={{ animation: 'rx-spin 800ms linear infinite', display: 'inline-block' }}>◌</span>
-            )}
-            {phase === 'starting' && <span>starting stream…</span>}
-            {phase === 'popout' && <span>Starting external player…</span>}
-            {phase === 'popped' && <span>Playing in external player</span>}
-            {phase === 'cap' && (
-              <span>Max simultaneous videos reached — raise it in Preferences → Video.</span>
-            )}
-            {phase === 'ended' && <span>stream ended</span>}
-            {phase === 'error' && (
-              <span className="rx-mono" style={{ color: 'var(--warn, #f59e0b)', wordBreak: 'break-all' }}>{errMsg}</span>
-            )}
-            {(phase === 'ended' || phase === 'error') && (
-              <button type="button" className="rx-btn" onClick={retry}>Retry</button>
-            )}
-            {phase === 'popped' && (
-              <button type="button" className="rx-btn" onClick={retry}>Play inline</button>
-            )}
-          </div>
-        )}
+        {slotChildren}
 
         {phase === 'playing' && occluded && (
           <div
@@ -360,11 +442,9 @@ export default function MpvVideo({ channelKey, thumbnailUrl, variant = 'column',
             <Tooltip text="Pop out to mpv" align="right">
               <button type="button" aria-label="Pop out to mpv" onClick={popout} style={ctlStyle}>⧉</button>
             </Tooltip>
-            {variant === 'column' && (
-              <Tooltip text="Stop video" align="right">
-                <button type="button" aria-label="Stop video" onClick={stop} style={ctlStyle}>✕</button>
-              </Tooltip>
-            )}
+            <Tooltip text="Stop video" align="right">
+              <button type="button" aria-label="Stop video" onClick={stop} style={ctlStyle}>✕</button>
+            </Tooltip>
           </div>
         )}
       </EmbedSlot>
