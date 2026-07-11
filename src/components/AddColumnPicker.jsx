@@ -21,6 +21,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useEmbedOcclusion } from './EmbedLayer.jsx';
 import { platformLetter } from '../utils/format.js';
+import { liveFirstRows } from '../utils/channelLists.js';
 
 export default function AddColumnPicker({ open, onClose, livestreams, existingKeys, onConfirm }) {
   // Hide native embeds while the picker modal is open (embeds render above
@@ -48,20 +49,7 @@ export default function AddColumnPicker({ open, onClose, livestreams, existingKe
 
   // Live first (viewers desc), then offline alpha by display name — same
   // ordering rule as the Command sidebar's channel list.
-  const rows = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    const all = livestreams || [];
-    const filtered = q
-      ? all.filter((l) => (l.display_name || l.unique_key).toLowerCase().includes(q))
-      : all;
-    const live = filtered
-      .filter((l) => l.is_live)
-      .sort((a, b) => (b.viewers ?? 0) - (a.viewers ?? 0));
-    const offline = filtered
-      .filter((l) => !l.is_live)
-      .sort((a, b) => (a.display_name || a.unique_key).localeCompare(b.display_name || b.unique_key));
-    return [...live, ...offline];
-  }, [livestreams, query]);
+  const rows = useMemo(() => liveFirstRows(livestreams || [], query), [livestreams, query]);
 
   const liveKeysAvailable = useMemo(
     () => (livestreams || []).filter((l) => l.is_live && !existing.has(l.unique_key)).map((l) => l.unique_key),
