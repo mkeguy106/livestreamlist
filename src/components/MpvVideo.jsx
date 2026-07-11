@@ -65,8 +65,18 @@ export default function MpvVideo({ channelKey, thumbnailUrl, variant = 'column',
   };
   const mountLabelRef = useRef('');
   mountLabelRef.current = mpvQualityLabel(variant, chan.quality, settings?.video);
+  // An explicit user pick must survive the per-render recompute until the
+  // NEXT mount consumes it (focus recomputes to null — Rust would resolve
+  // per-channel settings that lag the 200 ms persist debounce and respawn
+  // at the old quality). One-shot: consumed by getMountArgs.
+  const explicitPickRef = useRef(null);
   const getMountArgs = useCallback(() => {
     sessionQualityRef.current = mountLabelRef.current;
+    if (explicitPickRef.current !== null) {
+      const quality = explicitPickRef.current;
+      explicitPickRef.current = null; // one-shot — later natural remounts re-resolve
+      return { ...mountArgsRef.current, quality };
+    }
     return mountArgsRef.current;
   }, []);
 
@@ -87,6 +97,7 @@ export default function MpvVideo({ channelKey, thumbnailUrl, variant = 'column',
     let unlisten = null;
     let cancelled = false;
     autoRetriesRef.current = 0; // fresh channel = fresh budget
+    explicitPickRef.current = null; // a pick must not leak across channel keys
     (async () => {
       const un = await listenEvent(`mpv:status:${channelKey}`, (payload) => {
         const state = payload?.state;
@@ -168,7 +179,7 @@ export default function MpvVideo({ channelKey, thumbnailUrl, variant = 'column',
     cancelPendingRetry();
     setQualityOpen(false);
     patchChannel({ quality: q });
-    mountArgsRef.current = { ...mountArgsRef.current, quality: q };
+    explicitPickRef.current = q; // survives the per-render recompute (focus → null)
     mountLabelRef.current = q;
     setPhase('starting');
     layer?.remountKey?.(channelKey); // kill + respawn against the new URL
