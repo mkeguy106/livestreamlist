@@ -95,6 +95,7 @@ impl EmbedHost {
         self.inner.lock().fixed = Some(fixed);
     }
 
+    #[allow(dead_code)] // only caller outside tests is the Linux-gated CB-follows import path (lib.rs, #[cfg(target_os = "linux")])
     pub fn has(&self, key: &str) -> bool {
         self.inner.lock().children.contains_key(key)
     }
@@ -443,6 +444,11 @@ unsafe impl Send for ChildInner {}
 #[cfg(target_os = "linux")]
 unsafe impl Sync for ChildInner {}
 
+// Referenced only by ChildEmbed::inner, which is #[cfg(not(test))].
+#[allow(dead_code)]
+// One instance per mounted embed; boxing tauri::webview::Webview would churn
+// the verified macOS/Windows webview arms for no measurable win.
+#[allow(clippy::large_enum_variant)]
 #[cfg(not(target_os = "linux"))]
 pub(crate) enum ChildInner {
     WebView(tauri::webview::Webview),
@@ -457,6 +463,7 @@ pub(crate) enum ChildInner {
 /// A Windows mpv inline-video child: a bare child HWND inside the main
 /// window (its handle is mpv's --wid target) plus the mpv process bound to
 /// it. Mirrors the Linux MpvChild 1:1 with HWND in place of GtkDrawingArea.
+#[allow(dead_code)] // constructed only by mount_mpv, which is #[cfg(not(test))]
 #[cfg(target_os = "windows")]
 pub(crate) struct MpvChild {
     /// Host child window handle (created with the "STATIC" system class).
@@ -788,6 +795,9 @@ pub(crate) mod build_linux {
     }
 }
 
+// BuildSpec/build_child below are constructed/called only by EmbedHost::mount,
+// which is #[cfg(not(test))] — dead in any windows/macOS test build.
+#[allow(dead_code)]
 #[cfg(not(target_os = "linux"))]
 pub(crate) mod build_other {
     use super::*;
@@ -874,6 +884,7 @@ fn profile_dir(platform: Platform) -> anyhow::Result<std::path::PathBuf> {
 #[allow(dead_code)] // non-test embed plumbing (real GTK/wry path is #[cfg(not(test))])
 const ZINC_950: (u8, u8, u8, u8) = (9, 9, 11, 255);
 
+#[allow(dead_code)] // called only from EmbedHost::mount, which is #[cfg(not(test))]
 #[cfg(not(target_os = "linux"))]
 fn platform_label(p: Platform) -> &'static str {
     match p {
@@ -883,6 +894,7 @@ fn platform_label(p: Platform) -> &'static str {
     }
 }
 
+#[allow(dead_code)] // called only from EmbedHost::mount, which is #[cfg(not(test))]
 #[cfg(not(target_os = "linux"))]
 fn slugify_other(s: &str) -> String {
     s.chars()
@@ -1542,6 +1554,9 @@ const CB_IMPORT_JS: &str = r#"
 })();
 "#;
 
+// Only constructed by parse_cb_follows, whose only caller outside tests is
+// the Linux-gated CB-follows import path (lib.rs, #[cfg(target_os = "linux")]).
+#[allow(dead_code)]
 #[derive(serde::Deserialize)]
 struct CbFollowsPayload {
     #[serde(default)]
@@ -1558,6 +1573,7 @@ struct CbFollowsPayload {
 /// The scrape posts `{ error: "not_authenticated" }` when the followed-rooms
 /// endpoint returned the public list (the import webview had no session) — we
 /// translate that into a user-facing error rather than importing 5000 rooms.
+#[allow(dead_code)] // only caller outside tests is the Linux-gated CB-follows import path (lib.rs, #[cfg(target_os = "linux")])
 pub fn parse_cb_follows(payload: &str) -> anyhow::Result<Vec<String>> {
     use anyhow::Context as _;
     let p: CbFollowsPayload =
@@ -1675,6 +1691,9 @@ fn capture_cb_session<'a>(cookies: impl Iterator<Item = (&'a str, &'a str)>) -> 
     false
 }
 
+// Called only from build_other::build_child's on_page_load handler, dead
+// alongside it under #[cfg(not(test))].
+#[allow(dead_code)]
 #[cfg(not(target_os = "linux"))]
 fn verify_chaturbate_auth_other(webview: &tauri::webview::Webview, app: &tauri::AppHandle) {
     let site: url::Url = match "https://chaturbate.com/".parse() {
