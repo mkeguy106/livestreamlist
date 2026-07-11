@@ -44,6 +44,10 @@ export default function App() {
   const [addOpen, setAddOpen] = useState(false);
   const [prefsOpen, setPrefsOpen] = useState(false);
   const [selectedKey, setSelectedKey] = useState(null);
+  // Focus layout's explicitly-picked featured channel — in-memory only
+  // (survives layout switches, never a restart), decoupled from Command's
+  // selectedKey. null = Focus shows its blank-state picker.
+  const [focusKey, setFocusKey] = useState(null);
 
   const { settings } = usePreferences();
 
@@ -242,6 +246,16 @@ export default function App() {
     setSelectedKey(first?.unique_key ?? null);
   }, [livestreams, selectedKey, loading]);
 
+  // Focus featured channel: clear when it stops being live (went offline or
+  // was removed) so Focus falls back to the picker rather than auto-resuming
+  // with audio whenever the channel comes back hours later.
+  useEffect(() => {
+    if (loading || !focusKey) return;
+    if (!livestreams.some((l) => l.unique_key === focusKey && l.is_live)) {
+      setFocusKey(null);
+    }
+  }, [livestreams, focusKey, loading]);
+
   useEffect(() => {
     try { localStorage.setItem(STORAGE_KEY, layoutId); } catch {}
   }, [layoutId]);
@@ -299,6 +313,8 @@ export default function App() {
     refresh,
     selectedKey,
     setSelectedKey,
+    focusKey,
+    setFocusKey,
     openAddDialog: () => setAddOpen(true),
     launchStream: (key, quality) =>
       launchStream(key, quality ?? settings?.general?.default_quality ?? 'best').catch((e) =>
@@ -317,19 +333,17 @@ export default function App() {
     onUsernameOpen,
     onUsernameContext,
     onUsernameHover,
-  }), [livestreams, loading, error, refresh, dropLivestream, selectedKey, settings?.general?.default_quality, onUsernameOpen, onUsernameContext, onUsernameHover]);
+  }), [livestreams, loading, error, refresh, dropLivestream, selectedKey, focusKey, settings?.general?.default_quality, onUsernameOpen, onUsernameContext, onUsernameHover]);
 
   const current = LAYOUTS.find((l) => l.id === layoutId) ?? LAYOUTS[0];
   const Layout = current.Component;
 
   const liveCount = livestreams.filter((l) => l.is_live).length;
   const totalCount = livestreams.length;
-  const selected = livestreams.find((l) => l.unique_key === selectedKey);
+  const focused = livestreams.find((l) => l.unique_key === focusKey);
 
-  const rightLabel = layoutId === 'focus' && selected
-    ? `focus: ${selected.display_name}`
-    : layoutId === 'columns'
-    ? `${liveCount} live · ${totalCount} channels`
+  const rightLabel = layoutId === 'focus' && focused
+    ? `focus: ${focused.display_name}`
     : `${liveCount} live · ${totalCount} channels`;
 
   return (
