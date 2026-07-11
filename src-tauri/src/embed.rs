@@ -1257,7 +1257,7 @@ impl EmbedHost {
 
         let socket_path = crate::mpv::alloc_socket_path();
         let mpv_spec = crate::mpv::MpvSpawnSpec {
-            wid: hwnd as u64,
+            wid: hwnd as usize as u64,
             url: spec.url.clone(),
             socket_path: socket_path.clone(),
             muted: spec.muted,

@@ -246,9 +246,13 @@ impl MpvProcess {
         #[cfg(windows)]
         {
             // Named-pipe client via CreateFile semantics — std::fs opens
-            // \\.\pipe\ paths directly.
+            // \\.\pipe\ paths directly. Write-only: no `.read(true)` needed.
+            // No per-write timeout here (unlike the Unix arm's 500 ms
+            // set_write_timeout) — std's named-pipe File has no equivalent
+            // knob. Bounded in practice: mpv drains its IPC pipe promptly
+            // and spawns a fresh server instance per connecting client, so
+            // a write is never stuck behind another client's backlog.
             let mut f = std::fs::OpenOptions::new()
-                .read(true)
                 .write(true)
                 .open(&self.socket_path)
                 .with_context(|| format!("connecting mpv ipc {}", self.socket_path.display()))?;
