@@ -67,7 +67,7 @@ export default function EmbedLayer({ children, modalOpen }) {
         const y = r.top * dpr;
         const w = Math.max(1, r.width) * dpr;
         const h = Math.max(1, r.height) * dpr;
-        const shown = !hidden && !occludedKeys.current.has(key);
+        const shown = !hiddenRef.current && !occludedKeys.current.has(key);
 
         if (!mountedKeys.current.has(key)) {
             if (backend === 'mpv') {
@@ -116,7 +116,10 @@ export default function EmbedLayer({ children, modalOpen }) {
             (backend === 'mpv' ? mpvBounds : embedBounds)(key, x, y, w, h).catch(() => {});
             setVis(key, shown).catch(() => {});
         }
-    }, [hidden]);
+    }, []); // identity-stable: reads live state via hiddenRef/occludedKeys —
+            // a reactive `hidden` dep here changes the whole ctx identity and
+            // makes every EmbedSlot re-register (destroying + remounting the
+            // native embeds) on every modal/popup toggle.
 
     const register = useCallback((key, slotId, ref, active, opts = {}) => {
         let entry = registry.current.get(key);

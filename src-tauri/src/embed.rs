@@ -998,12 +998,23 @@ impl EmbedHost {
             // --input-cursor-passthrough (same trick on the child window mpv
             // creates inside ours).
             area.input_shape_combine_region(Some(&gtk::cairo::Region::create()));
-            let gdk_win = area
-                .window()
-                .context("DrawingArea has no GdkWindow after realize")?;
-            let x11 = gdk_win.downcast::<gdkx11::X11Window>().map_err(|_| {
-                anyhow::anyhow!("embed surface is not an X11 window (native Wayland?)")
-            })?;
+            // Failure past this point must destroy the (shown) surface or it
+            // leaks into the overlay Fixed — mirrors the spawn-failure path.
+            let destroy_area = |area: &gtk::DrawingArea| unsafe {
+                use gtk::prelude::WidgetExtManual as _;
+                area.destroy();
+            };
+            let Some(gdk_win) = area.window() else {
+                destroy_area(&area);
+                anyhow::bail!("DrawingArea has no GdkWindow after realize");
+            };
+            let x11 = match gdk_win.downcast::<gdkx11::X11Window>() {
+                Ok(w) => w,
+                Err(_) => {
+                    destroy_area(&area);
+                    anyhow::bail!("embed surface is not an X11 window (native Wayland?)");
+                }
+            };
             (x11.xid(), area)
         };
 

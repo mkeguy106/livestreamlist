@@ -3,11 +3,11 @@
  */
 
 import ChatView from '../components/ChatView.jsx';
-import InlineVideo from '../components/InlineVideo.jsx';
 import PlaySplitButton from '../components/PlaySplitButton.jsx';
 import SocialsBanner from '../components/SocialsBanner.jsx';
 import TitleBanner from '../components/TitleBanner.jsx';
 import Tooltip from '../components/Tooltip.jsx';
+import VideoPanel from '../components/VideoPanel.jsx';
 import { formatUptime, formatViewers } from '../utils/format.js';
 
 export default function Focus({ ctx }) {
@@ -227,7 +227,7 @@ function FeaturedStream({ channel, onLaunch, onOpenBrowser }) {
       >
         {channel.is_live && channel.platform === 'twitch' ? (
           /* key forces a clean remount per channel — mount-seeded state (muted/volume) must not bleed across tab switches */
-          <InlineVideo
+          <VideoPanel
             key={channel.unique_key}
             channelKey={channel.unique_key}
             thumbnailUrl={channel.thumbnail_url}
