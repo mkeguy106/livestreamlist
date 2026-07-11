@@ -5,9 +5,11 @@
  * (mpv --wid into the GTK overlay Fixed — src-tauri/src/embed.rs). This
  * component owns:
  *  - DOM states driven by mpv:status events (poster/spinner/error/cap/ended)
- *  - the occlusion control strip: hovering the panel hides the native
- *    surface (layer.occludeKey) so the DOM strip under it is visible and
- *    clickable; audio keeps playing (mpv is only hidden, not stopped)
+ *  - the column variant's occlusion control strip: hovering the panel hides
+ *    the native surface (layer.occludeKey) so the DOM strip under it is
+ *    visible and clickable; audio keeps playing (mpv is only hidden, not
+ *    stopped). The focus variant instead renders a persistent control bar
+ *    below the video rect, so the surface is never hidden while playing
  *  - per-channel volume/muted/quality persistence — same settings shape as
  *    the mpegts path (settings.video.channels[key])
  *

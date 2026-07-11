@@ -2,11 +2,12 @@
  * strip (offline channels never appear in Focus). Renders nothing when no
  * channel is live: the blank-state picker already says so.
  */
+import { useMemo } from 'react';
 import { formatViewers, platformLetter } from '../utils/format.js';
 import { liveOnlyRows } from '../utils/channelLists.js';
 
 export default function FocusLiveStrip({ livestreams, focusedKey, onPick }) {
-  const rows = liveOnlyRows(livestreams || [], '');
+  const rows = useMemo(() => liveOnlyRows(livestreams || [], ''), [livestreams]);
   if (rows.length === 0) return null;
   return (
     <div
