@@ -41,7 +41,7 @@ impl Rect {
 // #[cfg(not(test))] — under the `--all-targets` test-target compile there is
 // no caller, so the allow stays until this crate has a caller reachable in
 // both builds.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 #[allow(dead_code)]
 pub struct MpvMountSpec {
     /// Direct streamlink URL from `VideoManager::start_direct`.
@@ -95,6 +95,7 @@ impl EmbedHost {
         self.inner.lock().fixed = Some(fixed);
     }
 
+    #[allow(dead_code)] // only caller outside tests is the Linux-gated CB-follows import path (lib.rs, #[cfg(target_os = "linux")])
     pub fn has(&self, key: &str) -> bool {
         self.inner.lock().children.contains_key(key)
     }
@@ -154,6 +155,16 @@ impl ChildEmbed {
                     wv.set_size(PhysicalSize::new(bounds.w as u32, bounds.h as u32))
                         .map_err(|e| anyhow::anyhow!("set_size: {e}"))?;
                 }
+                #[cfg(target_os = "windows")]
+                ChildInner::Mpv(m) => {
+                    surface_windows::set_bounds(
+                        m.hwnd,
+                        bounds.x.round() as i32,
+                        bounds.y.round() as i32,
+                        bounds.w.round() as i32,
+                        bounds.h.round() as i32,
+                    );
+                }
             }
             let _ = scale_factor; // Tauri uses physical units directly on mac/Win
         }
@@ -184,6 +195,10 @@ impl ChildEmbed {
                     } else {
                         wv.hide().map_err(|e| anyhow::anyhow!("hide: {e}"))?;
                     }
+                }
+                #[cfg(target_os = "windows")]
+                ChildInner::Mpv(m) => {
+                    surface_windows::set_visible(m.hwnd, visible);
                 }
             }
         }
@@ -217,6 +232,8 @@ impl ChildEmbed {
                 ChildInner::WebView(wv) => wv
                     .cookies_for_url(url.clone())
                     .map_err(|e| anyhow::anyhow!("cookies_for_url: {e}"))?,
+                #[cfg(target_os = "windows")]
+                ChildInner::Mpv(_) => anyhow::bail!("mpv child has no cookies"),
             };
             Ok(cookies
                 .into_iter()
@@ -427,9 +444,132 @@ unsafe impl Send for ChildInner {}
 #[cfg(target_os = "linux")]
 unsafe impl Sync for ChildInner {}
 
+// Referenced only by ChildEmbed::inner, which is #[cfg(not(test))].
+#[allow(dead_code)]
+// One instance per mounted embed; boxing tauri::webview::Webview would churn
+// the verified macOS/Windows webview arms for no measurable win.
+#[allow(clippy::large_enum_variant)]
 #[cfg(not(target_os = "linux"))]
 pub(crate) enum ChildInner {
     WebView(tauri::webview::Webview),
+    /// Windows inline video: mpv into a child HWND (slice C). macOS never
+    /// constructs this (no foreign-window embedding) — the variant itself
+    /// is windows-gated so `video_backend`'s promise is enforced at compile
+    /// time.
+    #[cfg(target_os = "windows")]
+    Mpv(MpvChild),
+}
+
+/// A Windows mpv inline-video child: a bare child HWND inside the main
+/// window (its handle is mpv's --wid target) plus the mpv process bound to
+/// it. Mirrors the Linux MpvChild 1:1 with HWND in place of GtkDrawingArea.
+#[allow(dead_code)] // constructed only by mount_mpv, which is #[cfg(not(test))]
+#[cfg(target_os = "windows")]
+pub(crate) struct MpvChild {
+    /// Host child window handle (created with the "STATIC" system class).
+    pub(crate) hwnd: isize,
+    pub(crate) process: crate::mpv::MpvProcess,
+    /// The VideoManager session incarnation this mpv consumes — consumer
+    /// events and monitor teardown are guarded on it.
+    pub(crate) generation: u64,
+    /// mpv confirmed playback (monitor saw playback-restart/file-loaded).
+    pub(crate) ready: bool,
+}
+
+#[cfg(all(target_os = "windows", not(test)))]
+impl Drop for MpvChild {
+    fn drop(&mut self) {
+        // Kill mpv first, then destroy the host window (same order as the
+        // Linux Drop). Call sites route through run_on_main_thread, which on
+        // Windows is the win32 UI thread that created the HWND.
+        self.process.kill();
+        surface_windows::destroy(self.hwnd);
+    }
+}
+#[cfg(all(target_os = "windows", test))]
+impl Drop for MpvChild {
+    fn drop(&mut self) {
+        self.process.kill();
+    }
+}
+
+/// Raw win32 child-window plumbing for the mpv surface. `cfg(windows)` +
+/// not(test) — mirrors build_linux's gating.
+#[cfg(all(target_os = "windows", not(test)))]
+pub(crate) mod surface_windows {
+    use windows_sys::Win32::Foundation::HWND;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        CreateWindowExW, DestroyWindow, MoveWindow, SetWindowPos, ShowWindow, HWND_TOP,
+        SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SW_HIDE, SW_SHOWNA, WS_CHILD, WS_CLIPSIBLINGS,
+        WS_EX_NOACTIVATE, WS_EX_TRANSPARENT, WS_VISIBLE,
+    };
+
+    fn wide(s: &str) -> Vec<u16> {
+        s.encode_utf16().chain(std::iter::once(0)).collect()
+    }
+
+    /// Create the mpv host child window inside `parent` (physical pixels).
+    /// Uses the built-in "STATIC" class (no WndProc of our own — mpv creates
+    /// its own child window inside and handles painting). WS_EX_TRANSPARENT
+    /// keeps hit-testing falling through to the WebView2 sibling underneath,
+    /// pairing with mpv's --input-cursor-passthrough exactly like the empty
+    /// GTK input region on Linux. Created visible (parity with the Linux
+    /// show-before-realize discipline) and raised above the WebView2 child.
+    pub(crate) fn create(parent: isize, x: i32, y: i32, w: i32, h: i32) -> anyhow::Result<isize> {
+        let class = wide("STATIC");
+        let hwnd = unsafe {
+            CreateWindowExW(
+                WS_EX_TRANSPARENT | WS_EX_NOACTIVATE,
+                class.as_ptr(),
+                std::ptr::null(),
+                WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS,
+                x,
+                y,
+                w.max(1),
+                h.max(1),
+                parent as HWND,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null(),
+            )
+        };
+        if hwnd.is_null() {
+            anyhow::bail!(
+                "CreateWindowExW failed: {}",
+                std::io::Error::last_os_error()
+            );
+        }
+        unsafe {
+            SetWindowPos(
+                hwnd,
+                HWND_TOP,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            );
+        }
+        Ok(hwnd as isize)
+    }
+
+    pub(crate) fn set_bounds(hwnd: isize, x: i32, y: i32, w: i32, h: i32) {
+        unsafe {
+            MoveWindow(hwnd as HWND, x, y, w.max(1), h.max(1), 1);
+        }
+    }
+
+    pub(crate) fn set_visible(hwnd: isize, visible: bool) {
+        unsafe {
+            ShowWindow(hwnd as HWND, if visible { SW_SHOWNA } else { SW_HIDE });
+        }
+    }
+
+    pub(crate) fn destroy(hwnd: isize) {
+        unsafe {
+            DestroyWindow(hwnd as HWND);
+        }
+    }
 }
 
 // Real GTK/wry child-webview construction — only compiled for non-test builds
@@ -655,6 +795,9 @@ pub(crate) mod build_linux {
     }
 }
 
+// BuildSpec/build_child below are constructed/called only by EmbedHost::mount,
+// which is #[cfg(not(test))] — dead in any windows/macOS test build.
+#[allow(dead_code)]
 #[cfg(not(target_os = "linux"))]
 pub(crate) mod build_other {
     use super::*;
@@ -741,6 +884,7 @@ fn profile_dir(platform: Platform) -> anyhow::Result<std::path::PathBuf> {
 #[allow(dead_code)] // non-test embed plumbing (real GTK/wry path is #[cfg(not(test))])
 const ZINC_950: (u8, u8, u8, u8) = (9, 9, 11, 255);
 
+#[allow(dead_code)] // called only from EmbedHost::mount, which is #[cfg(not(test))]
 #[cfg(not(target_os = "linux"))]
 fn platform_label(p: Platform) -> &'static str {
     match p {
@@ -750,6 +894,7 @@ fn platform_label(p: Platform) -> &'static str {
     }
 }
 
+#[allow(dead_code)] // called only from EmbedHost::mount, which is #[cfg(not(test))]
 #[cfg(not(target_os = "linux"))]
 fn slugify_other(s: &str) -> String {
     s.chars()
@@ -1073,11 +1218,99 @@ impl EmbedHost {
         Ok(false)
     }
 
+    /// Windows twin of the Linux mount_mpv: child HWND instead of a
+    /// GtkDrawingArea, physical pixels straight through. Same idempotent
+    /// resize-only contract, same consumer/monitor ordering. Runs on the
+    /// main (win32 UI) thread — lib.rs routes via run_on_main_thread.
+    #[cfg(all(target_os = "windows", not(test)))]
+    pub fn mount_mpv(
+        &self,
+        app: &tauri::AppHandle,
+        unique_key: &str,
+        bounds: Rect,
+        spec: MpvMountSpec,
+    ) -> anyhow::Result<bool> {
+        // Idempotent: already mounted -> just resize (mirrors Linux).
+        {
+            let mut g = self.inner.lock();
+            if let Some(existing) = g.children.get_mut(unique_key) {
+                existing.set_bounds(bounds, 1.0)?;
+                let already_ready = matches!(&existing.inner, ChildInner::Mpv(m) if m.ready);
+                return Ok(already_ready);
+            }
+        }
+
+        let parent = {
+            use tauri::Manager as _;
+            let win = app
+                .get_webview_window("main")
+                .ok_or_else(|| anyhow::anyhow!("main window missing"))?;
+            win.hwnd().map_err(|e| anyhow::anyhow!("main hwnd: {e}"))?.0 as isize
+        };
+        let hwnd = surface_windows::create(
+            parent,
+            bounds.x.round() as i32,
+            bounds.y.round() as i32,
+            bounds.w.round() as i32,
+            bounds.h.round() as i32,
+        )?;
+
+        let socket_path = crate::mpv::alloc_socket_path();
+        let mpv_spec = crate::mpv::MpvSpawnSpec {
+            wid: hwnd as usize as u64,
+            url: spec.url.clone(),
+            socket_path: socket_path.clone(),
+            muted: spec.muted,
+            volume: spec.volume,
+            title: unique_key.to_string(),
+        };
+        let process = match crate::mpv::MpvProcess::spawn(&mpv_spec) {
+            Ok(p) => p,
+            Err(e) => {
+                surface_windows::destroy(hwnd);
+                return Err(e);
+            }
+        };
+        let expected_exit = process.expected_exit.clone();
+
+        let child = ChildEmbed {
+            platform: Platform::Twitch,
+            bounds,
+            visible: true,
+            inner: ChildInner::Mpv(MpvChild {
+                hwnd,
+                process,
+                generation: spec.generation,
+                ready: false,
+            }),
+        };
+        self.inner
+            .lock()
+            .children
+            .insert(unique_key.to_string(), child);
+
+        // Count mpv as the session's consumer BEFORE the monitor task can
+        // possibly observe an exit — Dropped must never precede Connected.
+        {
+            use tauri::Manager as _;
+            app.state::<std::sync::Arc<crate::video::VideoManager>>()
+                .consumer_connected(unique_key, spec.generation);
+        }
+        crate::mpv::spawn_monitor(
+            app.clone(),
+            unique_key.to_string(),
+            spec.generation,
+            socket_path,
+            expected_exit,
+        );
+        Ok(false)
+    }
+
     /// The session generation the mounted mpv child (if any) belongs to.
     // Called by mpv::spawn_monitor's generation check, but the monitor is
     // only reachable from the not(smoke/test) `mpv_mount` command variant;
     // dead in smoke builds.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     #[allow(dead_code)]
     pub fn mpv_generation(&self, key: &str) -> Option<u64> {
         let g = self.inner.lock();
@@ -1093,7 +1326,7 @@ impl EmbedHost {
     // call site is #[cfg(not(test))] — under the `--all-targets`
     // test-target compile there is no caller, so the allow stays until
     // Task 5's IPC wiring adds an always-compiled one.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     #[allow(dead_code)]
     pub fn mpv_mark_ready(&self, key: &str) {
         let mut g = self.inner.lock();
@@ -1112,7 +1345,7 @@ impl EmbedHost {
     /// (an unmount raced a slider drag).
     // Only called from the not(smoke/test) `mpv_set_volume` command
     // variant; dead in smoke builds.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     #[allow(dead_code)]
     pub fn mpv_set_volume(&self, key: &str, volume01: f64) -> anyhow::Result<()> {
         let g = self.inner.lock();
@@ -1128,7 +1361,7 @@ impl EmbedHost {
     /// Live mute over mpv IPC. Missing key is benign.
     // Only called from the not(smoke/test) `mpv_set_muted` command
     // variant; dead in smoke builds.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     #[allow(dead_code)]
     pub fn mpv_set_muted(&self, key: &str, muted: bool) -> anyhow::Result<()> {
         let g = self.inner.lock();
@@ -1145,7 +1378,7 @@ impl EmbedHost {
     // call site is #[cfg(not(test))] — under the `--all-targets`
     // test-target compile there is no caller, so the allow stays until
     // Task 5's IPC wiring adds an always-compiled one.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     #[allow(dead_code)]
     pub fn unmount_mpv_if_generation(&self, key: &str, generation: u64) -> bool {
         let mut g = self.inner.lock();
@@ -1162,7 +1395,7 @@ impl EmbedHost {
     /// App-exit reap: kill every mpv child process. GTK teardown is skipped
     /// on purpose — the process is exiting; only the child processes leak.
     /// Called from run()'s RunEvent::Exit alongside VideoManager::stop_all.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     pub fn stop_all_mpv(&self) {
         let mut g = self.inner.lock();
         for child in g.children.values_mut() {
@@ -1175,7 +1408,7 @@ impl EmbedHost {
 
 // Test-build no-op so run()'s RunEvent::Exit call to host.stop_all_mpv()
 // (the real impl above is #[cfg(not(test))]) still resolves under cfg(test).
-#[cfg(all(target_os = "linux", test))]
+#[cfg(all(any(target_os = "linux", target_os = "windows"), test))]
 impl EmbedHost {
     pub fn stop_all_mpv(&self) {}
 }
@@ -1321,6 +1554,9 @@ const CB_IMPORT_JS: &str = r#"
 })();
 "#;
 
+// Only constructed by parse_cb_follows, whose only caller outside tests is
+// the Linux-gated CB-follows import path (lib.rs, #[cfg(target_os = "linux")]).
+#[allow(dead_code)]
 #[derive(serde::Deserialize)]
 struct CbFollowsPayload {
     #[serde(default)]
@@ -1337,6 +1573,7 @@ struct CbFollowsPayload {
 /// The scrape posts `{ error: "not_authenticated" }` when the followed-rooms
 /// endpoint returned the public list (the import webview had no session) — we
 /// translate that into a user-facing error rather than importing 5000 rooms.
+#[allow(dead_code)] // only caller outside tests is the Linux-gated CB-follows import path (lib.rs, #[cfg(target_os = "linux")])
 pub fn parse_cb_follows(payload: &str) -> anyhow::Result<Vec<String>> {
     use anyhow::Context as _;
     let p: CbFollowsPayload =
@@ -1454,6 +1691,9 @@ fn capture_cb_session<'a>(cookies: impl Iterator<Item = (&'a str, &'a str)>) -> 
     false
 }
 
+// Called only from build_other::build_child's on_page_load handler, dead
+// alongside it under #[cfg(not(test))].
+#[allow(dead_code)]
 #[cfg(not(target_os = "linux"))]
 fn verify_chaturbate_auth_other(webview: &tauri::webview::Webview, app: &tauri::AppHandle) {
     let site: url::Url = match "https://chaturbate.com/".parse() {

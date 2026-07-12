@@ -9,7 +9,7 @@ mod chat;
 mod config;
 mod embed;
 mod login_popup;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 mod mpv;
 mod notify;
 mod platforms;
@@ -404,28 +404,34 @@ fn frontend_log(level: String, message: String) {
     }
 }
 
-/// Which inline-video backend this build/platform uses. Slice A: mpv on
-/// Linux; mpegts elsewhere (Windows flips in slice C).
+/// Which inline-video backend this build/platform uses. mpv on Linux
+/// (slice A) and Windows (slice C — ships runtime-unverified, LSL_MPV_VO
+/// is the field escape hatch); mpegts on macOS (no foreign-window
+/// embedding — permanent).
 #[tauri::command]
 fn video_backend() -> &'static str {
-    if cfg!(target_os = "linux") {
+    if cfg!(any(target_os = "linux", target_os = "windows")) {
         "mpv"
     } else {
         "mpegts"
     }
 }
 
-// mpv_* commands exist in two variants: the real Linux implementation, and
-// a stub for smoke/test builds and non-Linux targets (EmbedHost's mpv verbs
-// are cfg(target_os = "linux") + cfg(not(test)); non-Linux never selects the
-// mpv backend, so the stub is a backstop, not a path).
+// mpv_* commands exist in two variants: the real Linux/Windows
+// implementation, and a stub for smoke/test builds and other targets
+// (EmbedHost's mpv verbs are cfg(any(linux, windows)) + cfg(not(test));
+// macOS never selects the mpv backend, so the stub is a backstop there,
+// not a path).
 /// Start (or resume) an inline mpv session and mount its surface.
 ///
 /// Quality switches must unmount first — a second mount on an
 /// already-mounted key only resizes (mount_mpv's idempotent branch) and
 /// will NOT restart mpv against a new session/URL. (The frontend's
 /// remountKey flow relies on this.)
-#[cfg(all(target_os = "linux", not(any(feature = "smoke", test))))]
+#[cfg(all(
+    any(target_os = "linux", target_os = "windows"),
+    not(any(feature = "smoke", test))
+))]
 #[tauri::command]
 // Args map 1:1 to the frontend IPC call's named parameters.
 #[allow(clippy::too_many_arguments)]
@@ -520,7 +526,11 @@ async fn mpv_mount(
     }
 }
 
-#[cfg(any(not(target_os = "linux"), feature = "smoke", test))]
+#[cfg(any(
+    not(any(target_os = "linux", target_os = "windows")),
+    feature = "smoke",
+    test
+))]
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 async fn mpv_mount<R: tauri::Runtime>(
@@ -537,7 +547,10 @@ async fn mpv_mount<R: tauri::Runtime>(
     Err("mpv backend unavailable in this build".into())
 }
 
-#[cfg(all(target_os = "linux", not(any(feature = "smoke", test))))]
+#[cfg(all(
+    any(target_os = "linux", target_os = "windows"),
+    not(any(feature = "smoke", test))
+))]
 #[tauri::command]
 fn mpv_bounds(
     app: tauri::AppHandle,
@@ -553,7 +566,11 @@ fn mpv_bounds(
         .map_err(err_string)
 }
 
-#[cfg(any(not(target_os = "linux"), feature = "smoke", test))]
+#[cfg(any(
+    not(any(target_os = "linux", target_os = "windows")),
+    feature = "smoke",
+    test
+))]
 #[tauri::command]
 fn mpv_bounds<R: tauri::Runtime>(
     _app: tauri::AppHandle<R>,
@@ -566,7 +583,10 @@ fn mpv_bounds<R: tauri::Runtime>(
     Ok(())
 }
 
-#[cfg(all(target_os = "linux", not(any(feature = "smoke", test))))]
+#[cfg(all(
+    any(target_os = "linux", target_os = "windows"),
+    not(any(feature = "smoke", test))
+))]
 #[tauri::command]
 fn mpv_set_visible(
     embeds: State<'_, Arc<embed::EmbedHost>>,
@@ -576,13 +596,20 @@ fn mpv_set_visible(
     embeds.set_visible(&unique_key, visible).map_err(err_string)
 }
 
-#[cfg(any(not(target_os = "linux"), feature = "smoke", test))]
+#[cfg(any(
+    not(any(target_os = "linux", target_os = "windows")),
+    feature = "smoke",
+    test
+))]
 #[tauri::command]
 fn mpv_set_visible(_unique_key: String, _visible: bool) -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(all(target_os = "linux", not(any(feature = "smoke", test))))]
+#[cfg(all(
+    any(target_os = "linux", target_os = "windows"),
+    not(any(feature = "smoke", test))
+))]
 #[tauri::command]
 fn mpv_unmount(embeds: State<'_, Arc<embed::EmbedHost>>, unique_key: String) {
     // Drop of MpvChild kills mpv (expected_exit set) and destroys the
@@ -590,11 +617,18 @@ fn mpv_unmount(embeds: State<'_, Arc<embed::EmbedHost>>, unique_key: String) {
     embeds.unmount(&unique_key);
 }
 
-#[cfg(any(not(target_os = "linux"), feature = "smoke", test))]
+#[cfg(any(
+    not(any(target_os = "linux", target_os = "windows")),
+    feature = "smoke",
+    test
+))]
 #[tauri::command]
 fn mpv_unmount(_unique_key: String) {}
 
-#[cfg(all(target_os = "linux", not(any(feature = "smoke", test))))]
+#[cfg(all(
+    any(target_os = "linux", target_os = "windows"),
+    not(any(feature = "smoke", test))
+))]
 #[tauri::command]
 fn mpv_set_volume(
     embeds: State<'_, Arc<embed::EmbedHost>>,
@@ -606,13 +640,20 @@ fn mpv_set_volume(
         .map_err(err_string)
 }
 
-#[cfg(any(not(target_os = "linux"), feature = "smoke", test))]
+#[cfg(any(
+    not(any(target_os = "linux", target_os = "windows")),
+    feature = "smoke",
+    test
+))]
 #[tauri::command]
 fn mpv_set_volume(_unique_key: String, _volume: f64) -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(all(target_os = "linux", not(any(feature = "smoke", test))))]
+#[cfg(all(
+    any(target_os = "linux", target_os = "windows"),
+    not(any(feature = "smoke", test))
+))]
 #[tauri::command]
 fn mpv_set_muted(
     embeds: State<'_, Arc<embed::EmbedHost>>,
@@ -622,7 +663,11 @@ fn mpv_set_muted(
     embeds.mpv_set_muted(&unique_key, muted).map_err(err_string)
 }
 
-#[cfg(any(not(target_os = "linux"), feature = "smoke", test))]
+#[cfg(any(
+    not(any(target_os = "linux", target_os = "windows")),
+    feature = "smoke",
+    test
+))]
 #[tauri::command]
 fn mpv_set_muted(_unique_key: String, _muted: bool) -> Result<(), String> {
     Ok(())
@@ -2495,10 +2540,11 @@ pub fn run() {
                 if let Some(vm) = app_handle.try_state::<Arc<video::VideoManager>>() {
                     vm.stop_all();
                 }
-                #[cfg(target_os = "linux")]
+                #[cfg(any(target_os = "linux", target_os = "windows"))]
                 if let Some(host) = app_handle.try_state::<Arc<embed::EmbedHost>>() {
                     // Same rationale as streamlink: process::exit skips Drop;
-                    // PDEATHSIG covers crashes, this covers clean exits.
+                    // PDEATHSIG (Linux) / Job Object (Windows) covers crashes,
+                    // this covers clean exits.
                     host.stop_all_mpv();
                 }
             }

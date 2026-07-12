@@ -43,6 +43,25 @@ jobs:
       - name: Cargo test
         run: cargo test --manifest-path src-tauri/Cargo.toml
 
+  rust-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Cargo clippy (windows)
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+
+      - name: Cargo test (windows)
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+
   frontend:
     runs-on: ubuntu-22.04
     steps:
